@@ -1361,3 +1361,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otela
 replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/cfgardenobserver => ../../extension/observer/cfgardenobserver
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/exporter/rabbitmqexporter => ../../exporter/rabbitmqexporter
+
+replace github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension v0.0.0 => ../../extension/jwtauthextension

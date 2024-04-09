@@ -51,6 +51,7 @@ extensions:
     import: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/textencodingextension
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/zipkinencodingextension v0.108.0
     import: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/zipkinencodingextension
+  - gomod: github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension v0.0.0
 
 exporters:
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.108.2-0.20240829190554-7da6b618a7ee
@@ -497,3 +498,4 @@ replaces:
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver => ../../receiver/otelarrowreceiver
   - github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/cfgardenobserver => ../../extension/observer/cfgardenobserver
   - github.com/open-telemetry/opentelemetry-collector-contrib/exporter/rabbitmqexporter => ../../exporter/rabbitmqexporter
+  - github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension v0.0.0 => ../../extension/jwtauthextension

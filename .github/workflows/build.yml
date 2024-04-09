@@ -1,0 +1,118 @@
+name: build
+on:
+  push:
+env:
+  AWS_REGION: us-east-1
+  OCTOPUS_HOST: https://multiplayer.octopus.app
+  OCTOPUS_SPACE: multiplayer
+  DOCKER_IMAGE_NAME: multiplayer-staging-opentelemetry-collector
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  setup-environment:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.9"
+          cache: false
+      - name: Cache Go
+        id: go-cache
+        timeout-minutes: 5
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin
+            ~/go/pkg/mod
+          key: go-cache-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+      - name: Install dependencies
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        run: make -j2 gomoddownload
+      - name: Install Tools
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        run: make install-tools
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [setup-environment]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.9"
+          cache: false
+      - name: Docker meta
+        id: docker_meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            name=app
+          tags: |
+            type=sha,prefix={{branch}}-
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ vars.STAGING_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.STAGING_AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to AWS ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      - id: release_meta
+        env:
+          DOCKER_META_TAGS: ${{ steps.docker_meta.outputs.tags }}
+        run: |
+          RELEASE_TAG=${DOCKER_META_TAGS//app:/}
+          echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Docker Image
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          make docker-otelcontribcol
+          docker tag otelcontribcol:latest ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG
+
+      - name: Validate Docker Image
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker run ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG --version
+
+      - name: Push Docker Image
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker push ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG
+
+      - name: Get short commit hash
+        id: commit
+        uses: pr-mpt/actions-commit-hash@v2
+
+      - name: Create octopus release
+        env:
+          OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
+          OCTOPUS_HOST: ${{ env.OCTOPUS_HOST }}
+          OCTOPUS_SPACE: ${{ env.OCTOPUS_SPACE }}
+          OCTOPUS_SERVICE_NAME: opentelemetry-collector
+          COMMIT_SHORT: ${{ steps.commit.outputs.short }}
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          RELEASE_NOTES="[GitHub commit: ${COMMIT_SHORT}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${COMMIT_SHA}) / [GitHub branch: ${BRANCH_NAME}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${BRANCH_NAME})"
+          SPACE_ID=$(curl --silent -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" "$OCTOPUS_HOST/api/spaces/all?partialName=$OCTOPUS_SPACE" | jq -r -c '.[].Id')
+          PROJECT_ID=$(curl --silent -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" "$OCTOPUS_HOST/api/projects/$OCTOPUS_SERVICE_NAME" | jq -r -c '.Id')
+          BODY='{"ProjectId":"'$PROJECT_ID'","SpaceId": "'$SPACE_ID'","Version":"'$RELEASE_TAG'","ReleaseNotes": "'$RELEASE_NOTES'"}'
+          curl -X POST --write-out %{http_code} --silent --output /dev/null -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" -d "$BODY" "$OCTOPUS_HOST/api/releases"

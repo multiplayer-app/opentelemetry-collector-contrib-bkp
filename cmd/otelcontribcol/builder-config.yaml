@@ -49,7 +49,6 @@ extensions:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/textencodingextension v0.111.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/zipkinencodingextension v0.111.0
   - gomod: github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension v0.0.0
-  - gomod: github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension v0.0.0
 
 exporters:
   - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.111.0

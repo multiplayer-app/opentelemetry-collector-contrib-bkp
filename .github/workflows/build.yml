@@ -80,6 +80,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
           DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
+          make genotelcontribcol
           make docker-otelcontribcol
           docker tag otelcontribcol:latest ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG
 

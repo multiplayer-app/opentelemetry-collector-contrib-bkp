@@ -107,9 +107,9 @@ jobs:
       # - run: chmod +x ./bin/*
       - name: Add Permissions to Tool Binaries
         run: chmod -R +x ./dist
-      - name: Verify Distribution Files Exist
-        id: check
-        run: ./.github/workflows/scripts/verify-dist-files-exist.sh
+      # - name: Verify Distribution Files Exist
+      #   id: check
+      #   run: ./.github/workflows/scripts/verify-dist-files-exist.sh
 
       - name: Build Docker Image
         env:

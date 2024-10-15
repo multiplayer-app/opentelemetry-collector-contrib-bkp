@@ -75,6 +75,10 @@ jobs:
           RELEASE_TAG=${DOCKER_META_TAGS//app:/}
           echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.8"
+          cache: false
       - name: Mkdir bin and dist
         run: |
           mkdir bin/ dist/
@@ -100,7 +104,7 @@ jobs:
           merge-multiple: true
           path: ./bin/
           pattern: collector-binaries-*
-      - run: chmod +x bin/*
+      - run: chmod +x ./bin/*
       - name: Add Permissions to Tool Binaries
         run: chmod -R +x ./dist
       - name: Verify Distribution Files Exist

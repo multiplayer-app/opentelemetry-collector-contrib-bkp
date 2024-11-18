@@ -9,7 +9,7 @@ status:
   - contrib
   warnings: [Unsound Transformations, Identity Conflict, Orphaned Telemetry, Other]
   codeowners:
-    active: [dmytrys]
+    active: [DmytryS]
 
 tests:
   config:

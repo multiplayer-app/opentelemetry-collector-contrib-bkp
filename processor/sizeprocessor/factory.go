@@ -41,7 +41,7 @@ func createTracesProcessor(
 		set,
 		cfg,
 		nextConsumer,
-		newSpanAttributesProcessor(set.Logger).processTraces,
+		newSpanSizeProcessor(set.Logger).processTraces,
 		processorhelper.WithCapabilities(processorCapabilities))
 }
 
@@ -56,6 +56,6 @@ func createLogsProcessor(
 		set,
 		cfg,
 		nextConsumer,
-		newLogAttributesProcessor(set.Logger).processLogs,
+		newLogSizeProcessor(set.Logger).processLogs,
 		processorhelper.WithCapabilities(processorCapabilities))
 }

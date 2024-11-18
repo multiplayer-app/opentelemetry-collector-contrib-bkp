@@ -5,34 +5,31 @@ package sizeprocessor // import "github.com/multiplayer-app/opentelemetry-collec
 
 import (
 	"context"
-	"encoding/json"
 
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 )
 
-type spanAttributesProcessor struct {
+type spanSizeProcessor struct {
 	logger *zap.Logger
 }
 
 // newTracesProcessor returns a processor that modifies attributes of a span.
 // To construct the attributes processors, the use of the factory methods are required
 // in order to validate the inputs.
-func newSpanAttributesProcessor(logger *zap.Logger) *spanAttributesProcessor {
-	return &spanAttributesProcessor{
+func newSpanSizeProcessor(logger *zap.Logger) *spanSizeProcessor {
+	return &spanSizeProcessor{
 		logger: logger,
 	}
 }
 
 func calculateSpanSize(span ptrace.Span) (int, error) {
-	data, err := json.Marshal(span)
-	if err != nil {
-		return 0, err
-	}
-	return len(data), nil
+	size := sizeOf(span)
+
+	return size, nil
 }
 
-func (a *spanAttributesProcessor) processTraces(ctx context.Context, td ptrace.Traces) (ptrace.Traces, error) {
+func (a *spanSizeProcessor) processTraces(ctx context.Context, td ptrace.Traces) (ptrace.Traces, error) {
 	rss := td.ResourceSpans()
 	for i := 0; i < rss.Len(); i++ {
 		rs := rss.At(i)
@@ -49,16 +46,6 @@ func (a *spanAttributesProcessor) processTraces(ctx context.Context, td ptrace.T
 				}
 
 				span.Attributes().PutInt("span.size", int64(size))
-				// if a.skipExpr != nil {
-				// 	skip, err := a.skipExpr.Eval(ctx, ottlspan.NewTransformContext(span, scope, resource, ils, rs))
-				// 	if err != nil {
-				// 		return td, err
-				// 	}
-				// 	if skip {
-				// 		continue
-				// 	}
-				// }
-				// a.attrProc.Process(ctx, a.logger, span.Attributes())
 			}
 		}
 	}

@@ -1,4 +1,4 @@
-module github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor
+module github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor
 
 go 1.22.0
 

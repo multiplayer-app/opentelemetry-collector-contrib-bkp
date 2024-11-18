@@ -1,4 +1,4 @@
-type: attributes
+type: size
 
 status:
   class: processor
@@ -7,8 +7,9 @@ status:
   distributions:
   - core
   - contrib
-  warnings: [Identity Conflict]
+  warnings: [Unsound Transformations, Identity Conflict, Orphaned Telemetry, Other]
   codeowners:
-    active: [boostchicken]
+    active: [dmytrys]
+
 tests:
   config:

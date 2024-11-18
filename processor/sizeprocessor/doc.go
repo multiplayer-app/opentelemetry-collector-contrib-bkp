@@ -5,4 +5,4 @@
 
 // Package sizeprocessor contains the logic to modify attributes of a span.
 // It supports insert, update, upsert and delete as actions.
-package sizeprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor"
+package sizeprocessor // import "github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor"

@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package sizeprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor"
+package sizeprocessor // import "github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor"
 
 import (
 	"context"
@@ -25,7 +25,6 @@ func newSpanAttributesProcessor(logger *zap.Logger) *spanAttributesProcessor {
 }
 
 func calculateSpanSize(span ptrace.Span) (int, error) {
-	// Serialize the span to JSON and calculate size
 	data, err := json.Marshal(span)
 	if err != nil {
 		return 0, err

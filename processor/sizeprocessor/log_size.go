@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package sizeprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor"
+package sizeprocessor // import "github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor"
 
 import (
 	"context"

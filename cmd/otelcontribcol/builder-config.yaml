@@ -500,4 +500,4 @@ replaces:
   - github.com/open-telemetry/opentelemetry-collector-contrib/receiver/googlecloudmonitoringreceiver => ../../receiver/googlecloudmonitoringreceiver
   - github.com/open-telemetry/opentelemetry-collector-contrib/pkg/status => ../../pkg/status
   - github.com/multiplayer-app/opentelemetry-collector-contrib/extension/jwtauthextension => ../../extension/jwtauthextension
-  - github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor => ../../processor/sizeprocessor
+  - github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor => ../../processor/sizeprocessor

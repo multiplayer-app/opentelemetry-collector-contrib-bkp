@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package sizeprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/sizeprocessor"
+package sizeprocessor // import "github.com/multiplayer-app/opentelemetry-collector-contrib/processor/sizeprocessor"
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func createTracesProcessor(
 		set,
 		cfg,
 		nextConsumer,
-		newSpanAttributesProcessor(set.Logger).processTraces,
+		newSpanSizeProcessor(set.Logger).processTraces,
 		processorhelper.WithCapabilities(processorCapabilities))
 }
 
@@ -56,6 +56,6 @@ func createLogsProcessor(
 		set,
 		cfg,
 		nextConsumer,
-		newLogAttributesProcessor(set.Logger).processLogs,
+		newLogSizeProcessor(set.Logger).processLogs,
 		processorhelper.WithCapabilities(processorCapabilities))
 }

@@ -96,8 +96,8 @@ func (e *jwtExtension) authenticate(ctx context.Context, headers map[string][]st
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
 		cl := client.FromContext(ctx)
 
-		// OTEL_FRONTEND is for supporting old tokens
-		if claims["type"] != "OTEL" && claims["type"] != "OTEL_FRONTEND" {
+		// checks for OTEL_FRONTEND and otel=true is for supporting old tokens
+		if claims["type"] != "OTEL" && claims["type"] != "OTEL_FRONTEND" && claims["otel"] != true {
 			return ctx, errInsufficientPermissions
 		}
 

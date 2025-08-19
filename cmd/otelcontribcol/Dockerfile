@@ -1,7 +1,7 @@
 FROM alpine:latest AS prep
 RUN apk --update add ca-certificates
 
-FROM scratch
+FROM node:22-alpine
 
 ARG USER_UID=10001
 USER ${USER_UID}

@@ -85,18 +85,21 @@ jobs:
         run: |
           make genotelcontribcol
           make docker-otelcontribcol
-          docker tag otelcontribcol:latest ${{ env.DOCKER_TAGS }}
+          IFS=',' read -ra TAGS <<< "$DOCKER_TAGS"
+          for TAG in "${TAGS[@]}"; do
+            docker tag otelcontribcol:latest "$TAG"
+          done
 
       - name: Validate Docker Image
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          docker run ${{ env.DOCKER_IMAGE }}:${{ env.SERVICE_VERSION }} --version
+          docker run $DOCKER_IMAGE:$SERVICE_VERSION --version
 
       - name: Push Docker Image
         run: |
-          docker push ${{ env.DOCKER_TAGS }}
+          IFS=',' read -ra TAGS <<< "$DOCKER_TAGS"
+          for TAG in "${TAGS[@]}"; do
+            docker push "$TAG"
+          done
 
       - name: Login to Octopus Deploy
         uses: OctopusDeploy/login@v1

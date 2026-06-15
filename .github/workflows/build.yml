@@ -26,6 +26,15 @@ jobs:
         with:
           go-version: "1.21.9"
           cache: false
+
+      - name: Free disk space
+        shell: bash
+        # Force 'bash' to use Git Bash on Windows runners.
+        # This allows us to share the same cleanup script across OSs.
+        run: |
+          chmod +x ./.github/workflows/scripts/free-disk-space.sh
+          ./.github/workflows/scripts/free-disk-space.sh
+
       - name: Docker meta
         id: docker_meta
         uses: docker/metadata-action@v4
@@ -59,11 +68,8 @@ jobs:
           fi
           echo "DOCKER_TAGS=$DOCKER_TAGS" >> $GITHUB_ENV
 
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22.8"
-          cache: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+
       - name: Cache Go
         id: go-cache
         timeout-minutes: 5

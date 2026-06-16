@@ -4,17 +4,19 @@
 package recombine
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/entry"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/attrs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/helper"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/testutil"
@@ -26,8 +28,8 @@ const (
 
 func TestTransformer(t *testing.T) {
 	now := time.Now()
-	t1 := time.Date(2020, time.April, 11, 21, 34, 01, 0, time.UTC)
-	t2 := time.Date(2020, time.April, 11, 21, 34, 02, 0, time.UTC)
+	t1 := time.Date(2020, time.April, 11, 21, 34, 0o1, 0, time.UTC)
+	t2 := time.Date(2020, time.April, 11, 21, 34, 0o2, 0, time.UTC)
 
 	entryWithBody := func(ts time.Time, body any) *entry.Entry {
 		e := entry.New()
@@ -184,19 +186,19 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "more1a", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "more1b", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "more2a", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2, "more2b", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "more1a", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "more1b", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "more2a", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2, "more2b", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start\nmore1a", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "start\nmore1b", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "more2a\nmore2b", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "start\nmore1a", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "start\nmore1b", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "more2a\nmore2b", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 		},
 		{
@@ -282,6 +284,52 @@ func TestTransformer(t *testing.T) {
 			},
 		},
 		{
+			"CombineSplitUnicode",
+			func() *Config {
+				cfg := NewConfig()
+				cfg.CombineField = entry.NewBodyField("message")
+				cfg.CombineWith = ""
+				cfg.IsLastEntry = "body.logtag == 'F'"
+				cfg.OverwriteWith = "newest"
+				cfg.OutputIDs = []string{"fake"}
+				return cfg
+			}(),
+			[]*entry.Entry{
+				entryWithBody(t1, map[string]any{
+					"message":   "Single entry log 1",
+					"logtag":    "F",
+					"stream":    "stdout",
+					"timestamp": "2016-10-06T00:17:09.669794202Z",
+				}),
+				entryWithBody(t1, map[string]any{
+					"message":   "\xe5\xbe",
+					"logtag":    "P",
+					"stream":    "stdout",
+					"timestamp": "2016-10-06T00:17:10.113242941Z",
+				}),
+				entryWithBody(t1, map[string]any{
+					"message":   "\x90",
+					"logtag":    "F",
+					"stream":    "stdout",
+					"timestamp": "2016-10-06T00:17:10.113242941Z",
+				}),
+			},
+			[]*entry.Entry{
+				entryWithBody(t1, map[string]any{
+					"message":   "Single entry log 1",
+					"logtag":    "F",
+					"stream":    "stdout",
+					"timestamp": "2016-10-06T00:17:09.669794202Z",
+				}),
+				entryWithBody(t1, map[string]any{
+					"message":   "徐",
+					"logtag":    "F",
+					"stream":    "stdout",
+					"timestamp": "2016-10-06T00:17:10.113242941Z",
+				}),
+			},
+		},
+		{
 			"CombineOtherThanCondition",
 			func() *Config {
 				cfg := NewConfig()
@@ -343,14 +391,14 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2, "end", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "end", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "file1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1\nend", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2\nend", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "file1\nend", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2\nend", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 		},
 		{
@@ -387,17 +435,17 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1.Add(10*time.Millisecond), "middle1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "start2", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2.Add(10*time.Millisecond), "middle2", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2.Add(20*time.Millisecond), "end2", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "start1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1.Add(10*time.Millisecond), "middle1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "start2", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2.Add(10*time.Millisecond), "middle2", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2.Add(20*time.Millisecond), "end2", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 			[]*entry.Entry{
 				// First entry is booted before end comes in, but partial recombination should occur
-				entryWithBodyAttr(t1.Add(10*time.Millisecond), "start1\nmiddle1", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1.Add(10*time.Millisecond), "start1\nmiddle1", map[string]string{attrs.LogFilePath: "file1"}),
 				// Second entry is flushed automatically when end comes in
-				entryWithBodyAttr(t2.Add(20*time.Millisecond), "start2\nmiddle2\nend2", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t2.Add(20*time.Millisecond), "start2\nmiddle2\nend2", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 		},
 		{
@@ -411,16 +459,39 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1_event1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2_event1", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2, "end", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t2, "file2_event2", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2, "end", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "file1_event1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2_event1", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "file2_event2", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file2"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1_event1\nend", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2_event1\nfile2_event2", map[string]string{"file.path": "file2"}),
-				entryWithBodyAttr(t2, "end", map[string]string{"file.path": "file2"}),
+				entryWithBodyAttr(t1, "file1_event1\nend", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2_event1\nfile2_event2", map[string]string{attrs.LogFilePath: "file2"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file2"}),
+			},
+		},
+		{
+			"TestMaxBatchSizeUnlimited",
+			func() *Config {
+				cfg := NewConfig()
+				cfg.CombineField = entry.NewBodyField()
+				cfg.IsLastEntry = "body == 'end'"
+				cfg.OutputIDs = []string{"fake"}
+				cfg.MaxBatchSize = 0 // unlimited
+				return cfg
+			}(),
+			[]*entry.Entry{
+				entryWithBodyAttr(t1, "event1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "event2", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "event3", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "event4", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "event5", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t2, "end", map[string]string{attrs.LogFilePath: "file1"}),
+			},
+			[]*entry.Entry{
+				// All entries combined into one because MaxBatchSize=0 means unlimited
+				entryWithBodyAttr(t1, "event1\nevent2\nevent3\nevent4\nevent5\nend", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 		},
 		{
@@ -434,14 +505,14 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "end", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "file1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "end", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "file1\nfile1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "file2\nend", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "file1\nfile1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "file2\nend", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 		},
 		{
@@ -455,20 +526,20 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content2", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content3", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content4", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content5", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content2", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content3", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content4", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content5", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start\ncontent1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content2\ncontent3", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content4\ncontent5", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "start\ncontent1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content2\ncontent3", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content4\ncontent5", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 		},
 		{
@@ -482,20 +553,20 @@ func TestTransformer(t *testing.T) {
 				return cfg
 			}(),
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content1", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content2", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content3", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content4", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content5", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content6", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content7", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content8", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content9", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "start", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content1", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content2", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content3", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content4", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content5", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content6", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content7", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content8", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content9", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 			[]*entry.Entry{
-				entryWithBodyAttr(t1, "start\ncontent1\ncontent2\ncontent3\ncontent4", map[string]string{"file.path": "file1"}),
-				entryWithBodyAttr(t1, "content5\ncontent6\ncontent7\ncontent8\ncontent9", map[string]string{"file.path": "file1"}),
+				entryWithBodyAttr(t1, "start\ncontent1\ncontent2\ncontent3\ncontent4", map[string]string{attrs.LogFilePath: "file1"}),
+				entryWithBodyAttr(t1, "content5\ncontent6\ncontent7\ncontent8\ncontent9", map[string]string{attrs.LogFilePath: "file1"}),
 			},
 		},
 		{
@@ -671,27 +742,26 @@ func TestTransformer(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			set := componenttest.NewNopTelemetrySettings()
 			op, err := tc.config.Build(set)
 			require.NoError(t, err)
 			require.NoError(t, op.Start(testutil.NewUnscopedMockPersister()))
 			defer func() { require.NoError(t, op.Stop()) }()
-			r := op.(*Transformer)
 
 			fake := testutil.NewFakeOutput(t)
-			err = r.SetOutputs([]operator.Operator{fake})
+			err = op.SetOutputs([]operator.Operator{fake})
 			require.NoError(t, err)
 
 			for _, e := range tc.input {
-				require.NoError(t, r.Process(ctx, e))
+				require.NoError(t, op.ProcessBatch(ctx, []*entry.Entry{e}))
 			}
 
 			fake.ExpectEntries(t, tc.expectedOutput)
 
 			select {
 			case e := <-fake.Received:
-				require.FailNow(t, "Received unexpected entry: ", e)
+				require.FailNow(t, "Received unexpected entry: ", "%+v", e)
 			default:
 			}
 		})
@@ -705,14 +775,13 @@ func TestTransformer(t *testing.T) {
 		set := componenttest.NewNopTelemetrySettings()
 		op, err := cfg.Build(set)
 		require.NoError(t, err)
-		recombine := op.(*Transformer)
 
 		fake := testutil.NewFakeOutput(t)
-		err = recombine.SetOutputs([]operator.Operator{fake})
+		err = op.SetOutputs([]operator.Operator{fake})
 		require.NoError(t, err)
 
 		// Send an entry that isn't the last in a multiline
-		require.NoError(t, recombine.Process(context.Background(), entry.New()))
+		require.NoError(t, op.ProcessBatch(t.Context(), []*entry.Entry{entry.New()}))
 
 		// Ensure that the entry isn't immediately sent
 		select {
@@ -722,7 +791,7 @@ func TestTransformer(t *testing.T) {
 		}
 
 		// Stop the operator
-		require.NoError(t, recombine.Stop())
+		require.NoError(t, op.Stop())
 
 		// Ensure that the entries in the buffer are flushed
 		select {
@@ -738,43 +807,46 @@ func BenchmarkRecombine(b *testing.B) {
 	cfg.CombineField = entry.NewBodyField()
 	cfg.IsFirstEntry = "body startsWith 'log-0'"
 	cfg.OutputIDs = []string{"fake"}
-	cfg.SourceIdentifier = entry.NewAttributeField("file.path")
+	cfg.SourceIdentifier = entry.NewAttributeField(attrs.LogFilePath)
 	set := componenttest.NewNopTelemetrySettings()
 	op, err := cfg.Build(set)
 	require.NoError(b, err)
-	recombine := op.(*Transformer)
 
 	fake := testutil.NewFakeOutput(b)
-	require.NoError(b, recombine.SetOutputs([]operator.Operator{fake}))
+	require.NoError(b, op.SetOutputs([]operator.Operator{fake}))
 
 	go func() {
-		for {
-			<-fake.Received
+		for range fake.Received { //nolint:revive
+			// Nothing to do
 		}
 	}()
 
 	sourcesNum := 10
 	logsNum := 10
 	entries := []*entry.Entry{}
-	for i := 0; i < logsNum; i++ {
-		for j := 0; j < sourcesNum; j++ {
+	for i := range logsNum {
+		for j := range sourcesNum {
 			start := entry.New()
 			start.Timestamp = time.Now()
 			start.Body = strings.Repeat(fmt.Sprintf("log-%d", i), 50)
-			start.Attributes = map[string]any{"file.path": fmt.Sprintf("file-%d", j)}
+			start.Attributes = map[string]any{attrs.LogFilePath: fmt.Sprintf("file-%d", j)}
 			entries = append(entries, start)
 		}
 	}
 
-	ctx := context.Background()
-	b.ResetTimer()
+	ctx := b.Context()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for _, e := range entries {
-			require.NoError(b, recombine.Process(ctx, e))
+			require.NoError(b, op.ProcessBatch(b.Context(), []*entry.Entry{e}))
 		}
-		recombine.flushAllSources(ctx)
+		op.(*Transformer).flushAllSources(ctx, op.(*Transformer).Write)
 	}
+	b.StopTimer()
+
+	require.NoError(b, op.Stop())
+	close(fake.Received)
 }
 
 func BenchmarkRecombineLimitTrigger(b *testing.B) {
@@ -786,15 +858,14 @@ func BenchmarkRecombineLimitTrigger(b *testing.B) {
 	set := componenttest.NewNopTelemetrySettings()
 	op, err := cfg.Build(set)
 	require.NoError(b, err)
-	recombine := op.(*Transformer)
 
 	fake := testutil.NewFakeOutput(b)
-	require.NoError(b, recombine.SetOutputs([]operator.Operator{fake}))
-	require.NoError(b, recombine.Start(nil))
+	require.NoError(b, op.SetOutputs([]operator.Operator{fake}))
+	require.NoError(b, op.Start(nil))
 
 	go func() {
-		for {
-			<-fake.Received
+		for range fake.Received { //nolint:revive
+			// Nothing to do
 		}
 	}()
 
@@ -806,16 +877,17 @@ func BenchmarkRecombineLimitTrigger(b *testing.B) {
 	next.Timestamp = time.Now()
 	next.Body = "next"
 
-	ctx := context.Background()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		require.NoError(b, recombine.Process(ctx, start))
-		require.NoError(b, recombine.Process(ctx, next))
-		require.NoError(b, recombine.Process(ctx, start))
-		require.NoError(b, recombine.Process(ctx, next))
-		recombine.flushAllSources(ctx)
-	}
+	ctx := b.Context()
 
+	for b.Loop() {
+		require.NoError(b, op.ProcessBatch(ctx, []*entry.Entry{start, next}))
+		require.NoError(b, op.ProcessBatch(ctx, []*entry.Entry{start, next}))
+		op.(*Transformer).flushAllSources(ctx, op.(*Transformer).Write)
+	}
+	b.StopTimer()
+
+	require.NoError(b, op.Stop())
+	close(fake.Received)
 }
 
 func TestTimeout(t *testing.T) {
@@ -838,10 +910,10 @@ func TestTimeout(t *testing.T) {
 	e.Timestamp = time.Now()
 	e.Body = "body"
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, recombine.Start(nil))
-	require.NoError(t, recombine.Process(ctx, e))
+	require.NoError(t, recombine.ProcessBatch(ctx, []*entry.Entry{e}))
 	select {
 	case <-fake.Received:
 		t.Logf("We shouldn't receive an entry before timeout")
@@ -873,19 +945,18 @@ func TestTimeoutWhenAggregationKeepHappen(t *testing.T) {
 	set := componenttest.NewNopTelemetrySettings()
 	op, err := cfg.Build(set)
 	require.NoError(t, err)
-	recombine := op.(*Transformer)
 
 	fake := testutil.NewFakeOutput(t)
-	require.NoError(t, recombine.SetOutputs([]operator.Operator{fake}))
+	require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
 
 	e := entry.New()
 	e.Timestamp = time.Now()
 	e.Body = "start"
 
-	ctx := context.Background()
+	ctx := t.Context()
 
-	require.NoError(t, recombine.Start(nil))
-	require.NoError(t, recombine.Process(ctx, e))
+	require.NoError(t, op.Start(nil))
+	require.NoError(t, op.ProcessBatch(ctx, []*entry.Entry{e}))
 
 	done := make(chan struct{})
 	ticker := time.NewTicker(cfg.ForceFlushTimeout / 2)
@@ -899,8 +970,7 @@ func TestTimeoutWhenAggregationKeepHappen(t *testing.T) {
 				ticker.Stop()
 				return
 			case <-ticker.C:
-				assert.NoError(t, recombine.Process(ctx, next))
-
+				assert.NoError(t, op.ProcessBatch(ctx, []*entry.Entry{next}))
 			}
 		}
 	}()
@@ -911,7 +981,7 @@ func TestTimeoutWhenAggregationKeepHappen(t *testing.T) {
 		t.Logf("The entry should be flushed by now")
 		t.FailNow()
 	}
-	require.NoError(t, recombine.Stop())
+	require.NoError(t, op.Stop())
 	close(done)
 }
 
@@ -935,25 +1005,461 @@ func TestSourceBatchDelete(t *testing.T) {
 	start := entry.New()
 	start.Timestamp = time.Now()
 	start.Body = "start"
-	start.AddAttribute("file.path", "file1")
+	start.AddAttribute(attrs.LogFilePath, "file1")
 
 	next := entry.New()
 	next.Timestamp = time.Now()
 	next.Body = "next"
-	next.AddAttribute("file.path", "file1")
+	next.AddAttribute(attrs.LogFilePath, "file1")
 
 	expect := entry.New()
 	expect.ObservedTimestamp = start.ObservedTimestamp
 	expect.Timestamp = start.Timestamp
-	expect.AddAttribute("file.path", "file1")
+	expect.AddAttribute(attrs.LogFilePath, "file1")
 	expect.Body = "start\nnext"
 
-	ctx := context.Background()
+	ctx := t.Context()
 
-	require.NoError(t, recombine.Process(ctx, start))
+	require.NoError(t, op.ProcessBatch(ctx, []*entry.Entry{start}))
 	require.Len(t, recombine.batchMap, 1)
-	require.NoError(t, recombine.Process(ctx, next))
+	require.NoError(t, op.ProcessBatch(ctx, []*entry.Entry{next}))
 	require.Empty(t, recombine.batchMap)
 	fake.ExpectEntry(t, expect)
-	require.NoError(t, recombine.Stop())
+	require.NoError(t, op.Stop())
+}
+
+func TestProcessBatchPreservesBatching(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig()
+	cfg.CombineField = entry.NewBodyField()
+	cfg.IsLastEntry = "body == 'END'"
+	cfg.SourceIdentifier = entry.NewAttributeField(attrs.LogFilePath)
+	cfg.OutputIDs = []string{"fake"}
+
+	op, err := cfg.Build(componenttest.NewNopTelemetrySettings())
+	require.NoError(t, err)
+
+	fake := testutil.NewFakeOutput(t)
+	require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
+
+	// Create entries from 3 different sources
+	entry1_1 := entry.New()
+	entry1_1.Body = "line1"
+	entry1_1.AddAttribute(attrs.LogFilePath, "file1")
+
+	entry1_2 := entry.New()
+	entry1_2.Body = "END"
+	entry1_2.AddAttribute(attrs.LogFilePath, "file1")
+
+	entry2_1 := entry.New()
+	entry2_1.Body = "line1"
+	entry2_1.AddAttribute(attrs.LogFilePath, "file2")
+
+	entry2_2 := entry.New()
+	entry2_2.Body = "END"
+	entry2_2.AddAttribute(attrs.LogFilePath, "file2")
+
+	entry3_1 := entry.New()
+	entry3_1.Body = "line1"
+	entry3_1.AddAttribute(attrs.LogFilePath, "file3")
+
+	entry3_2 := entry.New()
+	entry3_2.Body = "END"
+	entry3_2.AddAttribute(attrs.LogFilePath, "file3")
+
+	// Process all entries in a single batch
+	allEntries := []*entry.Entry{entry1_1, entry1_2, entry2_1, entry2_2, entry3_1, entry3_2}
+	require.NoError(t, op.ProcessBatch(t.Context(), allEntries))
+
+	// Verify we got 3 combined entries with correct content
+	expect1 := entry.New()
+	expect1.ObservedTimestamp = entry1_1.ObservedTimestamp
+	expect1.Timestamp = entry1_1.Timestamp
+	expect1.AddAttribute(attrs.LogFilePath, "file1")
+	expect1.Body = "line1\nEND"
+
+	expect2 := entry.New()
+	expect2.ObservedTimestamp = entry2_1.ObservedTimestamp
+	expect2.Timestamp = entry2_1.Timestamp
+	expect2.AddAttribute(attrs.LogFilePath, "file2")
+	expect2.Body = "line1\nEND"
+
+	expect3 := entry.New()
+	expect3.ObservedTimestamp = entry3_1.ObservedTimestamp
+	expect3.Timestamp = entry3_1.Timestamp
+	expect3.AddAttribute(attrs.LogFilePath, "file3")
+	expect3.Body = "line1\nEND"
+
+	fake.ExpectEntry(t, expect1)
+	fake.ExpectEntry(t, expect2)
+	fake.ExpectEntry(t, expect3)
+}
+
+func TestRecombineQuietModeProcess(t *testing.T) {
+	testCases := []struct {
+		name        string
+		onError     string
+		expectError bool
+	}{
+		{
+			name:        "DropOnErrorQuiet_ReturnsNoError",
+			onError:     helper.DropOnErrorQuiet,
+			expectError: false,
+		},
+		{
+			name:        "SendOnErrorQuiet_ReturnsNoError",
+			onError:     helper.SendOnErrorQuiet,
+			expectError: false,
+		},
+		{
+			name:        "DropOnError_ReturnsError",
+			onError:     helper.DropOnError,
+			expectError: true,
+		},
+		{
+			name:        "SendOnError_ReturnsError",
+			onError:     helper.SendOnError,
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			// Use an invalid expression that will cause an error during processing
+			cfg.IsLastEntry = "body.invalid_field == 'test'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			fake := testutil.NewFakeOutput(t)
+			require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// Create entry that will cause expression evaluation error
+			e := entry.New()
+			e.Body = "test"
+			e.ObservedTimestamp = time.Now()
+
+			err = op.Process(t.Context(), e)
+			if tc.expectError {
+				require.Error(t, err, "expected error in non-quiet mode")
+			} else {
+				require.NoError(t, err, "expected no error in quiet mode")
+			}
+		})
+	}
+}
+
+func TestRecombineQuietModeProcessBatch(t *testing.T) {
+	testCases := []struct {
+		name        string
+		onError     string
+		expectError bool
+	}{
+		{
+			name:        "DropOnErrorQuiet_ReturnsNoError",
+			onError:     helper.DropOnErrorQuiet,
+			expectError: false,
+		},
+		{
+			name:        "SendOnErrorQuiet_ReturnsNoError",
+			onError:     helper.SendOnErrorQuiet,
+			expectError: false,
+		},
+		{
+			name:        "DropOnError_ReturnsError",
+			onError:     helper.DropOnError,
+			expectError: true,
+		},
+		{
+			name:        "SendOnError_ReturnsError",
+			onError:     helper.SendOnError,
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			// Use an invalid expression that will cause an error during processing
+			cfg.IsLastEntry = "body.invalid_field == 'test'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			fake := testutil.NewFakeOutput(t)
+			require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// Create entries that will cause expression evaluation errors
+			entries := make([]*entry.Entry, 3)
+			for i := range entries {
+				e := entry.New()
+				e.Body = "test"
+				e.ObservedTimestamp = time.Now()
+				entries[i] = e
+			}
+
+			err = op.ProcessBatch(t.Context(), entries)
+			if tc.expectError {
+				require.Error(t, err, "expected error in non-quiet mode")
+			} else {
+				require.NoError(t, err, "expected no error in quiet mode")
+			}
+		})
+	}
+}
+
+// TestRecombineFlushSource tests that flushSource errors are always returned
+// regardless of quiet mode setting. Pipeline write errors should never be suppressed as they
+// indicate systemic issues and silent data loss.
+func TestRecombineFlushSource(t *testing.T) {
+	testCases := []struct {
+		name    string
+		onError string
+	}{
+		{
+			name:    "DropOnErrorQuiet",
+			onError: helper.DropOnErrorQuiet,
+		},
+		{
+			name:    "SendOnErrorQuiet",
+			onError: helper.SendOnErrorQuiet,
+		},
+		{
+			name:    "DropOnError",
+			onError: helper.DropOnError,
+		},
+		{
+			name:    "SendOnError",
+			onError: helper.SendOnError,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name+"_Process_MatchFirstLine", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			cfg.IsFirstEntry = "body == 'START'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			// Use an output that will fail on write to trigger flushSource error
+			failingOutput := &testutil.Operator{}
+			failingOutput.On("ID").Return("fake")
+			failingOutput.On("CanProcess").Return(true)
+			failingOutput.On("Process", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			require.NoError(t, op.SetOutputs([]operator.Operator{failingOutput}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// First entry - starts batch
+			e1 := entry.New()
+			e1.Body = "START"
+			e1.ObservedTimestamp = time.Now()
+			err = op.Process(t.Context(), e1)
+			require.NoError(t, err) // First entry just starts batch, no flush yet
+
+			// Second entry with START triggers flush of first batch
+			e2 := entry.New()
+			e2.Body = "START"
+			e2.ObservedTimestamp = time.Now()
+			err = op.Process(t.Context(), e2)
+			// flushSource errors should always be returned regardless of quiet mode
+			require.Error(t, err, "flushSource errors should always be returned")
+		})
+
+		t.Run(tc.name+"_Process_MatchLastLine", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			cfg.IsLastEntry = "body == 'END'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			// Use an output that will fail on write to trigger flushSource error
+			failingOutput := &testutil.Operator{}
+			failingOutput.On("ID").Return("fake")
+			failingOutput.On("CanProcess").Return(true)
+			failingOutput.On("Process", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			require.NoError(t, op.SetOutputs([]operator.Operator{failingOutput}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// First entry - starts batch
+			e1 := entry.New()
+			e1.Body = "line1"
+			e1.ObservedTimestamp = time.Now()
+			err = op.Process(t.Context(), e1)
+			require.NoError(t, err) // First entry just starts batch, no flush yet
+
+			// Second entry with END triggers flush
+			e2 := entry.New()
+			e2.Body = "END"
+			e2.ObservedTimestamp = time.Now()
+			err = op.Process(t.Context(), e2)
+			// flushSource errors should always be returned regardless of quiet mode
+			require.Error(t, err, "flushSource errors should always be returned")
+		})
+
+		t.Run(tc.name+"_ProcessBatch_MatchFirstLine", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			cfg.IsFirstEntry = "body == 'START'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			// Use an output that will fail on write to trigger flushSource error
+			failingOutput := &testutil.Operator{}
+			failingOutput.On("ID").Return("fake")
+			failingOutput.On("CanProcess").Return(true)
+			failingOutput.On("Process", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			failingOutput.On("ProcessBatch", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			require.NoError(t, op.SetOutputs([]operator.Operator{failingOutput}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// Create batch: first START starts batch, second START triggers flush
+			entries := []*entry.Entry{
+				func() *entry.Entry {
+					e := entry.New()
+					e.Body = "START"
+					e.ObservedTimestamp = time.Now()
+					return e
+				}(),
+				func() *entry.Entry {
+					e := entry.New()
+					e.Body = "START"
+					e.ObservedTimestamp = time.Now()
+					return e
+				}(),
+			}
+
+			err = op.ProcessBatch(t.Context(), entries)
+			// flushSource errors should always be returned regardless of quiet mode
+			require.Error(t, err, "flushSource errors should always be returned")
+		})
+
+		t.Run(tc.name+"_ProcessBatch_MatchLastLine", func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.CombineField = entry.NewBodyField()
+			cfg.IsLastEntry = "body == 'END'"
+			cfg.OutputIDs = []string{"fake"}
+			cfg.OnError = tc.onError
+
+			set := componenttest.NewNopTelemetrySettings()
+			op, err := cfg.Build(set)
+			require.NoError(t, err)
+
+			// Use an output that will fail on write to trigger flushSource error
+			failingOutput := &testutil.Operator{}
+			failingOutput.On("ID").Return("fake")
+			failingOutput.On("CanProcess").Return(true)
+			failingOutput.On("Process", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			failingOutput.On("ProcessBatch", mock.Anything, mock.Anything).Return(errors.New("write error"))
+			require.NoError(t, op.SetOutputs([]operator.Operator{failingOutput}))
+			require.NoError(t, op.Start(nil))
+			defer func() { require.NoError(t, op.Stop()) }()
+
+			// Create batch: first entry starts batch, END triggers flush
+			entries := []*entry.Entry{
+				func() *entry.Entry {
+					e := entry.New()
+					e.Body = "line1"
+					e.ObservedTimestamp = time.Now()
+					return e
+				}(),
+				func() *entry.Entry {
+					e := entry.New()
+					e.Body = "END"
+					e.ObservedTimestamp = time.Now()
+					return e
+				}(),
+			}
+
+			err = op.ProcessBatch(t.Context(), entries)
+			// flushSource errors should always be returned regardless of quiet mode
+			require.Error(t, err, "flushSource errors should always be returned")
+		})
+	}
+}
+
+func TestIfFieldSkipsNonMatchingEntries(t *testing.T) {
+	now := time.Now()
+	t1 := time.Date(2020, time.April, 11, 21, 34, 0o1, 0, time.UTC)
+
+	cfg := NewConfig()
+	cfg.CombineField = entry.NewBodyField()
+	cfg.IsLastEntry = "body == 'END'"
+	cfg.OutputIDs = []string{"fake"}
+	// Only recombine entries where body != "skip"
+	cfg.IfExpr = "body != 'skip'"
+
+	ctx := t.Context()
+	set := componenttest.NewNopTelemetrySettings()
+	op, err := cfg.Build(set)
+	require.NoError(t, err)
+	require.NoError(t, op.Start(testutil.NewUnscopedMockPersister()))
+	defer func() { require.NoError(t, op.Stop()) }()
+
+	fake := testutil.NewFakeOutput(t)
+	require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
+
+	// Send: "line1" (matches if, goes to batch), "skip" (doesn't match if, passes through), "END" (matches if, flushes batch)
+	e1 := entry.New()
+	e1.ObservedTimestamp = now
+	e1.Timestamp = t1
+	e1.Body = "line1"
+
+	eSkip := entry.New()
+	eSkip.ObservedTimestamp = now
+	eSkip.Timestamp = t1
+	eSkip.Body = "skip"
+
+	eEnd := entry.New()
+	eEnd.ObservedTimestamp = now
+	eEnd.Timestamp = t1
+	eEnd.Body = "END"
+
+	require.NoError(t, op.Process(ctx, e1))
+	require.NoError(t, op.Process(ctx, eSkip))
+	require.NoError(t, op.Process(ctx, eEnd))
+
+	// "skip" should pass through immediately (unrecombined)
+	expectSkip := entry.New()
+	expectSkip.ObservedTimestamp = now
+	expectSkip.Timestamp = t1
+	expectSkip.Body = "skip"
+
+	// "line1" + "END" should be recombined
+	expectRecombined := entry.New()
+	expectRecombined.ObservedTimestamp = now
+	expectRecombined.Timestamp = t1
+	expectRecombined.Body = "line1\nEND"
+
+	fake.ExpectEntry(t, expectSkip)
+	fake.ExpectEntry(t, expectRecombined)
 }

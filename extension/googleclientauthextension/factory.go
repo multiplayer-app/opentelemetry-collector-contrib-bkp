@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package googleclientauthextension // import "github.com/open-telemetry/opentelemetry-collector-contrib/extension/googleclientauthextension"
 
@@ -24,7 +24,7 @@ func NewFactory() extension.Factory {
 	)
 }
 
-func createExtension(ctx context.Context, set extension.Settings, cfg component.Config) (component.Component, error) {
+func createExtension(ctx context.Context, set extension.Settings, cfg component.Config) (extension.Extension, error) {
 	eCfg := cfg.(*Config)
 	return googleclientauthextension.CreateExtension(ctx, set, &eCfg.Config)
 }

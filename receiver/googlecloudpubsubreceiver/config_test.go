@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/googlecloudpubsubreceiver/internal/metadata"
@@ -29,8 +30,13 @@ func TestLoadConfig(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			id:       component.NewIDWithName(metadata.Type, ""),
-			expected: &Config{},
+			id: component.NewIDWithName(metadata.Type, ""),
+			expected: &Config{
+				FlowControlConfig: FlowControlConfig{
+					TriggerAckBatchDuration: 10 * time.Second,
+					StreamAckDeadline:       60 * time.Second,
+				},
+			},
 		},
 		{
 			id: component.NewIDWithName(metadata.Type, "customname"),
@@ -41,6 +47,10 @@ func TestLoadConfig(t *testing.T) {
 					Timeout: 20 * time.Second,
 				},
 				Subscription: "projects/my-project/subscriptions/otlp-subscription",
+				FlowControlConfig: FlowControlConfig{
+					TriggerAckBatchDuration: 10 * time.Second,
+					StreamAckDeadline:       60 * time.Second,
+				},
 			},
 		},
 	}
@@ -54,7 +64,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
@@ -63,70 +73,22 @@ func TestLoadConfig(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	factory := NewFactory()
 	c := factory.CreateDefaultConfig().(*Config)
-	assert.Error(t, c.validateForTrace())
-	assert.Error(t, c.validateForLog())
-	assert.Error(t, c.validateForMetric())
 	c.Subscription = "projects/000project/subscriptions/my-subscription"
 	assert.Error(t, c.validate())
 	c.Subscription = "projects/my-project/topics/my-topic"
 	assert.Error(t, c.validate())
 	c.Subscription = "projects/my-project/subscriptions/my-subscription"
 	assert.NoError(t, c.validate())
-}
-
-func TestTraceConfigValidation(t *testing.T) {
-	factory := NewFactory()
-	c := factory.CreateDefaultConfig().(*Config)
-	c.Subscription = "projects/my-project/subscriptions/my-subscription"
-	assert.NoError(t, c.validateForTrace())
-
-	c.Encoding = "otlp_proto_metric"
-	assert.Error(t, c.validateForTrace())
-	c.Encoding = "otlp_proto_log"
-	assert.Error(t, c.validateForTrace())
-	c.Encoding = "raw_text"
-	assert.Error(t, c.validateForTrace())
-	c.Encoding = "raw_json"
-	assert.Error(t, c.validateForTrace())
-
-	c.Encoding = "otlp_proto_trace"
-	assert.NoError(t, c.validateForTrace())
-}
-
-func TestMetricConfigValidation(t *testing.T) {
-	factory := NewFactory()
-	c := factory.CreateDefaultConfig().(*Config)
-	c.Subscription = "projects/my-project/subscriptions/my-subscription"
-	assert.NoError(t, c.validateForMetric())
-
-	c.Encoding = "otlp_proto_trace"
-	assert.Error(t, c.validateForMetric())
-	c.Encoding = "otlp_proto_log"
-	assert.Error(t, c.validateForMetric())
-	c.Encoding = "raw_text"
-	assert.Error(t, c.validateForMetric())
-	c.Encoding = "raw_json"
-	assert.Error(t, c.validateForMetric())
-
-	c.Encoding = "otlp_proto_metric"
-	assert.NoError(t, c.validateForMetric())
-}
-
-func TestLogConfigValidation(t *testing.T) {
-	factory := NewFactory()
-	c := factory.CreateDefaultConfig().(*Config)
-	c.Subscription = "projects/my-project/subscriptions/my-subscription"
-	assert.NoError(t, c.validateForLog())
-
-	c.Encoding = "otlp_proto_trace"
-	assert.Error(t, c.validateForLog())
-	c.Encoding = "otlp_proto_metric"
-	assert.Error(t, c.validateForLog())
-
-	c.Encoding = "raw_text"
-	assert.NoError(t, c.validateForLog())
-	c.Encoding = "raw_json"
-	assert.NoError(t, c.validateForLog())
-	c.Encoding = "otlp_proto_log"
-	assert.NoError(t, c.validateForLog())
+	// Test for project IDs with a single colon (not at start, not at end)
+	c.Subscription = "projects/s3ns:my-project/subscriptions/my-subscription"
+	assert.NoError(t, c.validate())
+	// Invalid: colon at the start
+	c.Subscription = "projects/:invalid/subscriptions/my-subscription"
+	assert.Error(t, c.validate())
+	// Invalid: colon at the end
+	c.Subscription = "projects/invalid:/subscriptions/my-subscription"
+	assert.Error(t, c.validate())
+	// Invalid: multiple colons
+	c.Subscription = "projects/s3ns:invalid:invalid/subscriptions/my-subscription"
+	assert.Error(t, c.validate())
 }

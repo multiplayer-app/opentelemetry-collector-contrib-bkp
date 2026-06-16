@@ -32,27 +32,33 @@ func TestGetCPU(t *testing.T) {
 		{
 			name: "successful host cpu info",
 			fixtures: testfixture{
+				// Simulate a Linux host: 2 sockets, 2 cores each, 2 threads per core = 8 logical CPUs.
+				// On Linux, cpu.InfoWithContext returns one InfoStat per logical CPU with Cores=1,
+				// so PhysicalID and CoreID must be set to identify unique physical cores.
 				cpuInfo: func(context.Context) ([]cpu.InfoStat, error) {
 					return []cpu.InfoStat{
-						{
-							ModelName: "testmodelname",
-							Cores:     4,
-						},
-						{
-							ModelName: "testmodelname2",
-							Cores:     4,
-						},
+						{ModelName: "testmodelname", Cores: 1, PhysicalID: "0", CoreID: "0"},
+						{ModelName: "testmodelname", Cores: 1, PhysicalID: "0", CoreID: "0"}, // hyperthreading sibling
+						{ModelName: "testmodelname", Cores: 1, PhysicalID: "0", CoreID: "1"},
+						{ModelName: "testmodelname", Cores: 1, PhysicalID: "0", CoreID: "1"}, // hyperthreading sibling
+						{ModelName: "testmodelname2", Cores: 1, PhysicalID: "1", CoreID: "0"},
+						{ModelName: "testmodelname2", Cores: 1, PhysicalID: "1", CoreID: "0"}, // hyperthreading sibling
+						{ModelName: "testmodelname2", Cores: 1, PhysicalID: "1", CoreID: "1"},
+						{ModelName: "testmodelname2", Cores: 1, PhysicalID: "1", CoreID: "1"}, // hyperthreading sibling
 					}, nil
 				},
-				cpuCounts: func(context.Context, bool) (int, error) {
-					return 2, nil
+				cpuCounts: func(_ context.Context, logical bool) (int, error) {
+					if logical {
+						return 8, nil // 2 sockets * 2 cores * 2 threads
+					}
+					return 2, nil // 2 physical sockets
 				},
 			},
 			wantInfo: map[string]string{
 				"host_physical_cpus": "2",
-				"host_cpu_cores":     "8",
+				"host_cpu_cores":     "4",
 				"host_cpu_model":     "testmodelname2",
-				"host_logical_cpus":  "2",
+				"host_logical_cpus":  "8",
 			},
 		},
 		{
@@ -90,7 +96,7 @@ func TestGetCPU(t *testing.T) {
 				},
 			},
 			wantInfo: map[string]string{
-				"host_physical_cpus": "2",
+				"host_physical_cpus": "0", // cpuCounts(false) fails, HostPhysicalCPUs stays at zero
 				"host_cpu_cores":     "0",
 				"host_cpu_model":     "",
 				"host_logical_cpus":  "0",
@@ -102,7 +108,7 @@ func TestGetCPU(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cpuInfo = tt.fixtures.cpuInfo
 			cpuCounts = tt.fixtures.cpuCounts
-			gotInfo, err := getCPU()
+			gotInfo, err := getCPU(t.Context())
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -115,7 +121,7 @@ func TestGetCPU(t *testing.T) {
 
 func TestGetOS(t *testing.T) {
 	type testfixture struct {
-		hostInfo func() (*host.InfoStat, error)
+		hostInfo func(context.Context) (*host.InfoStat, error)
 		hostEtc  string
 	}
 	tests := []struct {
@@ -127,7 +133,7 @@ func TestGetOS(t *testing.T) {
 		{
 			name: "get kernel info",
 			testfixtures: testfixture{
-				hostInfo: func() (*host.InfoStat, error) {
+				hostInfo: func(context.Context) (*host.InfoStat, error) {
 					return &host.InfoStat{
 						OS:              "linux",
 						KernelVersion:   "4.4.0-112-generic",
@@ -146,7 +152,7 @@ func TestGetOS(t *testing.T) {
 		{
 			name: "get kernel info error",
 			testfixtures: testfixture{
-				hostInfo: func() (*host.InfoStat, error) {
+				hostInfo: func(context.Context) (*host.InfoStat, error) {
 					return nil, errors.New("no host info")
 				},
 				hostEtc: "./testdata/lsb-release",
@@ -164,7 +170,7 @@ func TestGetOS(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			hostInfo = tt.testfixtures.hostInfo
 			t.Setenv("HOST_ETC", tt.testfixtures.hostEtc)
-			gotInfo, err := getOS()
+			gotInfo, err := getOS(t.Context())
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -175,67 +181,15 @@ func TestGetOS(t *testing.T) {
 	}
 }
 
-func Test_GetLinuxVersion(t *testing.T) {
-	tests := []struct {
-		name    string
-		etc     string
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "lsb-release",
-			etc:  "./testdata/lsb-release",
-			want: "Ubuntu 18.04 LTS",
-		},
-		{
-			name: "os-release",
-			etc:  "./testdata/os-release",
-			want: "Debian GNU/Linux 9 (stretch)",
-		},
-		{
-			name: "centos-release",
-			etc:  "./testdata/centos-release",
-			want: "CentOS Linux release 7.5.1804 (Core)",
-		},
-		{
-			name: "redhat-release",
-			etc:  "./testdata/redhat-release",
-			want: "Red Hat Enterprise Linux Server release 7.5 (Maipo)",
-		},
-		{
-			name: "system-release",
-			etc:  "./testdata/system-release",
-			want: "CentOS Linux release 7.5.1804 (Core)",
-		},
-		{
-			name:    "no release returns error",
-			etc:     "./testdata",
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOST_ETC", tt.etc)
-			got, err := getLinuxVersion()
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestGetMemory(t *testing.T) {
 	tests := []struct {
 		name             string
-		memVirtualMemory func() (*mem.VirtualMemoryStat, error)
+		memVirtualMemory func(context.Context) (*mem.VirtualMemoryStat, error)
 		want             map[string]string
 	}{
 		{
 			name: "host_mem_total",
-			memVirtualMemory: func() (*mem.VirtualMemoryStat, error) {
+			memVirtualMemory: func(context.Context) (*mem.VirtualMemoryStat, error) {
 				return &mem.VirtualMemoryStat{
 					Total: 2048,
 				}, nil
@@ -246,33 +200,9 @@ func TestGetMemory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			memVirtualMemory = tt.memVirtualMemory
-			mem, err := getMemory()
+			memory, err := getMemory(t.Context())
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, mem.toStringMap())
+			assert.Equal(t, tt.want, memory.toStringMap())
 		})
 	}
-}
-
-func TestEtcPath(t *testing.T) {
-	tests := []struct {
-		name string
-		etc  string
-		want string
-	}{
-		{
-			name: "test default host etc",
-			etc:  "",
-			want: "/etc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.etc != "" {
-				t.Setenv("HOST_ETC", tt.etc)
-			}
-			assert.Equal(t, tt.want, etcPath())
-		})
-	}
-
 }

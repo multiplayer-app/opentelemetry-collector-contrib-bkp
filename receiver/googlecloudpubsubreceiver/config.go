@@ -6,14 +6,16 @@ package googlecloudpubsubreceiver // import "github.com/open-telemetry/opentelem
 import (
 	"fmt"
 	"regexp"
+	"time"
 
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/googlecloudpubsubreceiver/internal"
 )
 
-var subscriptionMatcher = regexp.MustCompile(`projects/[a-z][a-z0-9\-]*/subscriptions/`)
+var subscriptionMatcher = regexp.MustCompile(`projects/[a-z][a-z0-9\-]*(:[a-z0-9\-]+)?/subscriptions/`)
 
 type Config struct {
-
 	// Google Cloud Project ID where the Pubsub client will connect to
 	ProjectID string `mapstructure:"project"`
 	// User agent that will be used by the Pubsub client to connect to the service
@@ -32,53 +34,38 @@ type Config struct {
 	// Lock down the compression of the payload, leave empty for attribute based detection
 	Compression string `mapstructure:"compression"`
 
+	// Ignore errors when the configured encoder fails to decoding a PubSub messages
+	IgnoreEncodingError bool `mapstructure:"ignore_encoding_error"`
+
 	// The client id that will be used by Pubsub to make load balancing decisions
 	ClientID string `mapstructure:"client_id"`
+
+	FlowControlConfig FlowControlConfig `mapstructure:"flow_control"`
 }
 
-func (config *Config) validateForLog() error {
-	err := config.validate()
-	if err != nil {
-		return err
-	}
-	switch config.Encoding {
-	case "":
-	case "otlp_proto_log":
-	case "raw_text":
-	case "raw_json":
-	case "cloud_logging":
-	default:
-		return fmt.Errorf("log encoding %v is not supported.  supported encoding formats include [otlp_proto_log,raw_text,raw_json,cloud_logging]", config.Encoding)
-	}
-	return nil
+// FlowControlConfig defines the flow control configuration for the receiver. This is used to
+// tune the internal flow control implementation, along with the Pub/Sub flow control settings
+// documented at https://cloud.google.com/pubsub/docs/flow-control and
+// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#streamingpullrequest
+type FlowControlConfig struct {
+	// The maximum duration the acknowledgement loop waits before sending the acknowledgements.
+	TriggerAckBatchDuration time.Duration `mapstructure:"trigger_ack_batch_duration"`
+
+	// The ack deadline to use for the Pub/Sub stream.
+	StreamAckDeadline time.Duration `mapstructure:"stream_ack_deadline"`
+	// Pub/Sub flow control settings for the maximum number of outstanding messages.
+	MaxOutstandingMessages int64 `mapstructure:"max_outstanding_messages"`
+	// Pub/Sub flow control settings for the maximum number of outstanding bytes.
+	MaxOutstandingBytes int64 `mapstructure:"max_outstanding_bytes"`
 }
 
-func (config *Config) validateForTrace() error {
-	err := config.validate()
-	if err != nil {
-		return err
+func (fcc *FlowControlConfig) getInternalConfig() *internal.FlowControlConfig {
+	return &internal.FlowControlConfig{
+		TriggerAckBatchDuration: fcc.TriggerAckBatchDuration,
+		StreamAckDeadline:       fcc.StreamAckDeadline,
+		MaxOutstandingMessages:  fcc.MaxOutstandingMessages,
+		MaxOutstandingBytes:     fcc.MaxOutstandingBytes,
 	}
-	switch config.Encoding {
-	case "":
-	case "otlp_proto_trace":
-	default:
-		return fmt.Errorf("trace encoding %v is not supported.  supported encoding formats include [otlp_proto_trace]", config.Encoding)
-	}
-	return nil
-}
-
-func (config *Config) validateForMetric() error {
-	err := config.validate()
-	if err != nil {
-		return err
-	}
-	switch config.Encoding {
-	case "":
-	case "otlp_proto_metric":
-	default:
-		return fmt.Errorf("metric encoding %v is not supported.  supported encoding formats include [otlp_proto_metric]", config.Encoding)
-	}
-	return nil
 }
 
 func (config *Config) validate() error {

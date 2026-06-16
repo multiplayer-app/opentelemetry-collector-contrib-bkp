@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/config/configauth"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
@@ -21,8 +22,8 @@ import (
 
 // Config defines configuration for Sumo Logic exporter.
 type Config struct {
-	confighttp.ClientConfig   `mapstructure:",squash"`   // squash ensures fields are correctly decoded in embedded struct.
-	QueueSettings             exporterhelper.QueueConfig `mapstructure:"sending_queue"`
+	confighttp.ClientConfig   `mapstructure:",squash"`                                 // squash ensures fields are correctly decoded in embedded struct.
+	QueueSettings             configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:"sending_queue"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 
 	// Compression encoding format, either empty string, gzip or deflate (default gzip)
@@ -52,6 +53,9 @@ type Config struct {
 	// Decompose OTLP Histograms into individual metrics, similar to how they're represented in Prometheus format
 	DecomposeOtlpHistograms bool `mapstructure:"decompose_otlp_histograms"`
 
+	// Decompose OTLP Summaries into individual metrics (quantiles as gauges, count/sum as counters)
+	DecomposeOtlpSummaries bool `mapstructure:"decompose_otlp_summaries"`
+
 	// Sumo specific options
 	// Name of the client
 	Client string `mapstructure:"client"`
@@ -66,30 +70,29 @@ func createDefaultClientConfig() confighttp.ClientConfig {
 	clientConfig := confighttp.NewDefaultClientConfig()
 	clientConfig.Timeout = defaultTimeout
 	clientConfig.Compression = DefaultCompressEncoding
-	clientConfig.Auth = &configauth.Authentication{
+	clientConfig.Auth = configoptional.Some(configauth.Config{
 		AuthenticatorID: component.NewID(sumologicextension.NewFactory().Type()),
-	}
+	})
 	return clientConfig
 }
 
 func (cfg *Config) Validate() error {
-
 	if cfg.CompressEncoding != nil {
 		return errors.New("support for compress_encoding configuration has been removed, in favor of compression")
 	}
 
-	if cfg.ClientConfig.Timeout < 1 || cfg.ClientConfig.Timeout > maxTimeout {
-		return fmt.Errorf("timeout must be between 1 and 55 seconds, got %v", cfg.ClientConfig.Timeout)
+	if cfg.Timeout < 1 || cfg.Timeout > maxTimeout {
+		return fmt.Errorf("timeout must be between 1 and 55 seconds, got %v", cfg.Timeout)
 	}
 
-	switch cfg.ClientConfig.Compression {
+	switch cfg.Compression {
 	case configcompression.TypeGzip:
 	case configcompression.TypeDeflate:
 	case configcompression.TypeZstd:
 	case NoCompression:
 
 	default:
-		return fmt.Errorf("invalid compression encoding type: %v", cfg.ClientConfig.Compression)
+		return fmt.Errorf("invalid compression encoding type: %v", cfg.Compression)
 	}
 
 	switch cfg.LogFormat {
@@ -104,20 +107,20 @@ func (cfg *Config) Validate() error {
 	case OTLPMetricFormat:
 	case PrometheusFormat:
 	case RemovedGraphiteFormat:
-		return fmt.Errorf("support for the graphite metric format was removed, please use prometheus or otlp instead")
+		return errors.New("support for the graphite metric format was removed, please use prometheus or otlp instead")
 	case RemovedCarbon2Format:
-		return fmt.Errorf("support for the carbon2 metric format was removed, please use prometheus or otlp instead")
+		return errors.New("support for the carbon2 metric format was removed, please use prometheus or otlp instead")
 	default:
 		return fmt.Errorf("unexpected metric format: %s", cfg.MetricFormat)
 	}
 
-	if len(cfg.ClientConfig.Endpoint) == 0 && cfg.ClientConfig.Auth == nil {
+	if cfg.Endpoint == "" && !cfg.Auth.HasValue() {
 		return errors.New("no endpoint and no auth extension specified")
 	}
 
-	if _, err := url.Parse(cfg.ClientConfig.Endpoint); err != nil {
+	if _, err := url.Parse(cfg.Endpoint); err != nil {
 		return fmt.Errorf("failed parsing endpoint URL: %s; err: %w",
-			cfg.ClientConfig.Endpoint, err,
+			cfg.Endpoint, err,
 		)
 	}
 
@@ -187,4 +190,10 @@ const (
 	DefaultDropRoutingAttribute string = ""
 	// DefaultStickySessionEnabled defines default StickySessionEnabled value
 	DefaultStickySessionEnabled bool = false
+	// DefaultRetryOnFailureMultiplier defines default retry_on_failure multiplier value
+	DefaultRetryOnFailureMultiplier float64 = 1.2
+	// DefaultRetryOnFailureMaxInterval defines default retry_on_failure max_interval value
+	DefaultRetryOnFailureMaxInterval time.Duration = 5 * time.Minute
+	// DefaultRetryOnFailureMaxElapsedTime defines default retry_on_failure max_elapsed_time value
+	DefaultRetryOnFailureMaxElapsedTime time.Duration = 1 * time.Hour
 )

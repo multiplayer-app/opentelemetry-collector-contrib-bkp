@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 )
 
@@ -19,28 +20,64 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	}{
 		{
 			name: "default",
-			want: DefaultMetricsBuilderConfig(),
+			want: NewDefaultMetricsBuilderConfig(),
 		},
 		{
 			name: "all_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					VcsRepositoryChangeCount:          MetricConfig{Enabled: true},
-					VcsRepositoryChangeTimeOpen:       MetricConfig{Enabled: true},
-					VcsRepositoryChangeTimeToApproval: MetricConfig{Enabled: true},
-					VcsRepositoryChangeTimeToMerge:    MetricConfig{Enabled: true},
-					VcsRepositoryContributorCount:     MetricConfig{Enabled: true},
-					VcsRepositoryCount:                MetricConfig{Enabled: true},
-					VcsRepositoryRefCount:             MetricConfig{Enabled: true},
-					VcsRepositoryRefLinesAdded:        MetricConfig{Enabled: true},
-					VcsRepositoryRefLinesDeleted:      MetricConfig{Enabled: true},
-					VcsRepositoryRefRevisionsAhead:    MetricConfig{Enabled: true},
-					VcsRepositoryRefRevisionsBehind:   MetricConfig{Enabled: true},
-					VcsRepositoryRefTime:              MetricConfig{Enabled: true},
+					VcsChangeCount: VcsChangeCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeCountMetricAttributeKey{VcsChangeCountMetricAttributeKeyVcsRepositoryURLFull, VcsChangeCountMetricAttributeKeyVcsChangeState, VcsChangeCountMetricAttributeKeyVcsRepositoryName},
+					},
+					VcsChangeDuration: VcsChangeDurationMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeDurationMetricAttributeKey{VcsChangeDurationMetricAttributeKeyVcsRepositoryURLFull, VcsChangeDurationMetricAttributeKeyVcsRepositoryName, VcsChangeDurationMetricAttributeKeyVcsRefHeadName, VcsChangeDurationMetricAttributeKeyVcsChangeState},
+					},
+					VcsChangeTimeToApproval: VcsChangeTimeToApprovalMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeTimeToApprovalMetricAttributeKey{VcsChangeTimeToApprovalMetricAttributeKeyVcsRepositoryURLFull, VcsChangeTimeToApprovalMetricAttributeKeyVcsRepositoryName, VcsChangeTimeToApprovalMetricAttributeKeyVcsRefHeadName},
+					},
+					VcsChangeTimeToMerge: VcsChangeTimeToMergeMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeTimeToMergeMetricAttributeKey{VcsChangeTimeToMergeMetricAttributeKeyVcsRepositoryURLFull, VcsChangeTimeToMergeMetricAttributeKeyVcsRepositoryName, VcsChangeTimeToMergeMetricAttributeKeyVcsRefHeadName},
+					},
+					VcsContributorCount: VcsContributorCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsContributorCountMetricAttributeKey{VcsContributorCountMetricAttributeKeyVcsRepositoryURLFull, VcsContributorCountMetricAttributeKeyVcsRepositoryName},
+					},
+					VcsRefCount: VcsRefCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefCountMetricAttributeKey{VcsRefCountMetricAttributeKeyVcsRepositoryURLFull, VcsRefCountMetricAttributeKeyVcsRepositoryName, VcsRefCountMetricAttributeKeyVcsRefType},
+					},
+					VcsRefLinesDelta: VcsRefLinesDeltaMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefLinesDeltaMetricAttributeKey{VcsRefLinesDeltaMetricAttributeKeyVcsRepositoryURLFull, VcsRefLinesDeltaMetricAttributeKeyVcsRepositoryName, VcsRefLinesDeltaMetricAttributeKeyVcsRefHeadName, VcsRefLinesDeltaMetricAttributeKeyVcsRefHeadType, VcsRefLinesDeltaMetricAttributeKeyVcsRefBaseName, VcsRefLinesDeltaMetricAttributeKeyVcsRefBaseType, VcsRefLinesDeltaMetricAttributeKeyVcsLineChangeType},
+					},
+					VcsRefRevisionsDelta: VcsRefRevisionsDeltaMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefRevisionsDeltaMetricAttributeKey{VcsRefRevisionsDeltaMetricAttributeKeyVcsRepositoryURLFull, VcsRefRevisionsDeltaMetricAttributeKeyVcsRepositoryName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefHeadName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefHeadType, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefBaseName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefBaseType, VcsRefRevisionsDeltaMetricAttributeKeyVcsRevisionDeltaDirection},
+					},
+					VcsRefTime: VcsRefTimeMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefTimeMetricAttributeKey{VcsRefTimeMetricAttributeKeyVcsRepositoryURLFull, VcsRefTimeMetricAttributeKeyVcsRepositoryName, VcsRefTimeMetricAttributeKeyVcsRefHeadName, VcsRefTimeMetricAttributeKeyVcsRefHeadType},
+					},
+					VcsRepositoryCount: VcsRepositoryCountMetricConfig{
+						Enabled: true,
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
-					OrganizationName: ResourceAttributeConfig{Enabled: true},
-					VcsVendorName:    ResourceAttributeConfig{Enabled: true},
+					VcsOwnerName:    ResourceAttributeConfig{Enabled: true},
+					VcsProviderName: ResourceAttributeConfig{Enabled: true},
 				},
 			},
 		},
@@ -48,22 +85,58 @@ func TestMetricsBuilderConfig(t *testing.T) {
 			name: "none_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					VcsRepositoryChangeCount:          MetricConfig{Enabled: false},
-					VcsRepositoryChangeTimeOpen:       MetricConfig{Enabled: false},
-					VcsRepositoryChangeTimeToApproval: MetricConfig{Enabled: false},
-					VcsRepositoryChangeTimeToMerge:    MetricConfig{Enabled: false},
-					VcsRepositoryContributorCount:     MetricConfig{Enabled: false},
-					VcsRepositoryCount:                MetricConfig{Enabled: false},
-					VcsRepositoryRefCount:             MetricConfig{Enabled: false},
-					VcsRepositoryRefLinesAdded:        MetricConfig{Enabled: false},
-					VcsRepositoryRefLinesDeleted:      MetricConfig{Enabled: false},
-					VcsRepositoryRefRevisionsAhead:    MetricConfig{Enabled: false},
-					VcsRepositoryRefRevisionsBehind:   MetricConfig{Enabled: false},
-					VcsRepositoryRefTime:              MetricConfig{Enabled: false},
+					VcsChangeCount: VcsChangeCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeCountMetricAttributeKey{VcsChangeCountMetricAttributeKeyVcsRepositoryURLFull, VcsChangeCountMetricAttributeKeyVcsChangeState, VcsChangeCountMetricAttributeKeyVcsRepositoryName},
+					},
+					VcsChangeDuration: VcsChangeDurationMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeDurationMetricAttributeKey{VcsChangeDurationMetricAttributeKeyVcsRepositoryURLFull, VcsChangeDurationMetricAttributeKeyVcsRepositoryName, VcsChangeDurationMetricAttributeKeyVcsRefHeadName, VcsChangeDurationMetricAttributeKeyVcsChangeState},
+					},
+					VcsChangeTimeToApproval: VcsChangeTimeToApprovalMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeTimeToApprovalMetricAttributeKey{VcsChangeTimeToApprovalMetricAttributeKeyVcsRepositoryURLFull, VcsChangeTimeToApprovalMetricAttributeKeyVcsRepositoryName, VcsChangeTimeToApprovalMetricAttributeKeyVcsRefHeadName},
+					},
+					VcsChangeTimeToMerge: VcsChangeTimeToMergeMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsChangeTimeToMergeMetricAttributeKey{VcsChangeTimeToMergeMetricAttributeKeyVcsRepositoryURLFull, VcsChangeTimeToMergeMetricAttributeKeyVcsRepositoryName, VcsChangeTimeToMergeMetricAttributeKeyVcsRefHeadName},
+					},
+					VcsContributorCount: VcsContributorCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsContributorCountMetricAttributeKey{VcsContributorCountMetricAttributeKeyVcsRepositoryURLFull, VcsContributorCountMetricAttributeKeyVcsRepositoryName},
+					},
+					VcsRefCount: VcsRefCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefCountMetricAttributeKey{VcsRefCountMetricAttributeKeyVcsRepositoryURLFull, VcsRefCountMetricAttributeKeyVcsRepositoryName, VcsRefCountMetricAttributeKeyVcsRefType},
+					},
+					VcsRefLinesDelta: VcsRefLinesDeltaMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefLinesDeltaMetricAttributeKey{VcsRefLinesDeltaMetricAttributeKeyVcsRepositoryURLFull, VcsRefLinesDeltaMetricAttributeKeyVcsRepositoryName, VcsRefLinesDeltaMetricAttributeKeyVcsRefHeadName, VcsRefLinesDeltaMetricAttributeKeyVcsRefHeadType, VcsRefLinesDeltaMetricAttributeKeyVcsRefBaseName, VcsRefLinesDeltaMetricAttributeKeyVcsRefBaseType, VcsRefLinesDeltaMetricAttributeKeyVcsLineChangeType},
+					},
+					VcsRefRevisionsDelta: VcsRefRevisionsDeltaMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefRevisionsDeltaMetricAttributeKey{VcsRefRevisionsDeltaMetricAttributeKeyVcsRepositoryURLFull, VcsRefRevisionsDeltaMetricAttributeKeyVcsRepositoryName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefHeadName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefHeadType, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefBaseName, VcsRefRevisionsDeltaMetricAttributeKeyVcsRefBaseType, VcsRefRevisionsDeltaMetricAttributeKeyVcsRevisionDeltaDirection},
+					},
+					VcsRefTime: VcsRefTimeMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []VcsRefTimeMetricAttributeKey{VcsRefTimeMetricAttributeKeyVcsRepositoryURLFull, VcsRefTimeMetricAttributeKeyVcsRepositoryName, VcsRefTimeMetricAttributeKeyVcsRefHeadName, VcsRefTimeMetricAttributeKeyVcsRefHeadType},
+					},
+					VcsRepositoryCount: VcsRepositoryCountMetricConfig{
+						Enabled: false,
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
-					OrganizationName: ResourceAttributeConfig{Enabled: false},
-					VcsVendorName:    ResourceAttributeConfig{Enabled: false},
+					VcsOwnerName:    ResourceAttributeConfig{Enabled: false},
+					VcsProviderName: ResourceAttributeConfig{Enabled: false},
 				},
 			},
 		},
@@ -71,9 +144,8 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMetricsBuilderConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(MetricConfig{}, ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(VcsChangeCountMetricConfig{}, VcsChangeDurationMetricConfig{}, VcsChangeTimeToApprovalMetricConfig{}, VcsChangeTimeToMergeMetricConfig{}, VcsContributorCountMetricConfig{}, VcsRefCountMetricConfig{}, VcsRefLinesDeltaMetricConfig{}, VcsRefRevisionsDeltaMetricConfig{}, VcsRefTimeMetricConfig{}, VcsRepositoryCountMetricConfig{}, ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }
@@ -83,8 +155,8 @@ func loadMetricsBuilderConfig(t *testing.T, name string) MetricsBuilderConfig {
 	require.NoError(t, err)
 	sub, err := cm.Sub(name)
 	require.NoError(t, err)
-	cfg := DefaultMetricsBuilderConfig()
-	require.NoError(t, sub.Unmarshal(&cfg))
+	cfg := NewDefaultMetricsBuilderConfig()
+	require.NoError(t, sub.Unmarshal(&cfg, confmap.WithIgnoreUnused()))
 	return cfg
 }
 
@@ -100,24 +172,23 @@ func TestResourceAttributesConfig(t *testing.T) {
 		{
 			name: "all_set",
 			want: ResourceAttributesConfig{
-				OrganizationName: ResourceAttributeConfig{Enabled: true},
-				VcsVendorName:    ResourceAttributeConfig{Enabled: true},
+				VcsOwnerName:    ResourceAttributeConfig{Enabled: true},
+				VcsProviderName: ResourceAttributeConfig{Enabled: true},
 			},
 		},
 		{
 			name: "none_set",
 			want: ResourceAttributesConfig{
-				OrganizationName: ResourceAttributeConfig{Enabled: false},
-				VcsVendorName:    ResourceAttributeConfig{Enabled: false},
+				VcsOwnerName:    ResourceAttributeConfig{Enabled: false},
+				VcsProviderName: ResourceAttributeConfig{Enabled: false},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

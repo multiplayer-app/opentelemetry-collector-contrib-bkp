@@ -33,7 +33,7 @@ attributes/regex_insert:
     # http_path: path
     # http_query_params=queryParam1=value1,queryParam2=value2
     # http.url value does NOT change.
-    # Note: Similar to the Span Procesor, if a target key already exists,
+    # Note: Similar to the Span Processor, if a target key already exists,
     # it will be updated.
     - key: "http.url"
       pattern: ^(?P<http_protocol>.*):\/\/(?P<http_domain>.*)\/(?P<http_path>.*)(\?|\&)(?P<http_query_params>.*)
@@ -354,3 +354,27 @@ attributes/from_context:
     # for more information about which attributes are available.
     from_context: auth.subject
     action: insert
+
+attributes/servicesmetrics:
+  include:
+    match_type: strict
+    services:
+      - foo
+  actions:
+    - key: service.name
+      value: bar
+      action: insert
+
+# The following demonstrates using default_value to handle missing environment variables or attributes
+attributes/with_defaults:
+  actions:
+  # Use default when source attribute doesn't exist
+  - key: service.namespace
+    from_attribute: namespace
+    default_value: "default"
+    action: insert
+  # Use default when context value is not available
+  - key: cloud.region
+    from_context: "metadata.region"
+    default_value: "us-east-1"
+    action: upsert

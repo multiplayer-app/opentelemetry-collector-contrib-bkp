@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/saphanareceiver/internal/metadata"
 )
@@ -41,7 +41,7 @@ func createDefaultConfig() component.Config {
 			Insecure: true,
 		},
 		ControllerConfig:     scs,
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 	}
 }
 
@@ -57,10 +57,10 @@ func createMetricsReceiver(
 	if !ok {
 		return nil, errConfigNotSAPHANA
 	}
-	scraper, err := newSapHanaScraper(set, c, &defaultConnectionFactory{})
+	s, err := newSapHanaScraper(set, c, &defaultConnectionFactory{})
 	if err != nil {
 		return nil, err
 	}
 
-	return scraperhelper.NewScraperControllerReceiver(&c.ControllerConfig, set, consumer, scraperhelper.AddScraper(scraper))
+	return scraperhelper.NewMetricsController(&c.ControllerConfig, set, consumer, scraperhelper.AddMetricsScraper(metadata.Type, s))
 }

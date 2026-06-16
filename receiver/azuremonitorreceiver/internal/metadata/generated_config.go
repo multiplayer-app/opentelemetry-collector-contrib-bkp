@@ -25,14 +25,18 @@ func (rac *ResourceAttributeConfig) Unmarshal(parser *confmap.Conf) error {
 	return nil
 }
 
-// ResourceAttributesConfig provides config for azuremonitor resource attributes.
+// ResourceAttributesConfig provides config for azure_monitor resource attributes.
 type ResourceAttributesConfig struct {
+	AzuremonitorSubscription   ResourceAttributeConfig `mapstructure:"azuremonitor.subscription"`
 	AzuremonitorSubscriptionID ResourceAttributeConfig `mapstructure:"azuremonitor.subscription_id"`
 	AzuremonitorTenantID       ResourceAttributeConfig `mapstructure:"azuremonitor.tenant_id"`
 }
 
 func DefaultResourceAttributesConfig() ResourceAttributesConfig {
 	return ResourceAttributesConfig{
+		AzuremonitorSubscription: ResourceAttributeConfig{
+			Enabled: false,
+		},
 		AzuremonitorSubscriptionID: ResourceAttributeConfig{
 			Enabled: false,
 		},

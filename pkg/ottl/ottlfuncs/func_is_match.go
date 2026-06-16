@@ -5,15 +5,14 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
-	"fmt"
-	"regexp"
+	"errors"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
 type IsMatchArguments[K any] struct {
 	Target  ottl.StringLikeGetter[K]
-	Pattern string
+	Pattern ottl.StringGetter[K]
 }
 
 func NewIsMatchFactory[K any]() ottl.Factory[K] {
@@ -24,18 +23,22 @@ func createIsMatchFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) 
 	args, ok := oArgs.(*IsMatchArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("IsMatchFactory args must be of type *IsMatchArguments[K]")
+		return nil, errors.New("IsMatchFactory args must be of type *IsMatchArguments[K]")
 	}
 
 	return isMatch(args.Target, args.Pattern)
 }
 
-func isMatch[K any](target ottl.StringLikeGetter[K], pattern string) (ottl.ExprFunc[K], error) {
-	compiledPattern, err := regexp.Compile(pattern)
+func isMatch[K any](target ottl.StringLikeGetter[K], pattern ottl.StringGetter[K]) (ottl.ExprFunc[K], error) {
+	compiledPattern, err := newDynamicRegex("IsMatch", pattern)
 	if err != nil {
-		return nil, fmt.Errorf("the pattern supplied to IsMatch is not a valid regexp pattern: %w", err)
+		return nil, err
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
+		cp, err := compiledPattern.compile(ctx, tCtx)
+		if err != nil {
+			return nil, err
+		}
 		val, err := target.Get(ctx, tCtx)
 		if err != nil {
 			return nil, err
@@ -43,6 +46,6 @@ func isMatch[K any](target ottl.StringLikeGetter[K], pattern string) (ottl.ExprF
 		if val == nil {
 			return false, nil
 		}
-		return compiledPattern.MatchString(*val), nil
+		return cp.MatchString(*val), nil
 	}, nil
 }

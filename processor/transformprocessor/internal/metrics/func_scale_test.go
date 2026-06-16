@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
@@ -36,8 +37,8 @@ func TestScale(t *testing.T) {
 			},
 			args: ScaleArguments{
 				Multiplier: 10.0,
-				Unit: ottl.NewTestingOptional[ottl.StringGetter[ottlmetric.TransformContext]](ottl.StandardStringGetter[ottlmetric.TransformContext]{
-					Getter: func(_ context.Context, _ ottlmetric.TransformContext) (any, error) {
+				Unit: ottl.NewTestingOptional[ottl.StringGetter[*ottlmetric.TransformContext]](ottl.StandardStringGetter[*ottlmetric.TransformContext]{
+					Getter: func(context.Context, *ottlmetric.TransformContext) (any, error) {
 						return "kWh", nil
 					},
 				}),
@@ -160,40 +161,34 @@ func TestScale(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			target := ottlmetric.NewTransformContext(
-				tt.valueFunc(),
-				pmetric.NewMetricSlice(),
-				pcommon.NewInstrumentationScope(),
-				pcommon.NewResource(),
-				pmetric.NewScopeMetrics(),
-				pmetric.NewResourceMetrics(),
-			)
+			target := ottlmetric.NewTransformContextPtr(pmetric.NewResourceMetrics(), pmetric.NewScopeMetrics(), tt.valueFunc())
+			defer target.Close()
 
 			expressionFunc, _ := Scale(tt.args)
-			_, err := expressionFunc(context.Background(), target)
+			_, err := expressionFunc(t.Context(), target)
 
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
-			assert.EqualValues(t, tt.wantFunc(), target.GetMetric())
+			assert.Equal(t, tt.wantFunc(), target.GetMetric())
 		})
 	}
 }
 
-func getTestScalingHistogramMetric(count uint64, sum, min, max float64, bounds []float64, bucketCounts []uint64, exemplars []float64, start, timestamp pcommon.Timestamp) pmetric.Metric {
+func getTestScalingHistogramMetric(count uint64, sum, minVal, maxVal float64, bounds []float64, bucketCounts []uint64, exemplars []float64, start, timestamp pcommon.Timestamp) pmetric.Metric {
 	metric := pmetric.NewMetric()
 	metric.SetName("test-metric")
 	metric.SetEmptyHistogram()
 	histogramDatapoint := metric.Histogram().DataPoints().AppendEmpty()
 	histogramDatapoint.SetCount(count)
 	histogramDatapoint.SetSum(sum)
-	histogramDatapoint.SetMin(min)
-	histogramDatapoint.SetMax(max)
+	histogramDatapoint.SetMin(minVal)
+	histogramDatapoint.SetMax(maxVal)
 	histogramDatapoint.ExplicitBounds().FromRaw(bounds)
 	histogramDatapoint.BucketCounts().FromRaw(bucketCounts)
-	for i := 0; i < len(exemplars); i++ {
+	for i := range exemplars {
 		exemplar := histogramDatapoint.Exemplars().AppendEmpty()
 		exemplar.SetTimestamp(1)
 		exemplar.SetDoubleValue(exemplars[i])

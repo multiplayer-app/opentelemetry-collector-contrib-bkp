@@ -7,7 +7,6 @@ package cloudflarereceiver // import "github.com/open-telemetry/opentelemetry-co
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -28,6 +27,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/cloudflarereceiver/internal/metadata"
 )
 
 const (
@@ -50,8 +50,8 @@ func TestReceiverTLSIntegration(t *testing.T) {
 			require.NoError(t, err)
 
 			recv, err := fact.CreateLogs(
-				context.Background(),
-				receivertest.NewNopSettings(),
+				t.Context(),
+				receivertest.NewNopSettings(metadata.Type),
 				&Config{
 					Logs: LogsConfig{
 						Secret:   testSecret,
@@ -62,41 +62,45 @@ func TestReceiverTLSIntegration(t *testing.T) {
 								KeyFile:  filepath.Join("testdata", "cert", "server.key"),
 							},
 						},
-						TimestampField: "EdgeStartTimestamp",
+						TimestampField:  "EdgeStartTimestamp",
+						TimestampFormat: "rfc3339",
 						Attributes: map[string]string{
 							"ClientIP": "http_request.client_ip",
 						},
+						MaxRequestBodySize: 1024 * 20,
 					},
 				},
 				sink,
 			)
 			require.NoError(t, err)
 
-			err = recv.Start(context.Background(), componenttest.NewNopHost())
+			err = recv.Start(t.Context(), componenttest.NewNopHost())
 			require.NoError(t, err)
 
 			defer func() {
-				require.NoError(t, recv.Shutdown(context.Background()))
+				require.NoError(t, recv.Shutdown(t.Context()))
 			}()
 
 			payload, err := os.ReadFile(filepath.Join("testdata", "sample-payloads", fmt.Sprintf("%s.txt", payloadName)))
 			require.NoError(t, err)
 
-			req, err := http.NewRequest("POST", fmt.Sprintf("https://localhost:%s", testPort), bytes.NewBuffer(payload))
+			unauthorizedReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://localhost:%s", testPort), bytes.NewBuffer(payload))
 			require.NoError(t, err)
 
 			client, err := clientWithCert(filepath.Join("testdata", "cert", "ca.crt"))
 			require.NoError(t, err)
 
 			// try first without secret to see failure
-			resp, err := client.Do(req)
+			resp, err := client.Do(unauthorizedReq)
 			require.NoError(t, err)
 			require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 			resp.Body.Close()
 
 			// add header to see success
-			req.Header.Add(secretHeaderName, testSecret)
-			resp, err = client.Do(req)
+			authorizedReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://localhost:%s", testPort), bytes.NewBuffer(payload))
+			require.NoError(t, err)
+			authorizedReq.Header.Add(secretHeaderName, testSecret)
+			resp, err = client.Do(authorizedReq)
 			require.NoError(t, err)
 			resp.Body.Close()
 
@@ -125,7 +129,7 @@ func clientWithCert(path string) (*http.Client, error) {
 	roots := x509.NewCertPool()
 	ok := roots.AppendCertsFromPEM(b)
 	if !ok {
-		return nil, errors.New("failed to append certficate as root certificate")
+		return nil, errors.New("failed to append certificate as root certificate")
 	}
 
 	return &http.Client{

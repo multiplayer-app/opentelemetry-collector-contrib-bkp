@@ -10,7 +10,6 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/experimentalmetricmetadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver/internal/constants"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver/internal/metadata"
-	imetadata "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver/internal/metadata"
 )
 
 const (
@@ -35,19 +34,19 @@ func Transform(statefulset *appsv1.StatefulSet) *appsv1.StatefulSet {
 	}
 }
 
-func RecordMetrics(mb *imetadata.MetricsBuilder, ss *appsv1.StatefulSet, ts pcommon.Timestamp) {
+func RecordMetrics(mb *metadata.MetricsBuilder, ss *appsv1.StatefulSet, ts pcommon.Timestamp) {
 	if ss.Spec.Replicas == nil {
 		return
 	}
-	mb.RecordK8sStatefulsetDesiredPodsDataPoint(ts, int64(*ss.Spec.Replicas))
-	mb.RecordK8sStatefulsetReadyPodsDataPoint(ts, int64(ss.Status.ReadyReplicas))
-	mb.RecordK8sStatefulsetCurrentPodsDataPoint(ts, int64(ss.Status.CurrentReplicas))
-	mb.RecordK8sStatefulsetUpdatedPodsDataPoint(ts, int64(ss.Status.UpdatedReplicas))
-	rb := mb.NewResourceBuilder()
-	rb.SetK8sStatefulsetUID(string(ss.UID))
-	rb.SetK8sStatefulsetName(ss.Name)
-	rb.SetK8sNamespaceName(ss.Namespace)
-	mb.EmitForResource(imetadata.WithResource(rb.Emit()))
+	e := metadata.NewK8sStatefulsetEntity(string(ss.UID))
+	e.SetK8sStatefulsetName(ss.Name)
+	e.SetK8sNamespaceName(ss.Namespace)
+	eb := mb.ForK8sStatefulset(e)
+	eb.RecordK8sStatefulsetDesiredPodsDataPoint(ts, int64(*ss.Spec.Replicas))
+	eb.RecordK8sStatefulsetReadyPodsDataPoint(ts, int64(ss.Status.ReadyReplicas))
+	eb.RecordK8sStatefulsetCurrentPodsDataPoint(ts, int64(ss.Status.CurrentReplicas))
+	eb.RecordK8sStatefulsetUpdatedPodsDataPoint(ts, int64(ss.Status.UpdatedReplicas))
+	eb.Emit()
 }
 
 func GetMetadata(ss *appsv1.StatefulSet) map[experimentalmetricmetadata.ResourceID]*metadata.KubernetesMetadata {

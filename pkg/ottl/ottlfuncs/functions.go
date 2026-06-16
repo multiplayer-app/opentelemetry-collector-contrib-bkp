@@ -7,6 +7,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
+// StandardFuncs is a helper function to provide quick access to all functions (editors and converters) in this package
 func StandardFuncs[K any]() map[string]ottl.Factory[K] {
 	f := []ottl.Factory[K]{
 		// Editors
@@ -29,6 +30,7 @@ func StandardFuncs[K any]() map[string]ottl.Factory[K] {
 	return ottl.CreateFactoryMap(f...)
 }
 
+// StandardConverters is a helper function to provide quick access to all converters in this package
 func StandardConverters[K any]() map[string]ottl.Factory[K] {
 	return ottl.CreateFactoryMap(converters[K]()...)
 }
@@ -37,8 +39,13 @@ func converters[K any]() []ottl.Factory[K] {
 	return []ottl.Factory[K]{
 		// Converters
 		NewBase64DecodeFactory[K](),
+		NewBase64EncodeFactory[K](),
+		NewBoolFactory[K](),
 		NewDecodeFactory[K](),
+		NewCoalesceFactory[K](),
+		NewCommunityIDFactory[K](),
 		NewConcatFactory[K](),
+		NewContainsValueFactory[K](),
 		NewConvertCaseFactory[K](),
 		NewConvertAttributesToElementsXMLFactory[K](),
 		NewConvertTextToElementsXMLFactory[K](),
@@ -49,8 +56,11 @@ func converters[K any]() []ottl.Factory[K] {
 		NewExtractGrokPatternsFactory[K](),
 		NewFnvFactory[K](),
 		NewGetXMLFactory[K](),
+		NewHasPrefixFactory[K](),
+		NewHasSuffixFactory[K](),
 		NewHourFactory[K](),
 		NewHoursFactory[K](),
+		NewIndexFactory[K](),
 		NewInsertXMLFactory[K](),
 		NewIntFactory[K](),
 		NewIsBoolFactory[K](),
@@ -62,19 +72,25 @@ func converters[K any]() []ottl.Factory[K] {
 		NewIsStringFactory[K](),
 		NewLenFactory[K](),
 		NewLogFactory[K](),
+		NewIsValidLuhnFactory[K](),
 		NewMD5Factory[K](),
 		NewMicrosecondsFactory[K](),
 		NewMillisecondsFactory[K](),
 		NewMinuteFactory[K](),
 		NewMinutesFactory[K](),
 		NewMonthFactory[K](),
+		NewMurmur3HashFactory[K](),
+		NewMurmur3Hash128Factory[K](),
+		NewNanosecondFactory[K](),
 		NewNanosecondsFactory[K](),
 		NewNowFactory[K](),
 		NewParseCSVFactory[K](),
 		NewParseJSONFactory[K](),
 		NewParseKeyValueFactory[K](),
+		NewParseSimplifiedXMLFactory[K](),
 		NewParseXMLFactory[K](),
 		NewRemoveXMLFactory[K](),
+		NewSecondFactory[K](),
 		NewSecondsFactory[K](),
 		NewSHA1Factory[K](),
 		NewSHA256Factory[K](),
@@ -86,7 +102,15 @@ func converters[K any]() []ottl.Factory[K] {
 		NewStringFactory[K](),
 		NewSubstringFactory[K](),
 		NewTimeFactory[K](),
+		NewFormatTimeFactory[K](),
+		NewTrimFactory[K](),
+		NewTrimPrefixFactory[K](),
+		NewTrimSuffixFactory[K](),
 		NewToKeyValueStringFactory[K](),
+		NewToCamelCaseFactory[K](),
+		NewToLowerCaseFactory[K](),
+		NewToSnakeCaseFactory[K](),
+		NewToUpperCaseFactory[K](),
 		NewTruncateTimeFactory[K](),
 		NewTraceIDFactory[K](),
 		NewUnixFactory[K](),
@@ -95,10 +119,22 @@ func converters[K any]() []ottl.Factory[K] {
 		NewUnixNanoFactory[K](),
 		NewUnixSecondsFactory[K](),
 		NewUUIDFactory[K](),
+		NewUUIDv7Factory[K](),
 		NewURLFactory[K](),
+		NewValuesFactory[K](),
+		NewWeekdayFactory[K](),
 		NewUserAgentFactory[K](),
 		NewAppendFactory[K](),
+		NewDeleteIndexFactory[K](),
 		NewYearFactory[K](),
 		NewHexFactory[K](),
+		NewSliceToMapFactory[K](),
+		NewParseSeverityFactory[K](),
+		NewProfileIDFactory[K](),
+		NewParseIntFactory[K](),
+		NewKeysFactory[K](),
+		NewXXH3Factory[K](),
+		NewXXH128Factory[K](),
+		NewIsInCIDRFactory[K](),
 	}
 }

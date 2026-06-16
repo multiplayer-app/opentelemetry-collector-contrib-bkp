@@ -119,6 +119,27 @@ func (rb *ResourceBuilder) SetK8sHpaName(val string) {
 	}
 }
 
+// SetK8sHpaScaletargetrefApiversion sets provided value as "k8s.hpa.scaletargetref.apiversion" attribute.
+func (rb *ResourceBuilder) SetK8sHpaScaletargetrefApiversion(val string) {
+	if rb.config.K8sHpaScaletargetrefApiversion.Enabled {
+		rb.res.Attributes().PutStr("k8s.hpa.scaletargetref.apiversion", val)
+	}
+}
+
+// SetK8sHpaScaletargetrefKind sets provided value as "k8s.hpa.scaletargetref.kind" attribute.
+func (rb *ResourceBuilder) SetK8sHpaScaletargetrefKind(val string) {
+	if rb.config.K8sHpaScaletargetrefKind.Enabled {
+		rb.res.Attributes().PutStr("k8s.hpa.scaletargetref.kind", val)
+	}
+}
+
+// SetK8sHpaScaletargetrefName sets provided value as "k8s.hpa.scaletargetref.name" attribute.
+func (rb *ResourceBuilder) SetK8sHpaScaletargetrefName(val string) {
+	if rb.config.K8sHpaScaletargetrefName.Enabled {
+		rb.res.Attributes().PutStr("k8s.hpa.scaletargetref.name", val)
+	}
+}
+
 // SetK8sHpaUID sets provided value as "k8s.hpa.uid" attribute.
 func (rb *ResourceBuilder) SetK8sHpaUID(val string) {
 	if rb.config.K8sHpaUID.Enabled {
@@ -172,6 +193,55 @@ func (rb *ResourceBuilder) SetK8sNodeName(val string) {
 func (rb *ResourceBuilder) SetK8sNodeUID(val string) {
 	if rb.config.K8sNodeUID.Enabled {
 		rb.res.Attributes().PutStr("k8s.node.uid", val)
+	}
+}
+
+// SetK8sPersistentvolumeName sets provided value as "k8s.persistentvolume.name" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeName(val string) {
+	if rb.config.K8sPersistentvolumeName.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolume.name", val)
+	}
+}
+
+// SetK8sPersistentvolumeReclaimPolicyDelete sets "k8s.persistentvolume.reclaim_policy=Delete" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeReclaimPolicyDelete() {
+	if rb.config.K8sPersistentvolumeReclaimPolicy.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolume.reclaim_policy", "Delete")
+	}
+}
+
+// SetK8sPersistentvolumeReclaimPolicyRecycle sets "k8s.persistentvolume.reclaim_policy=Recycle" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeReclaimPolicyRecycle() {
+	if rb.config.K8sPersistentvolumeReclaimPolicy.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolume.reclaim_policy", "Recycle")
+	}
+}
+
+// SetK8sPersistentvolumeReclaimPolicyRetain sets "k8s.persistentvolume.reclaim_policy=Retain" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeReclaimPolicyRetain() {
+	if rb.config.K8sPersistentvolumeReclaimPolicy.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolume.reclaim_policy", "Retain")
+	}
+}
+
+// SetK8sPersistentvolumeUID sets provided value as "k8s.persistentvolume.uid" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeUID(val string) {
+	if rb.config.K8sPersistentvolumeUID.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolume.uid", val)
+	}
+}
+
+// SetK8sPersistentvolumeclaimName sets provided value as "k8s.persistentvolumeclaim.name" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeclaimName(val string) {
+	if rb.config.K8sPersistentvolumeclaimName.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolumeclaim.name", val)
+	}
+}
+
+// SetK8sPersistentvolumeclaimUID sets provided value as "k8s.persistentvolumeclaim.uid" attribute.
+func (rb *ResourceBuilder) SetK8sPersistentvolumeclaimUID(val string) {
+	if rb.config.K8sPersistentvolumeclaimUID.Enabled {
+		rb.res.Attributes().PutStr("k8s.persistentvolumeclaim.uid", val)
 	}
 }
 
@@ -238,6 +308,41 @@ func (rb *ResourceBuilder) SetK8sResourcequotaUID(val string) {
 	}
 }
 
+// SetK8sServiceName sets provided value as "k8s.service.name" attribute.
+func (rb *ResourceBuilder) SetK8sServiceName(val string) {
+	if rb.config.K8sServiceName.Enabled {
+		rb.res.Attributes().PutStr("k8s.service.name", val)
+	}
+}
+
+// SetK8sServicePublishNotReadyAddresses sets provided value as "k8s.service.publish_not_ready_addresses" attribute.
+func (rb *ResourceBuilder) SetK8sServicePublishNotReadyAddresses(val bool) {
+	if rb.config.K8sServicePublishNotReadyAddresses.Enabled {
+		rb.res.Attributes().PutBool("k8s.service.publish_not_ready_addresses", val)
+	}
+}
+
+// SetK8sServiceTrafficDistribution sets provided value as "k8s.service.traffic_distribution" attribute.
+func (rb *ResourceBuilder) SetK8sServiceTrafficDistribution(val string) {
+	if rb.config.K8sServiceTrafficDistribution.Enabled {
+		rb.res.Attributes().PutStr("k8s.service.traffic_distribution", val)
+	}
+}
+
+// SetK8sServiceType sets provided value as "k8s.service.type" attribute.
+func (rb *ResourceBuilder) SetK8sServiceType(val string) {
+	if rb.config.K8sServiceType.Enabled {
+		rb.res.Attributes().PutStr("k8s.service.type", val)
+	}
+}
+
+// SetK8sServiceUID sets provided value as "k8s.service.uid" attribute.
+func (rb *ResourceBuilder) SetK8sServiceUID(val string) {
+	if rb.config.K8sServiceUID.Enabled {
+		rb.res.Attributes().PutStr("k8s.service.uid", val)
+	}
+}
+
 // SetK8sStatefulsetName sets provided value as "k8s.statefulset.name" attribute.
 func (rb *ResourceBuilder) SetK8sStatefulsetName(val string) {
 	if rb.config.K8sStatefulsetName.Enabled {
@@ -249,6 +354,13 @@ func (rb *ResourceBuilder) SetK8sStatefulsetName(val string) {
 func (rb *ResourceBuilder) SetK8sStatefulsetUID(val string) {
 	if rb.config.K8sStatefulsetUID.Enabled {
 		rb.res.Attributes().PutStr("k8s.statefulset.uid", val)
+	}
+}
+
+// SetK8sStorageclassName sets provided value as "k8s.storageclass.name" attribute.
+func (rb *ResourceBuilder) SetK8sStorageclassName(val string) {
+	if rb.config.K8sStorageclassName.Enabled {
+		rb.res.Attributes().PutStr("k8s.storageclass.name", val)
 	}
 }
 

@@ -7,25 +7,29 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/decode"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/attrs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/emit"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/compression"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/fingerprint"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/header"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/flush"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/tokenlen"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/trim"
 )
 
 const (
-	DefaultMaxLogSize  = 1024 * 1024
-	DefaultFlushPeriod = 500 * time.Millisecond
+	DefaultMaxLogSize   = 1024 * 1024
+	DefaultFlushPeriod  = 500 * time.Millisecond
+	DefaultMaxBatchSize = 100
 )
 
 type Factory struct {
@@ -33,8 +37,10 @@ type Factory struct {
 	HeaderConfig            *header.Config
 	FromBeginning           bool
 	FingerprintSize         int
+	BufPool                 sync.Pool
 	InitialBufferSize       int
 	MaxLogSize              int
+	TruncateOnMaxLogSize    bool
 	Encoding                encoding.Encoding
 	SplitFunc               bufio.SplitFunc
 	TrimFunc                trim.Func
@@ -43,12 +49,14 @@ type Factory struct {
 	Attributes              attrs.Resolver
 	DeleteAtEOF             bool
 	IncludeFileRecordNumber bool
+	IncludeFileRecordOffset bool
 	Compression             string
 	AcquireFSLock           bool
+	FileCacheAdvise         bool
 }
 
 func (f *Factory) NewFingerprint(file *os.File) (*fingerprint.Fingerprint, error) {
-	return fingerprint.NewFromFile(file, f.FingerprintSize)
+	return fingerprint.NewFromFile(file, f.FingerprintSize, f.Compression != "", f.Logger)
 }
 
 func (f *Factory) NewReader(file *os.File, fp *fingerprint.Fingerprint) (*Reader, error) {
@@ -56,35 +64,79 @@ func (f *Factory) NewReader(file *os.File, fp *fingerprint.Fingerprint) (*Reader
 	if err != nil {
 		return nil, err
 	}
-	m := &Metadata{Fingerprint: fp, FileAttributes: attributes}
-	if f.FlushTimeout > 0 {
-		m.FlushState = &flush.State{LastDataChange: time.Now()}
+	var filetype string
+
+	if f.Compression != "" && compression.IsGzipFile(file, f.Logger) {
+		filetype = gzipExtension
+	}
+
+	m := &Metadata{
+		Fingerprint:    fp,
+		FileAttributes: attributes,
+		TokenLenState:  tokenlen.State{},
+		FlushState: flush.State{
+			LastDataChange: time.Now(),
+		},
+		FileType: filetype,
 	}
 	return f.NewReaderFromMetadata(file, m)
 }
 
 func (f *Factory) NewReaderFromMetadata(file *os.File, m *Metadata) (r *Reader, err error) {
-
 	r = &Reader{
-		Metadata:             m,
-		set:                  f.TelemetrySettings,
-		file:                 file,
-		fileName:             file.Name(),
-		fingerprintSize:      f.FingerprintSize,
-		initialBufferSize:    f.InitialBufferSize,
-		maxLogSize:           f.MaxLogSize,
-		decoder:              decode.New(f.Encoding),
-		lineSplitFunc:        f.SplitFunc,
-		deleteAtEOF:          f.DeleteAtEOF,
-		includeFileRecordNum: f.IncludeFileRecordNumber,
-		compression:          f.Compression,
-		acquireFSLock:        f.AcquireFSLock,
+		Metadata:          m,
+		set:               f.TelemetrySettings,
+		file:              file,
+		fileName:          file.Name(),
+		fingerprintSize:   f.FingerprintSize,
+		bufPool:           &f.BufPool,
+		initialBufferSize: f.InitialBufferSize,
+		maxLogSize:        f.MaxLogSize,
+		decoder:           f.Encoding.NewDecoder(),
+		deleteAtEOF:       f.DeleteAtEOF,
+		compression:       f.Compression,
+		acquireFSLock:     f.AcquireFSLock,
+		fileCacheAdvise:   f.FileCacheAdvise,
+		maxBatchSize:      DefaultMaxBatchSize,
+		emitFunc:          f.EmitFunc,
 	}
 	r.set.Logger = r.set.Logger.With(zap.String("path", r.fileName))
 
+	// Re-detect file type when compression is enabled.
+	// This handles the case where a file was compressed (e.g. test.log → test.log.gz):
+	// fingerprint matching succeeds because the decompressed content of the .gz matches the original
+	// plaintext fingerprint, but the file format has changed. Reusing the old FileType and old
+	// plaintext Offset with a gzip-compressed file causes ReadToEnd to seek to the wrong position
+	// and read raw compressed bytes as plaintext, producing corrupted log entries.
+	if f.Compression != "" {
+		var newFileType string
+		if compression.IsGzipFile(file, f.Logger) {
+			newFileType = gzipExtension
+		}
+		if newFileType != m.FileType {
+			r.set.Logger.Debug("File format changed",
+				zap.String("old_file_type", m.FileType),
+				zap.String("new_file_type", newFileType),
+				zap.Int64("old_offset", m.Offset),
+			)
+			// Plaintext → gzip compression: the old offset represents the number of
+			// decompressed bytes already consumed. Decompress the .gz
+			// from byte 0 and skip that many decompressed bytes so we only emit
+			// new lines.
+			if m.FileType == "" && newFileType == gzipExtension {
+				r.decompressedBytesToSkip = m.Offset
+			}
+			// Zero the persisted offset so that if ReadToEnd is skipped (e.g. due to
+			// context cancellation) and Close() is called immediately, the saved
+			// metadata carries Offset=0 rather than the stale plaintext value.
+			m.Offset = 0
+			m.FileType = newFileType
+		}
+	}
+
 	if r.Fingerprint.Len() > r.fingerprintSize {
 		// User has reconfigured fingerprint_size
-		shorter, rereadErr := fingerprint.NewFromFile(file, r.fingerprintSize)
+		shorter, rereadErr := fingerprint.NewFromFile(file, r.fingerprintSize, r.compression != "", r.set.Logger)
 		if rereadErr != nil {
 			return nil, fmt.Errorf("reread fingerprint: %w", rereadErr)
 		}
@@ -102,29 +154,34 @@ func (f *Factory) NewReaderFromMetadata(file *os.File, m *Metadata) (r *Reader, 
 		r.Offset = info.Size()
 	}
 
-	flushFunc := m.FlushState.Func(f.SplitFunc, f.FlushTimeout)
-	r.lineSplitFunc = trim.WithFunc(trim.ToLength(flushFunc, f.MaxLogSize), f.TrimFunc)
-	r.emitFunc = f.EmitFunc
-	if f.HeaderConfig == nil || m.HeaderFinalized {
-		r.splitFunc = r.lineSplitFunc
-		r.processFunc = r.emitFunc
+	tokenLenFunc := m.TokenLenState.Func(f.SplitFunc)
+	flushFunc := m.FlushState.Func(tokenLenFunc, f.FlushTimeout)
+	var lengthLimitedFunc bufio.SplitFunc
+	if f.TruncateOnMaxLogSize {
+		lengthLimitedFunc = trim.ToLengthWithTruncate(flushFunc, f.MaxLogSize, &m.TruncateSkipping)
 	} else {
+		lengthLimitedFunc = trim.ToLength(flushFunc, f.MaxLogSize)
+	}
+	r.contentSplitFunc = trim.WithFunc(lengthLimitedFunc, f.TrimFunc)
+
+	if f.HeaderConfig != nil && !m.HeaderFinalized {
+		r.headerSplitFunc = f.HeaderConfig.SplitFunc
 		r.headerReader, err = header.NewReader(f.TelemetrySettings, *f.HeaderConfig)
 		if err != nil {
 			return nil, err
 		}
-		r.splitFunc = f.HeaderConfig.SplitFunc
-		r.processFunc = r.headerReader.Process
 	}
 
 	attributes, err := f.Attributes.Resolve(file)
 	if err != nil {
 		return nil, err
 	}
-	// Copy attributes into existing map to avoid overwriting header attributes
-	for k, v := range attributes {
-		r.FileAttributes[k] = v
-	}
+	// Merge header attributes with file attributes by creating a new map
+	// to avoid data race when the original map is accessed concurrently
+	mergedAttributes := make(map[string]any, len(r.FileAttributes)+len(attributes))
+	maps.Copy(mergedAttributes, r.FileAttributes)
+	maps.Copy(mergedAttributes, attributes)
+	r.FileAttributes = mergedAttributes
 
 	return r, nil
 }

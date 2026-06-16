@@ -9,9 +9,9 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/receiver/xreceiver"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
@@ -21,16 +21,7 @@ import (
 )
 
 const (
-	metricGroupsConfig               = "metric_groups"
-	enableCPUUsageMetricsFeatureFlag = "receiver.kubeletstats.enableCPUUsageMetrics"
-)
-
-var enableCPUUsageMetrics = featuregate.GlobalRegistry().MustRegister(
-	enableCPUUsageMetricsFeatureFlag,
-	featuregate.StageAlpha,
-	featuregate.WithRegisterDescription("When enabled the container.cpu.utilization, k8s.pod.cpu.utilization and k8s.node.cpu.utilization metrics will be replaced by the container.cpu.usage, k8s.pod.cpu.usage and k8s.node.cpu.usage"),
-	featuregate.WithRegisterFromVersion("v0.110.0"),
-	featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/27885"),
+	metricGroupsConfig = "metric_groups"
 )
 
 var defaultMetricGroups = []kubelet.MetricGroup{
@@ -41,10 +32,11 @@ var defaultMetricGroups = []kubelet.MetricGroup{
 
 // NewFactory creates a factory for kubeletstats receiver.
 func NewFactory() receiver.Factory {
-	return receiver.NewFactory(
+	return xreceiver.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		receiver.WithMetrics(createMetricsReceiver, metadata.MetricsStability))
+		xreceiver.WithMetrics(createMetricsReceiver, metadata.MetricsStability),
+		xreceiver.WithDeprecatedTypeAlias(metadata.DeprecatedType))
 }
 
 func createDefaultConfig() component.Config {
@@ -58,7 +50,7 @@ func createDefaultConfig() component.Config {
 				AuthType: k8sconfig.AuthTypeTLS,
 			},
 		},
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 	}
 }
 
@@ -78,37 +70,12 @@ func createMetricsReceiver(
 		return nil, err
 	}
 
-	if enableCPUUsageMetrics.IsEnabled() {
-		if cfg.MetricsBuilderConfig.Metrics.ContainerCPUUtilization.Enabled {
-			cfg.MetricsBuilderConfig.Metrics.ContainerCPUUtilization.Enabled = false
-			cfg.MetricsBuilderConfig.Metrics.ContainerCPUUsage.Enabled = true
-		}
-		if cfg.MetricsBuilderConfig.Metrics.K8sPodCPUUtilization.Enabled {
-			cfg.MetricsBuilderConfig.Metrics.K8sPodCPUUtilization.Enabled = false
-			cfg.MetricsBuilderConfig.Metrics.K8sPodCPUUsage.Enabled = true
-		}
-		if cfg.MetricsBuilderConfig.Metrics.K8sNodeCPUUtilization.Enabled {
-			cfg.MetricsBuilderConfig.Metrics.K8sNodeCPUUtilization.Enabled = false
-			cfg.MetricsBuilderConfig.Metrics.K8sNodeCPUUsage.Enabled = true
-		}
-	} else {
-		if cfg.MetricsBuilderConfig.Metrics.ContainerCPUUtilization.Enabled {
-			set.Logger.Warn("The default metric container.cpu.utilization is being replaced by the container.cpu.usage metric. Switch now by enabling the receiver.kubeletstats.enableCPUUsageMetrics feature gate.")
-		}
-		if cfg.MetricsBuilderConfig.Metrics.K8sPodCPUUtilization.Enabled {
-			set.Logger.Warn("The default metric k8s.pod.cpu.utilization is being replaced by the k8s.pod.cpu.usage metric. Switch now by enabling the receiver.kubeletstats.enableCPUUsageMetrics feature gate.")
-		}
-		if cfg.MetricsBuilderConfig.Metrics.K8sNodeCPUUtilization.Enabled {
-			set.Logger.Warn("The default metric k8s.node.cpu.utilization is being replaced by the k8s.node.cpu.usage metric. Switch now by enabling the receiver.kubeletstats.enableCPUUsageMetrics feature gate.")
-		}
-	}
-
-	scrp, err := newKubletScraper(rest, set, rOptions, cfg.MetricsBuilderConfig, cfg.NodeName)
+	scrp, err := newKubeletScraper(rest, set, rOptions, cfg.MetricsBuilderConfig, cfg.NodeName)
 	if err != nil {
 		return nil, err
 	}
 
-	return scraperhelper.NewScraperControllerReceiver(&cfg.ControllerConfig, set, consumer, scraperhelper.AddScraper(scrp))
+	return scraperhelper.NewMetricsController(&cfg.ControllerConfig, set, consumer, scraperhelper.AddMetricsScraper(metadata.Type, scrp))
 }
 
 func restClient(logger *zap.Logger, cfg *Config) (kubelet.RestClient, error) {

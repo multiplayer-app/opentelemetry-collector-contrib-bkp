@@ -57,11 +57,9 @@ func Test_Server_ListenAndServe(t *testing.T) {
 			mr.wgMetricsProcessed.Add(1)
 
 			wgListenAndServe := sync.WaitGroup{}
-			wgListenAndServe.Add(1)
-			go func() {
-				defer wgListenAndServe.Done()
+			wgListenAndServe.Go(func() {
 				assert.Error(t, svr.ListenAndServe(p, mc, mr))
-			}()
+			})
 
 			runtime.Gosched()
 
@@ -71,7 +69,8 @@ func Test_Server_ListenAndServe(t *testing.T) {
 
 			ts := time.Date(2020, 2, 20, 20, 20, 20, 20, time.UTC)
 			err = gc.SendMetric(client.Metric{
-				Name: "test.metric", Value: 1, Timestamp: ts})
+				Name: "test.metric", Value: 1, Timestamp: ts,
+			})
 			assert.NoError(t, err)
 			runtime.Gosched()
 
@@ -105,14 +104,14 @@ type mockReporter struct {
 	wgMetricsProcessed sync.WaitGroup
 }
 
-func (m *mockReporter) OnDataReceived(ctx context.Context) context.Context {
+func (*mockReporter) OnDataReceived(ctx context.Context) context.Context {
 	return ctx
 }
 
-func (m *mockReporter) OnTranslationError(context.Context, error) {}
+func (*mockReporter) OnTranslationError(context.Context, error) {}
 
 func (m *mockReporter) OnMetricsProcessed(context.Context, int, error) {
 	m.wgMetricsProcessed.Done()
 }
 
-func (m *mockReporter) OnDebugf(string, ...any) {}
+func (*mockReporter) OnDebugf(string, ...any) {}

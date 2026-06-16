@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 )
 
 func TestValidateInvalidConfigs(t *testing.T) {
@@ -134,7 +134,7 @@ func TestParseConfig(t *testing.T) {
 	assert.Equal(t, "password", cfg.Password)
 	assert.Equal(t, "localhost:51521", cfg.Endpoint)
 	assert.Equal(t, "XE", cfg.Service)
-	settings := cfg.MetricsBuilderConfig.Metrics
+	settings := cfg.Metrics
 	assert.False(t, settings.OracledbTablespaceSizeUsage.Enabled)
 	assert.False(t, settings.OracledbExchangeDeadlocks.Enabled)
 }

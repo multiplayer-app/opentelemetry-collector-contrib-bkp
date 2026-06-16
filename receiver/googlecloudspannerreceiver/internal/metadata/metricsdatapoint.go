@@ -4,13 +4,13 @@
 package metadata // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/googlecloudspannerreceiver/internal/metadata"
 
 import (
-	"fmt"
 	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/mitchellh/hashstructure"
+	"github.com/mitchellh/hashstructure/v2"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
@@ -126,9 +126,9 @@ func parseAndHashRowrangestartkey(key string) string {
 		hashFunction.Reset()
 		hashFunction.Write([]byte(subKey))
 		if cnt < len(keySlice)-1 {
-			builderHashedKey.WriteString(fmt.Sprint(hashFunction.Sum32()) + ",")
+			builderHashedKey.WriteString(strconv.FormatUint(uint64(hashFunction.Sum32()), 10) + ",")
 		} else {
-			builderHashedKey.WriteString(fmt.Sprint(hashFunction.Sum32()))
+			builderHashedKey.WriteString(strconv.FormatUint(uint64(hashFunction.Sum32()), 10))
 		}
 	}
 	if plusPresent {
@@ -140,14 +140,15 @@ func parseAndHashRowrangestartkey(key string) string {
 
 func (mdp *MetricsDataPoint) HideLockStatsRowrangestartkeyPII() {
 	for index, labelValue := range mdp.labelValues {
-		if labelValue.Metadata().Name() == "row_range_start_key" {
-			key := labelValue.Value().(string)
-			hashedKey := parseAndHashRowrangestartkey(key)
-			v := mdp.labelValues[index].(byteSliceLabelValue)
-			p := &v
-			p.ModifyValue(hashedKey)
-			mdp.labelValues[index] = v
+		if labelValue.Metadata().Name() != "row_range_start_key" {
+			continue
 		}
+		key := labelValue.Value().(string)
+		hashedKey := parseAndHashRowrangestartkey(key)
+		v := mdp.labelValues[index].(byteSliceLabelValue)
+		p := &v
+		p.ModifyValue(hashedKey)
+		mdp.labelValues[index] = v
 	}
 }
 
@@ -165,22 +166,23 @@ func TruncateString(str string, length int) string {
 
 func (mdp *MetricsDataPoint) TruncateQueryText(length int) {
 	for index, labelValue := range mdp.labelValues {
-		if labelValue.Metadata().Name() == "query_text" {
-			queryText := labelValue.Value().(string)
-			truncateQueryText := TruncateString(queryText, length)
-			v := mdp.labelValues[index].(stringLabelValue)
-			p := &v
-			p.ModifyValue(truncateQueryText)
-			mdp.labelValues[index] = v
+		if labelValue.Metadata().Name() != "query_text" {
+			continue
 		}
+		queryText := labelValue.Value().(string)
+		truncateQueryText := TruncateString(queryText, length)
+		v := mdp.labelValues[index].(stringLabelValue)
+		p := &v
+		p.ModifyValue(truncateQueryText)
+		mdp.labelValues[index] = v
 	}
 }
 
 func (mdp *MetricsDataPoint) hash() (string, error) {
-	hashedData, err := hashstructure.Hash(mdp.toDataForHashing(), nil)
+	hashedData, err := hashstructure.Hash(mdp.toDataForHashing(), hashstructure.FormatV1, nil)
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("%x", hashedData), nil
+	return strconv.FormatUint(hashedData, 16), nil
 }

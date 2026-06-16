@@ -5,6 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -32,13 +33,12 @@ func createLenFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (ott
 	args, ok := oArgs.(*LenArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("LenFactory args must be of type *LenArguments[K]")
+		return nil, errors.New("LenFactory args must be of type *LenArguments[K]")
 	}
 
 	return computeLen(args.Target), nil
 }
 
-// nolint:exhaustive
 func computeLen[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
@@ -56,7 +56,7 @@ func computeLen[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 			case pcommon.ValueTypeMap:
 				return int64(valType.Map().Len()), nil
 			}
-			return nil, fmt.Errorf(typeError)
+			return nil, fmt.Errorf("Len: unsupported target type %T. %s", val, typeError)
 		case pcommon.Map:
 			return int64(valType.Len()), nil
 		case pcommon.Slice:
@@ -106,6 +106,6 @@ func computeLen[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 			return int64(v.Len()), nil
 		}
 
-		return nil, fmt.Errorf(typeError)
+		return nil, fmt.Errorf("Len: unsupported target type %T. %s", val, typeError)
 	}
 }

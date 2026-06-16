@@ -4,14 +4,12 @@
 package kube // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/kube"
 
 import (
-	"fmt"
 	"regexp"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
 )
@@ -19,21 +17,24 @@ import (
 const (
 	podNodeField            = "spec.nodeName"
 	ignoreAnnotation string = "opentelemetry.io/k8s-processor/ignore"
-	tagNodeName             = "k8s.node.name"
-	tagStartTime            = "k8s.pod.start_time"
-	tagHostName             = "k8s.pod.hostname"
-	tagClusterUID           = "k8s.cluster.uid"
 	// MetadataFromPod is used to specify to extract metadata/labels/annotations from pod
 	MetadataFromPod = "pod"
 	// MetadataFromNamespace is used to specify to extract metadata/labels/annotations from namespace
 	MetadataFromNamespace = "namespace"
 	// MetadataFromNode is used to specify to extract metadata/labels/annotations from node
-	MetadataFromNode       = "node"
+	MetadataFromNode = "node"
+	// MetadataFromDeployment is used to specify to extract metadata/labels/annotations from deployment
+	MetadataFromDeployment = "deployment"
+	// MetadataFromStatefulSet is used to specify to extract metadata/labels/annotations from statefulset
+	MetadataFromStatefulSet = "statefulset"
+	// MetadataFromDaemonSet  is used to specify to extract metadata/labels/annotations from daemonset
+	MetadataFromDaemonSet = "daemonset"
+	// MetadataFromJob  is used to specify to extract metadata/labels/annotations from job
+	MetadataFromJob        = "job"
 	PodIdentifierMaxLength = 4
 
 	ResourceSource   = "resource_attribute"
 	ConnectionSource = "connection"
-	K8sIPLabelName   = "k8s.pod.ip"
 )
 
 // PodIdentifierAttribute represents AssociationSource with matching value for pod
@@ -70,7 +71,7 @@ func PodIdentifierAttributeFromConnection(value string) PodIdentifierAttribute {
 }
 
 // PodIdentifierAttributeFromSource builds PodIdentifierAttribute for given resource_attribute name and value
-func PodIdentifierAttributeFromResourceAttribute(key string, value string) PodIdentifierAttribute {
+func PodIdentifierAttributeFromResourceAttribute(key, value string) PodIdentifierAttribute {
 	return PodIdentifierAttributeFromSource(
 		AssociationSource{
 			From: ResourceSource,
@@ -80,39 +81,41 @@ func PodIdentifierAttributeFromResourceAttribute(key string, value string) PodId
 	)
 }
 
-var (
-	// TODO: move these to config with default values
-	defaultPodDeleteGracePeriod = time.Second * 120
-	watchSyncPeriod             = time.Minute * 5
-)
-
 // Client defines the main interface that allows querying pods by metadata.
 type Client interface {
 	GetPod(PodIdentifier) (*Pod, bool)
 	GetNamespace(string) (*Namespace, bool)
 	GetNode(string) (*Node, bool)
-	Start()
+	GetDeployment(string) (*Deployment, bool)
+	GetStatefulSet(string) (*StatefulSet, bool)
+	GetDaemonSet(string) (*DaemonSet, bool)
+	GetJob(string) (*Job, bool)
+	Start() error
 	Stop()
 }
 
 // ClientProvider defines a func type that returns a new Client.
-type ClientProvider func(component.TelemetrySettings, k8sconfig.APIConfig, ExtractionRules, Filters, []Association, Excludes, APIClientsetProvider, InformerProvider, InformerProviderNamespace, InformerProviderReplicaSet) (Client, error)
+type ClientProvider func(component.TelemetrySettings, k8sconfig.APIConfig, ExtractionRules, Filters, []Association, Excludes, APIClientsetProvider, InformersFactoryList, bool, time.Duration, time.Duration, time.Duration) (Client, error)
 
 // APIClientsetProvider defines a func type that initializes and return a new kubernetes
 // Clientset object.
-type APIClientsetProvider func(config k8sconfig.APIConfig) (kubernetes.Interface, error)
+type APIClientsetProvider func(config k8sconfig.APIConfig) (k8sconfig.ClientBundle, error)
 
 // Pod represents a kubernetes pod.
 type Pod struct {
-	Name        string
-	Address     string
-	PodUID      string
-	Attributes  map[string]string
-	StartTime   *metav1.Time
-	Ignore      bool
-	Namespace   string
-	NodeName    string
-	HostNetwork bool
+	Name           string
+	Address        string
+	PodUID         string
+	Attributes     map[string]string
+	StartTime      *metav1.Time
+	Ignore         bool
+	Namespace      string
+	NodeName       string
+	DeploymentUID  string
+	StatefulSetUID string
+	DaemonSetUID   string
+	JobUID         string
+	HostNetwork    bool
 
 	// Containers specifies all containers in this pod.
 	Containers PodContainers
@@ -130,9 +133,12 @@ type PodContainers struct {
 
 // Container stores resource attributes for a specific container defined by k8s pod spec.
 type Container struct {
-	Name      string
-	ImageName string
-	ImageTag  string
+	Name              string
+	ImageName         string
+	ImageTag          string   // Legacy: single tag (stable uses ImageTags)
+	ImageTags         []string // Stable: array of tags
+	ServiceInstanceID string
+	ServiceVersion    string
 
 	// Statuses is a map of container k8s.container.restart_count attribute to ContainerStatus struct.
 	Statuses map[int]ContainerStatus
@@ -163,9 +169,9 @@ type Node struct {
 type deleteRequest struct {
 	// id is identifier (IP address or Pod UID) of pod to remove from pods map
 	id PodIdentifier
-	// name contains name of pod to remove from pods map
-	podName string
-	ts      time.Time
+	// contains uid of pod to remove from pods map
+	podUID string
+	ts     time.Time
 }
 
 // Filters is used to instruct the client on how to filter out k8s pods.
@@ -176,7 +182,7 @@ type Filters struct {
 	Node      string
 	Namespace string
 	Fields    []FieldFilter
-	Labels    []FieldFilter
+	Labels    []LabelFilter
 }
 
 // FieldFilter represents exactly one filter by field rule.
@@ -192,10 +198,29 @@ type FieldFilter struct {
 	Op selection.Operator
 }
 
+// LabelFilter represents exactly one filter by label rule.
+type LabelFilter struct {
+	// Key matches the label name.
+	Key string
+	// Value matches the label value.
+	Value string
+	// Op determines the matching operation.
+	// The following operations are supported,
+	//	- Exists
+	// 	- DoesNotExist
+	//	- Equals
+	//	- DoubleEquals
+	//	- NotEquals
+	//	- GreaterThan
+	//	- LessThan
+	Op selection.Operator
+}
+
 // ExtractionRules is used to specify the information that needs to be extracted
 // from pods and added to the spans as tags.
 type ExtractionRules struct {
 	CronJobName               bool
+	CronJobUID                bool
 	DeploymentName            bool
 	DeploymentUID             bool
 	DaemonSetUID              bool
@@ -218,17 +243,24 @@ type ExtractionRules struct {
 	ContainerID               bool
 	ContainerImageName        bool
 	ContainerImageRepoDigests bool
-	ContainerImageTag         bool
+	ContainerImageTag         bool // Legacy
+	ContainerImageTags        bool // Stable
 	ClusterUID                bool
+	ServiceNamespace          bool
+	ServiceName               bool
+	ServiceVersion            bool
+	ServiceInstanceID         bool
 
-	Annotations []FieldExtractionRule
-	Labels      []FieldExtractionRule
+	Annotations                  []FieldExtractionRule
+	Labels                       []FieldExtractionRule
+	DeploymentNameFromReplicaSet bool
 }
 
 // IncludesOwnerMetadata determines whether the ExtractionRules include metadata about Pod Owners
 func (rules *ExtractionRules) IncludesOwnerMetadata() bool {
 	rulesNeedingOwnerMetadata := []bool{
 		rules.CronJobName,
+		rules.CronJobUID,
 		rules.DeploymentName,
 		rules.DeploymentUID,
 		rules.DaemonSetUID,
@@ -245,7 +277,7 @@ func (rules *ExtractionRules) IncludesOwnerMetadata() bool {
 			return true
 		}
 	}
-	return false
+	return rules.ServiceName
 }
 
 // FieldExtractionRule is used to specify which fields to extract from pod fields
@@ -266,44 +298,79 @@ type FieldExtractionRule struct {
 	//  - pod
 	//  - namespace
 	//  - node
+	//  - deployment
+	//  - statefulset
+	//  - daemonset
+	//  - job
 	From string
 }
 
-func (r *FieldExtractionRule) extractFromPodMetadata(metadata map[string]string, tags map[string]string, formatter string) {
+func (r *FieldExtractionRule) extractFromPodMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
 	// By default if the From field is not set for labels and annotations we want to extract them from pod
 	if r.From == MetadataFromPod || r.From == "" {
-		r.extractFromMetadata(metadata, tags, formatter)
+		r.extractFromMetadata(metadata, tags, attrFunc)
 	}
 }
 
-func (r *FieldExtractionRule) extractFromNamespaceMetadata(metadata map[string]string, tags map[string]string, formatter string) {
+func (r *FieldExtractionRule) extractFromNamespaceMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
 	if r.From == MetadataFromNamespace {
-		r.extractFromMetadata(metadata, tags, formatter)
+		r.extractFromMetadata(metadata, tags, attrFunc)
 	}
 }
 
-func (r *FieldExtractionRule) extractFromNodeMetadata(metadata map[string]string, tags map[string]string, formatter string) {
+func (r *FieldExtractionRule) extractFromNodeMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
 	if r.From == MetadataFromNode {
-		r.extractFromMetadata(metadata, tags, formatter)
+		r.extractFromMetadata(metadata, tags, attrFunc)
 	}
 }
 
-func (r *FieldExtractionRule) extractFromMetadata(metadata map[string]string, tags map[string]string, formatter string) {
+func (r *FieldExtractionRule) extractFromDeploymentMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
+	if r.From == MetadataFromDeployment {
+		r.extractFromMetadata(metadata, tags, attrFunc)
+	}
+}
+
+func (r *FieldExtractionRule) extractFromStatefulSetMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
+	if r.From == MetadataFromStatefulSet {
+		r.extractFromMetadata(metadata, tags, attrFunc)
+	}
+}
+
+func (r *FieldExtractionRule) extractFromDaemonSetMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
+	if r.From == MetadataFromDaemonSet {
+		r.extractFromMetadata(metadata, tags, attrFunc)
+	}
+}
+
+func (r *FieldExtractionRule) extractFromJobMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
+	if r.From == MetadataFromJob {
+		r.extractFromMetadata(metadata, tags, attrFunc)
+	}
+}
+
+func (r *FieldExtractionRule) extractFromMetadata(metadata, tags map[string]string, attrFunc AttributesFunction) {
 	if r.KeyRegex != nil {
 		for k, v := range metadata {
 			if r.KeyRegex.MatchString(k) && v != "" {
 				var name string
-				if r.HasKeyRegexReference {
+				if r.HasKeyRegexReference && r.Name != "" {
 					var result []byte
 					name = string(r.KeyRegex.ExpandString(result, r.Name, k, r.KeyRegex.FindStringSubmatchIndex(k)))
+					tags[name] = v
 				} else {
-					name = fmt.Sprintf(formatter, k)
+					kv := attrFunc(k, v)
+					tags[string(kv.Key)] = kv.Value.AsString()
 				}
-				tags[name] = v
 			}
 		}
 	} else if v, ok := metadata[r.Key]; ok {
-		tags[r.Name] = r.extractField(v)
+		// Use attrFunc to determine attribute name if no custom name was specified
+		name := r.Name
+		if name == "" {
+			kv := attrFunc(r.Key, v)
+			name = string(kv.Key)
+		}
+		tags[name] = r.extractField(v)
 	}
 }
 
@@ -328,7 +395,6 @@ type Associations struct {
 
 // Association represents one association rule
 type Association struct {
-	Name    string
 	Sources []AssociationSource
 }
 
@@ -349,8 +415,9 @@ type AssociationSource struct {
 
 // Deployment represents a kubernetes deployment.
 type Deployment struct {
-	Name string
-	UID  string
+	Name       string
+	UID        string
+	Attributes map[string]string
 }
 
 // ReplicaSet represents a kubernetes replicaset.
@@ -359,4 +426,42 @@ type ReplicaSet struct {
 	Namespace  string
 	UID        string
 	Deployment Deployment
+}
+
+// StatefulSet represents a kubernetes statefulset.
+type StatefulSet struct {
+	Name       string
+	UID        string
+	Attributes map[string]string
+}
+
+// DaemonSet represents a kubernetes daemonset.
+type DaemonSet struct {
+	Name       string
+	UID        string
+	Attributes map[string]string
+}
+
+// Job represents a kubernetes job.
+type Job struct {
+	Name       string
+	UID        string
+	Attributes map[string]string
+	CronJob    CronJob
+}
+
+// CronJob represents a kubernetes cronjob.
+type CronJob struct {
+	Name       string
+	UID        string
+	Attributes map[string]string
+}
+
+func OtelAnnotations() FieldExtractionRule {
+	return FieldExtractionRule{
+		Name:                 "$1",
+		KeyRegex:             regexp.MustCompile(`^resource\.opentelemetry\.io/(.+)$`),
+		HasKeyRegexReference: true,
+		From:                 MetadataFromPod,
+	}
 }

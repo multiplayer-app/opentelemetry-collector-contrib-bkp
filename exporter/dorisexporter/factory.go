@@ -9,10 +9,10 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
-	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/dorisexporter/internal/metadata"
 )
@@ -33,26 +33,29 @@ func createDefaultConfig() component.Config {
 
 	return &Config{
 		ClientConfig:  httpClientConfig,
-		QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+		QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 		Table: Table{
 			Logs:    "otel_logs",
 			Traces:  "otel_traces",
 			Metrics: "otel_metrics",
 		},
-		Database:          "otel",
-		CreateSchema:      true,
-		HistoryDays:       0,
-		CreateHistoryDays: 0,
-		ReplicationNum:    1,
-		TimeZone:          time.Local.String(),
+		Database:            "otel",
+		CreateSchema:        true,
+		HistoryDays:         0,
+		CreateHistoryDays:   0,
+		ReplicationNum:      1,
+		TimeZone:            time.Local.String(),
+		LogResponse:         false,
+		LabelPrefix:         "open_telemetry",
+		LogProgressInterval: 10,
 	}
 }
 
 func createLogsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Logs, error) {
 	c := cfg.(*Config)
 	exporter := newLogsExporter(set.Logger, c, set.TelemetrySettings)
-	return exporterhelper.NewLogsExporter(
+	return exporterhelper.NewLogs(
 		ctx,
 		set,
 		cfg,
@@ -69,7 +72,7 @@ func createLogsExporter(ctx context.Context, set exporter.Settings, cfg componen
 func createTracesExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Traces, error) {
 	c := cfg.(*Config)
 	exporter := newTracesExporter(set.Logger, c, set.TelemetrySettings)
-	return exporterhelper.NewTracesExporter(
+	return exporterhelper.NewTraces(
 		ctx,
 		set,
 		cfg,
@@ -84,12 +87,18 @@ func createTracesExporter(ctx context.Context, set exporter.Settings, cfg compon
 }
 
 func createMetricsExporter(ctx context.Context, set exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
-	return exporterhelper.NewMetricsExporter(
+	c := cfg.(*Config)
+	exporter := newMetricsExporter(set.Logger, c, set.TelemetrySettings)
+	return exporterhelper.NewMetrics(
 		ctx,
 		set,
 		cfg,
-		func(_ context.Context, _ pmetric.Metrics) error {
-			return nil
-		},
+		exporter.pushMetricData,
+		exporterhelper.WithStart(exporter.start),
+		exporterhelper.WithShutdown(exporter.shutdown),
+		// we config the timeout option in http client, so we don't need to set timeout here
+		exporterhelper.WithTimeout(exporterhelper.TimeoutConfig{Timeout: 0}),
+		exporterhelper.WithQueue(c.QueueSettings),
+		exporterhelper.WithRetry(c.BackOffConfig),
 	)
 }

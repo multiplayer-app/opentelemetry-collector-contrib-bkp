@@ -58,8 +58,10 @@ type TestCase struct {
 	decision decisionFunc
 }
 
-const mibibyte = 1024 * 1024
-const testcaseDurationVar = "TESTCASE_DURATION"
+const (
+	mibibyte            = 1024 * 1024
+	testcaseDurationVar = "TESTCASE_DURATION"
+)
 
 // NewTestCase creates a new TestCase. It expects agent-config.yaml in the specified directory.
 func NewTestCase(
@@ -114,11 +116,9 @@ func NewLoadGeneratorTestCase(t *testing.T, loadGenerator LoadGenerator, receive
 	require.NoErrorf(t, os.MkdirAll(tc.resultDir, os.ModePerm), "Cannot create directory %s", tc.resultDir)
 
 	// Set default resource check period.
-	tc.resourceSpec.ResourceCheckPeriod = 3 * time.Second
-	if tc.Duration < tc.resourceSpec.ResourceCheckPeriod {
+	tc.resourceSpec.ResourceCheckPeriod = min(tc.Duration,
 		// Resource check period should not be longer than entire test duration.
-		tc.resourceSpec.ResourceCheckPeriod = tc.Duration
-	}
+		3*time.Second)
 
 	tc.MockBackend = NewMockBackend(tc.ComposeTestResultFileName("backend.log"), receiver)
 	tc.MockBackend.WithDecisionFunc(tc.decision)
@@ -196,6 +196,11 @@ func (tc *TestCase) EnableRecording() {
 // AgentMemoryInfo returns raw memory info struct about the agent
 // as returned by github.com/shirou/gopsutil/process
 func (tc *TestCase) AgentMemoryInfo() (uint32, uint32, error) {
+	select {
+	case <-tc.errorSignal:
+		return 0, 0, fmt.Errorf("agent process exited: %s", tc.errorCause)
+	default:
+	}
 	stat, err := tc.agentProc.GetProcessMon().MemoryInfo()
 	if err != nil {
 		return 0, 0, err
@@ -286,7 +291,7 @@ func (tc *TestCase) indicateError(err error) {
 	log.Print(err.Error())
 
 	tc.errorSignalCloser.Do(func() {
-		tc.t.Error(err.Error())
+		tc.t.Log(err.Error())
 
 		tc.errorCause = err.Error()
 
@@ -344,6 +349,5 @@ func (tc *TestCase) AgentLogsContains(text string) bool {
 	}
 
 	res, _ := grep.Output()
-	return string(res) != ""
-
+	return len(res) != 0
 }

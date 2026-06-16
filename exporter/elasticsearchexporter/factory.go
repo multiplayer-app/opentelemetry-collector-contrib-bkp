@@ -1,69 +1,70 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter"
 
 import (
+	"compress/gzip"
 	"context"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/config/confighttp"
-	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/exporter/exporterbatcher"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
+	"go.opentelemetry.io/collector/exporter/xexporter"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 )
 
-const (
-	// The value of "type" key in configuration.
-	defaultLogsIndex    = "logs-generic-default"
-	defaultMetricsIndex = "metrics-generic-default"
-	defaultTracesIndex  = "traces-generic-default"
-)
-
 // NewFactory creates a factory for Elastic exporter.
 func NewFactory() exporter.Factory {
-	return exporter.NewFactory(
+	return xexporter.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		exporter.WithLogs(createLogsExporter, metadata.LogsStability),
-		exporter.WithMetrics(createMetricsExporter, metadata.MetricsStability),
-		exporter.WithTraces(createTracesExporter, metadata.TracesStability),
+		xexporter.WithLogs(createLogsExporter, metadata.LogsStability),
+		xexporter.WithMetrics(createMetricsExporter, metadata.MetricsStability),
+		xexporter.WithTraces(createTracesExporter, metadata.TracesStability),
+		xexporter.WithProfiles(createProfilesExporter, metadata.ProfilesStability),
 	)
 }
 
 func createDefaultConfig() component.Config {
 	qs := exporterhelper.NewDefaultQueueConfig()
-	qs.Enabled = false
+	qs.QueueSize = 10
+	qs.BlockOnOverflow = true
+	qs.Batch = configoptional.Some(exporterhelper.BatchConfig{
+		FlushTimeout: 10 * time.Second,
+		MinSize:      1e+6,
+		MaxSize:      5e+6,
+		Sizer:        exporterhelper.RequestSizerTypeBytes,
+	})
 
 	httpClientConfig := confighttp.NewDefaultClientConfig()
 	httpClientConfig.Timeout = 90 * time.Second
+	httpClientConfig.Compression = configcompression.TypeGzip
+	httpClientConfig.CompressionParams.Level = gzip.BestSpeed
 
 	return &Config{
-		QueueSettings: qs,
-		ClientConfig:  httpClientConfig,
-		Index:         "",
-		LogsIndex:     defaultLogsIndex,
-		LogsDynamicIndex: DynamicIndexSetting{
+		QueueBatchConfig: configoptional.Some(qs),
+		ClientConfig:     httpClientConfig,
+		LogsDynamicID: DynamicIDSettings{
 			Enabled: false,
 		},
-		MetricsIndex: defaultMetricsIndex,
-		MetricsDynamicIndex: DynamicIndexSetting{
-			Enabled: true,
-		},
-		TracesIndex: defaultTracesIndex,
-		TracesDynamicIndex: DynamicIndexSetting{
+		LogsDynamicPipeline: DynamicPipelineSettings{
 			Enabled: false,
 		},
 		Retry: RetrySettings{
 			Enabled:         true,
-			MaxRequests:     3,
+			MaxRetries:      0, // default is set in exporter code
 			InitialInterval: 100 * time.Millisecond,
 			MaxInterval:     1 * time.Minute,
 			RetryOnStatus: []int{
@@ -71,8 +72,8 @@ func createDefaultConfig() component.Config {
 			},
 		},
 		Mapping: MappingsSettings{
-			Mode:  "none",
-			Dedot: true,
+			Mode:         "otel",
+			AllowedModes: slices.Sorted(maps.Keys(canonicalMappingModes)),
 		},
 		LogstashFormat: LogstashFormatSettings{
 			Enabled:         false,
@@ -80,18 +81,12 @@ func createDefaultConfig() component.Config {
 			DateFormat:      "%Y.%m.%d",
 		},
 		TelemetrySettings: TelemetrySettings{
-			LogRequestBody:  false,
-			LogResponseBody: false,
+			LogRequestBody:              false,
+			LogResponseBody:             false,
+			LogFailedDocsInput:          false,
+			LogFailedDocsInputRateLimit: time.Second,
 		},
-		Batcher: BatcherConfig{
-			FlushTimeout: 30 * time.Second,
-			MinSizeConfig: exporterbatcher.MinSizeConfig{
-				MinSizeItems: 5000,
-			},
-			MaxSizeConfig: exporterbatcher.MaxSizeConfig{
-				MaxSizeItems: 10000,
-			},
-		},
+		IncludeSourceOnError: nil,
 	}
 }
 
@@ -105,21 +100,27 @@ func createLogsExporter(
 ) (exporter.Logs, error) {
 	cf := cfg.(*Config)
 
-	index := cf.LogsIndex
-	if cf.Index != "" {
-		set.Logger.Warn("index option are deprecated and replaced with logs_index and traces_index.")
-		index = cf.Index
+	handleDeprecatedConfig(cf, set.Logger)
+	handleTelemetryConfig(cf, set.Logger)
+
+	exporter, err := newExporter(cf, set, cf.LogsIndex)
+	if err != nil {
+		return nil, err
 	}
-	logConfigDeprecationWarnings(cf, set.Logger)
 
-	exporter := newExporter(cf, set, index, cf.LogsDynamicIndex.Enabled)
+	qbs := xexporterhelper.NewLogsQueueBatchSettings()
+	if len(cf.MetadataKeys) > 0 {
+		partitioner := metadataKeysPartitioner{keys: cf.MetadataKeys}
+		qbs.Partitioner = partitioner
+		qbs.MergeCtx = partitioner.MergeCtx
+	}
 
-	return exporterhelper.NewLogsExporter(
+	return exporterhelper.NewLogs(
 		ctx,
 		set,
 		cfg,
 		exporter.pushLogsData,
-		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown)...,
+		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown, qbs)...,
 	)
 }
 
@@ -129,16 +130,27 @@ func createMetricsExporter(
 	cfg component.Config,
 ) (exporter.Metrics, error) {
 	cf := cfg.(*Config)
-	logConfigDeprecationWarnings(cf, set.Logger)
+	handleDeprecatedConfig(cf, set.Logger)
+	handleTelemetryConfig(cf, set.Logger)
 
-	exporter := newExporter(cf, set, cf.MetricsIndex, cf.MetricsDynamicIndex.Enabled)
+	exporter, err := newExporter(cf, set, cf.MetricsIndex)
+	if err != nil {
+		return nil, err
+	}
 
-	return exporterhelper.NewMetricsExporter(
+	qbs := xexporterhelper.NewMetricsQueueBatchSettings()
+	if len(cf.MetadataKeys) > 0 {
+		partitioner := metadataKeysPartitioner{keys: cf.MetadataKeys}
+		qbs.Partitioner = partitioner
+		qbs.MergeCtx = partitioner.MergeCtx
+	}
+
+	return exporterhelper.NewMetrics(
 		ctx,
 		set,
 		cfg,
 		exporter.pushMetricsData,
-		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown)...,
+		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown, qbs)...,
 	)
 }
 
@@ -147,16 +159,61 @@ func createTracesExporter(ctx context.Context,
 	cfg component.Config,
 ) (exporter.Traces, error) {
 	cf := cfg.(*Config)
-	logConfigDeprecationWarnings(cf, set.Logger)
+	handleDeprecatedConfig(cf, set.Logger)
+	handleTelemetryConfig(cf, set.Logger)
 
-	exporter := newExporter(cf, set, cf.TracesIndex, cf.TracesDynamicIndex.Enabled)
+	exporter, err := newExporter(cf, set, cf.TracesIndex)
+	if err != nil {
+		return nil, err
+	}
 
-	return exporterhelper.NewTracesExporter(
+	qbs := xexporterhelper.NewTracesQueueBatchSettings()
+	if len(cf.MetadataKeys) > 0 {
+		partitioner := metadataKeysPartitioner{keys: cf.MetadataKeys}
+		qbs.Partitioner = partitioner
+		qbs.MergeCtx = partitioner.MergeCtx
+	}
+
+	return exporterhelper.NewTraces(
 		ctx,
 		set,
 		cfg,
 		exporter.pushTraceData,
-		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown)...,
+		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown, qbs)...,
+	)
+}
+
+// createProfilesExporter creates a new exporter for profiles.
+//
+// Profiles are directly indexed into Elasticsearch.
+func createProfilesExporter(
+	ctx context.Context,
+	set exporter.Settings,
+	cfg component.Config,
+) (xexporter.Profiles, error) {
+	cf := cfg.(*Config)
+
+	handleDeprecatedConfig(cf, set.Logger)
+	handleTelemetryConfig(cf, set.Logger)
+
+	exporter, err := newExporter(cf, set, "")
+	if err != nil {
+		return nil, err
+	}
+
+	qbs := xexporterhelper.NewProfilesQueueBatchSettings()
+	if len(cf.MetadataKeys) > 0 {
+		partitioner := metadataKeysPartitioner{keys: cf.MetadataKeys}
+		qbs.Partitioner = partitioner
+		qbs.MergeCtx = partitioner.MergeCtx
+	}
+
+	return xexporterhelper.NewProfiles(
+		ctx,
+		set,
+		cfg,
+		exporter.pushProfilesData,
+		exporterhelperOptions(cf, exporter.Start, exporter.Shutdown, qbs)...,
 	)
 }
 
@@ -164,27 +221,15 @@ func exporterhelperOptions(
 	cfg *Config,
 	start component.StartFunc,
 	shutdown component.ShutdownFunc,
+	qbs xexporterhelper.QueueBatchSettings,
 ) []exporterhelper.Option {
-	opts := []exporterhelper.Option{
-		exporterhelper.WithCapabilities(consumer.Capabilities{MutatesData: true}),
+	// not setting capabilities as they will default to non-mutating but will be updated
+	// by the base-exporter to mutating if batching is enabled.
+	return []exporterhelper.Option{
 		exporterhelper.WithStart(start),
 		exporterhelper.WithShutdown(shutdown),
-		exporterhelper.WithQueue(cfg.QueueSettings),
-	}
-	if cfg.Batcher.Enabled != nil {
-		batcherConfig := exporterbatcher.Config{
-			Enabled:       *cfg.Batcher.Enabled,
-			FlushTimeout:  cfg.Batcher.FlushTimeout,
-			MinSizeConfig: cfg.Batcher.MinSizeConfig,
-			MaxSizeConfig: cfg.Batcher.MaxSizeConfig,
-		}
-		opts = append(opts, exporterhelper.WithBatcher(batcherConfig))
-
+		xexporterhelper.WithQueueBatch(cfg.QueueBatchConfig, qbs),
 		// Effectively disable timeout_sender because timeout is enforced in bulk indexer.
-		//
-		// We keep timeout_sender enabled in the async mode (Batcher.Enabled == nil),
-		// to ensure sending data to the background workers will not block indefinitely.
-		opts = append(opts, exporterhelper.WithTimeout(exporterhelper.TimeoutConfig{Timeout: 0}))
+		exporterhelper.WithTimeout(exporterhelper.TimeoutConfig{Timeout: 0}),
 	}
-	return opts
 }

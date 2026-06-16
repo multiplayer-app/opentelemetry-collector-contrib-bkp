@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package countconnector // import "github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector"
 
@@ -10,33 +10,42 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/connector"
+	"go.opentelemetry.io/collector/connector/xconnector"
 	"go.opentelemetry.io/collector/consumer"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/expr"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottldatapoint"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlprofile"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspan"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspanevent"
 )
 
 // NewFactory returns a ConnectorFactory.
 func NewFactory() connector.Factory {
-	return connector.NewFactory(
+	return xconnector.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		connector.WithTracesToMetrics(createTracesToMetrics, metadata.TracesToMetricsStability),
-		connector.WithMetricsToMetrics(createMetricsToMetrics, metadata.MetricsToMetricsStability),
-		connector.WithLogsToMetrics(createLogsToMetrics, metadata.LogsToMetricsStability),
+		xconnector.WithTracesToMetrics(createTracesToMetrics, metadata.TracesToMetricsStability),
+		xconnector.WithMetricsToMetrics(createMetricsToMetrics, metadata.MetricsToMetricsStability),
+		xconnector.WithLogsToMetrics(createLogsToMetrics, metadata.LogsToMetricsStability),
+		xconnector.WithProfilesToMetrics(createProfilesToMetrics, metadata.ProfilesToMetricsStability),
 	)
 }
 
 // createDefaultConfig creates the default configuration.
 func createDefaultConfig() component.Config {
-	return &Config{}
+	return &Config{
+		Spans:      defaultSpansConfig(),
+		SpanEvents: defaultSpanEventsConfig(),
+		Metrics:    defaultMetricsConfig(),
+		DataPoints: defaultDataPointsConfig(),
+		Logs:       defaultLogsConfig(),
+		Profiles:   defaultProfilesConfig(),
+	}
 }
 
 // createTracesToMetrics creates a traces to metrics connector based on provided config.
@@ -48,29 +57,29 @@ func createTracesToMetrics(
 ) (connector.Traces, error) {
 	c := cfg.(*Config)
 
-	spanMetricDefs := make(map[string]metricDef[ottlspan.TransformContext], len(c.Spans))
+	spanMetricDefs := make(map[string]metricDef[*ottlspan.TransformContext], len(c.Spans))
 	for name, info := range c.Spans {
-		md := metricDef[ottlspan.TransformContext]{
+		md := metricDef[*ottlspan.TransformContext]{
 			desc:  info.Description,
 			attrs: info.Attributes,
 		}
 		if len(info.Conditions) > 0 {
 			// Error checked in Config.Validate()
-			condition, _ := filterottl.NewBoolExprForSpan(info.Conditions, filterottl.StandardSpanFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			condition, _ := filterottl.NewBoolExprForSpanWithPathContextNames(info.Conditions, filterottl.StandardSpanFuncs(), ottl.PropagateError, set.TelemetrySettings)
 			md.condition = condition
 		}
 		spanMetricDefs[name] = md
 	}
 
-	spanEventMetricDefs := make(map[string]metricDef[ottlspanevent.TransformContext], len(c.SpanEvents))
+	spanEventMetricDefs := make(map[string]metricDef[*ottlspanevent.TransformContext], len(c.SpanEvents))
 	for name, info := range c.SpanEvents {
-		md := metricDef[ottlspanevent.TransformContext]{
+		md := metricDef[*ottlspanevent.TransformContext]{
 			desc:  info.Description,
 			attrs: info.Attributes,
 		}
 		if len(info.Conditions) > 0 {
 			// Error checked in Config.Validate()
-			condition, _ := filterottl.NewBoolExprForSpanEvent(info.Conditions, filterottl.StandardSpanEventFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			condition, _ := filterottl.NewBoolExprForSpanEventWithPathContextNames(info.Conditions, filterottl.StandardSpanEventFuncs(), ottl.PropagateError, set.TelemetrySettings)
 			md.condition = condition
 		}
 		spanEventMetricDefs[name] = md
@@ -92,28 +101,28 @@ func createMetricsToMetrics(
 ) (connector.Metrics, error) {
 	c := cfg.(*Config)
 
-	metricMetricDefs := make(map[string]metricDef[ottlmetric.TransformContext], len(c.Metrics))
+	metricMetricDefs := make(map[string]metricDef[*ottlmetric.TransformContext], len(c.Metrics))
 	for name, info := range c.Metrics {
-		md := metricDef[ottlmetric.TransformContext]{
+		md := metricDef[*ottlmetric.TransformContext]{
 			desc: info.Description,
 		}
 		if len(info.Conditions) > 0 {
 			// Error checked in Config.Validate()
-			condition, _ := filterottl.NewBoolExprForMetric(info.Conditions, filterottl.StandardMetricFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			condition, _ := filterottl.NewBoolExprForMetricWithPathContextNames(info.Conditions, filterottl.StandardMetricFuncs(), ottl.PropagateError, set.TelemetrySettings)
 			md.condition = condition
 		}
 		metricMetricDefs[name] = md
 	}
 
-	dataPointMetricDefs := make(map[string]metricDef[ottldatapoint.TransformContext], len(c.DataPoints))
+	dataPointMetricDefs := make(map[string]metricDef[*ottldatapoint.TransformContext], len(c.DataPoints))
 	for name, info := range c.DataPoints {
-		md := metricDef[ottldatapoint.TransformContext]{
+		md := metricDef[*ottldatapoint.TransformContext]{
 			desc:  info.Description,
 			attrs: info.Attributes,
 		}
 		if len(info.Conditions) > 0 {
 			// Error checked in Config.Validate()
-			condition, _ := filterottl.NewBoolExprForDataPoint(info.Conditions, filterottl.StandardDataPointFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			condition, _ := filterottl.NewBoolExprForDataPointWithPathContextNames(info.Conditions, filterottl.StandardDataPointFuncs(), ottl.PropagateError, set.TelemetrySettings)
 			md.condition = condition
 		}
 		dataPointMetricDefs[name] = md
@@ -135,15 +144,15 @@ func createLogsToMetrics(
 ) (connector.Logs, error) {
 	c := cfg.(*Config)
 
-	metricDefs := make(map[string]metricDef[ottllog.TransformContext], len(c.Logs))
+	metricDefs := make(map[string]metricDef[*ottllog.TransformContext], len(c.Logs))
 	for name, info := range c.Logs {
-		md := metricDef[ottllog.TransformContext]{
+		md := metricDef[*ottllog.TransformContext]{
 			desc:  info.Description,
 			attrs: info.Attributes,
 		}
 		if len(info.Conditions) > 0 {
 			// Error checked in Config.Validate()
-			condition, _ := filterottl.NewBoolExprForLog(info.Conditions, filterottl.StandardLogFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			condition, _ := filterottl.NewBoolExprForLogWithPathContextNames(info.Conditions, filterottl.StandardLogFuncs(), ottl.PropagateError, set.TelemetrySettings)
 			md.condition = condition
 		}
 		metricDefs[name] = md
@@ -155,8 +164,37 @@ func createLogsToMetrics(
 	}, nil
 }
 
+// createProfilesToMetrics creates a profiles to metrics connector based on provided config.
+func createProfilesToMetrics(
+	_ context.Context,
+	set connector.Settings,
+	cfg component.Config,
+	nextConsumer consumer.Metrics,
+) (xconnector.Profiles, error) {
+	c := cfg.(*Config)
+
+	metricDefs := make(map[string]metricDef[*ottlprofile.TransformContext], len(c.Profiles))
+	for name, info := range c.Profiles {
+		md := metricDef[*ottlprofile.TransformContext]{
+			desc:  info.Description,
+			attrs: info.Attributes,
+		}
+		if len(info.Conditions) > 0 {
+			// Error checked in Config.Validate()
+			condition, _ := filterottl.NewBoolExprForProfileWithPathContextNames(info.Conditions, filterottl.StandardProfileFuncs(), ottl.PropagateError, set.TelemetrySettings)
+			md.condition = condition
+		}
+		metricDefs[name] = md
+	}
+
+	return &count{
+		metricsConsumer:    nextConsumer,
+		profilesMetricDefs: metricDefs,
+	}, nil
+}
+
 type metricDef[K any] struct {
-	condition expr.BoolExpr[K]
+	condition *ottl.ConditionSequence[K]
 	desc      string
 	attrs     []AttributeConfig
 }

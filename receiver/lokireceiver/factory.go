@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package lokireceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver"
 
@@ -15,15 +15,12 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver/internal/metadata"
 )
 
 const (
-	defaultGRPCPort         = 3600
-	defaultHTTPPort         = 3500
-	defaultGRPCBindEndpoint = "0.0.0.0:3600"
-	defaultHTTPBindEndpoint = "0.0.0.0:3500"
+	defaultGRPCEndpoint = "localhost:3600"
+	defaultHTTPEndpoint = "localhost:3500"
 )
 
 // NewFactory return a new receiver.Factory for loki receiver.
@@ -39,12 +36,15 @@ func createDefaultConfig() component.Config {
 		Protocols: Protocols{
 			GRPC: &configgrpc.ServerConfig{
 				NetAddr: confignet.AddrConfig{
-					Endpoint:  testutil.EndpointForPort(defaultGRPCPort),
+					Endpoint:  defaultGRPCEndpoint,
 					Transport: confignet.TransportTypeTCP,
 				},
 			},
 			HTTP: &confighttp.ServerConfig{
-				Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+				NetAddr: confignet.AddrConfig{
+					Transport: confignet.TransportTypeTCP,
+					Endpoint:  defaultHTTPEndpoint,
+				},
 			},
 		},
 	}
@@ -56,7 +56,6 @@ func createLogsReceiver(
 	cfg component.Config,
 	consumer consumer.Logs,
 ) (receiver.Logs, error) {
-
 	rCfg := cfg.(*Config)
 	return newLokiReceiver(rCfg, consumer, settings)
 }

@@ -8,10 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -69,10 +73,12 @@ func (c *Commander) Start(ctx context.Context) error {
 		default:
 		}
 	}
-
 	c.logger.Debug("Starting agent", zap.String("agent", c.cfg.Executable))
 
-	c.cmd = exec.CommandContext(ctx, c.cfg.Executable, c.args...) // #nosec G204
+	args := slices.Concat(c.args, c.cfg.Arguments)
+
+	c.cmd = exec.CommandContext(ctx, c.cfg.Executable, args...) // #nosec G204
+	c.cmd.Env = envVarMapToEnvMapSlice(c.cfg.Env)
 	c.cmd.SysProcAttr = sysProcAttrs()
 
 	// PassthroughLogging changes how collector start up happens
@@ -89,6 +95,42 @@ func (c *Commander) Restart(ctx context.Context) error {
 	}
 
 	return c.Start(ctx)
+}
+
+func (c *Commander) ReloadConfigFile() error {
+	if c.cmd == nil || c.cmd.Process == nil {
+		return errors.New("agent process is not running")
+	}
+
+	c.logger.Debug("Sending SIGHUP to agent process to reload config", zap.Int("pid", c.cmd.Process.Pid))
+	if err := c.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		return fmt.Errorf("failed to send SIGHUP to agent process: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateConfig runs the collector's validate command on the specified configuration file
+// to check if the configuration is valid without starting the collector.
+// Returns an error if the configuration is invalid or if the validation process fails.
+func (c *Commander) ValidateConfig(ctx context.Context, configPath string) error {
+	c.logger.Debug("Validating agent config", zap.String("config", configPath))
+
+	args := slices.Concat([]string{"validate", "--config", configPath}, c.args, c.cfg.Arguments)
+
+	cmd := exec.CommandContext(ctx, c.cfg.Executable, args...) // #nosec G204
+	cmd.Env = envVarMapToEnvMapSlice(c.cfg.Env)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		c.logger.Error("Config validation failed",
+			zap.String("output", string(output)),
+			zap.Error(err))
+		return fmt.Errorf("config validation failed: %w, output: %s", err, string(output))
+	}
+
+	c.logger.Debug("Config validation succeeded")
+	return nil
 }
 
 func (c *Commander) startNormal() error {
@@ -140,23 +182,41 @@ func (c *Commander) startWithPassthroughLogging() error {
 
 	// capture agent output
 	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
+		reader := bufio.NewReader(stdoutPipe)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					c.logger.Error("Error reading agent stdout", zap.Error(err))
+				}
+				// Trim and log the last line if it exists
+				if line != "" {
+					line = strings.TrimRight(line, "\r\n")
+					colLogger.Info(line)
+				}
+				break
+			}
+			line = strings.TrimRight(line, "\r\n")
 			colLogger.Info(line)
-		}
-		if err := scanner.Err(); err != nil {
-			c.logger.Error("Error reading agent stdout: %w", zap.Error(err))
 		}
 	}()
 	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			colLogger.Info(line)
-		}
-		if err := scanner.Err(); err != nil {
-			c.logger.Error("Error reading agent stderr: %w", zap.Error(err))
+		reader := bufio.NewReader(stderrPipe)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					c.logger.Error("Error reading agent stderr", zap.Error(err))
+				}
+				// Trim and log the last line if it exists
+				if line != "" {
+					line = strings.TrimRight(line, "\r\n")
+					colLogger.Error(line)
+				}
+				break
+			}
+			line = strings.TrimRight(line, "\r\n")
+			colLogger.Error(line)
 		}
 	}()
 
@@ -180,6 +240,134 @@ func (c *Commander) watch() {
 	c.running.Store(0)
 	c.doneCh <- struct{}{}
 	c.exitCh <- struct{}{}
+}
+
+// StartOneShot starts the Collector with the expectation that it will immediately
+// exit after it finishes a quick operation. This is useful for situations like reading stdout/sterr
+// to e.g. check the feature gate the Collector supports.
+func (c *Commander) StartOneShot() ([]byte, []byte, error) {
+	stdout := []byte{}
+	stderr := []byte{}
+	ctx := context.Background()
+
+	cmd := exec.CommandContext(ctx, c.cfg.Executable, c.args...) // #nosec G204
+	cmd.Env = envVarMapToEnvMapSlice(c.cfg.Env)
+	cmd.SysProcAttr = sysProcAttrs()
+	// grab cmd pipes
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stdoutPipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stderrPipe: %w", err)
+	}
+
+	// start agent
+	if err := cmd.Start(); err != nil {
+		return nil, nil, fmt.Errorf("start: %w", err)
+	}
+	// capture agent output
+	go func() {
+		reader := bufio.NewReader(stdoutPipe)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					c.logger.Error("Error reading agent stdout", zap.Error(err))
+				}
+				// Trim and append the last line if it exists
+				// Normalize line endings to \n
+				if line != "" {
+					line = strings.TrimRight(line, "\r\n")
+					stdout = append(stdout, []byte(line)...)
+					stdout = append(stdout, byte('\n'))
+				}
+				break
+			}
+			// Normalize line endings to \n
+			line = strings.TrimRight(line, "\r\n")
+			stdout = append(stdout, []byte(line)...)
+			stdout = append(stdout, byte('\n'))
+		}
+	}()
+	go func() {
+		reader := bufio.NewReader(stderrPipe)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					c.logger.Error("Error reading agent stderr", zap.Error(err))
+				}
+				// Trim and append the last line if it exists
+				// Normalize line endings to \n
+				if line != "" {
+					line = strings.TrimRight(line, "\r\n")
+					stderr = append(stderr, []byte(line)...)
+					stderr = append(stderr, byte('\n'))
+				}
+				break
+			}
+			// Normalize line endings to \n
+			line = strings.TrimRight(line, "\r\n")
+			stderr = append(stderr, []byte(line)...)
+			stderr = append(stderr, byte('\n'))
+		}
+	}()
+
+	c.logger.Debug("Agent process started", zap.Int("pid", cmd.Process.Pid))
+
+	doneCh := make(chan struct{}, 1)
+
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			c.logger.Error("One-shot Collector encountered an error during execution", zap.Error(err))
+		}
+		doneCh <- struct{}{}
+	}()
+
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+
+	defer cancel()
+
+	select {
+	case <-doneCh:
+	case <-waitCtx.Done():
+		pid := cmd.Process.Pid
+		c.logger.Debug("Stopping agent process", zap.Int("pid", pid))
+
+		// Gracefully signal process to stop.
+		if err := sendShutdownSignal(cmd.Process); err != nil {
+			return nil, nil, err
+		}
+
+		innerWaitCtx, innerCancel := context.WithTimeout(ctx, 10*time.Second)
+
+		// Setup a goroutine to wait a while for process to finish and send kill signal
+		// to the process if it doesn't finish.
+		var innerErr error
+		go func() {
+			<-innerWaitCtx.Done()
+
+			if !errors.Is(innerWaitCtx.Err(), context.DeadlineExceeded) {
+				c.logger.Debug("Agent process successfully stopped.", zap.Int("pid", pid))
+				return
+			}
+
+			// Time is out. Kill the process.
+			c.logger.Debug(
+				"Agent process is not responding to SIGTERM. Sending SIGKILL to kill forcibly.",
+				zap.Int("pid", pid))
+			if innerErr = cmd.Process.Signal(os.Kill); innerErr != nil {
+				return
+			}
+		}()
+
+		innerCancel()
+	}
+
+	return stdout, stderr, nil
 }
 
 // Exited returns a channel that will send a signal when the Agent process exits.
@@ -217,7 +405,7 @@ func (c *Commander) Stop(ctx context.Context) error {
 	}
 
 	pid := c.cmd.Process.Pid
-	c.logger.Debug("Stopping agent process", zap.Int("pid", pid))
+	c.logger.Debug("sending shutdown signal to agent process", zap.Int("pid", pid))
 
 	// Gracefully signal process to stop.
 	if err := sendShutdownSignal(c.cmd.Process); err != nil {
@@ -255,4 +443,16 @@ func (c *Commander) Stop(ctx context.Context) error {
 	cancel()
 
 	return innerErr
+}
+
+func envVarMapToEnvMapSlice(m map[string]string) []string {
+	// let the command initialize the env itself
+	if m == nil {
+		return nil
+	}
+	result := os.Environ()
+	for key, value := range m {
+		result = append(result, key+"="+value)
+	}
+	return result
 }

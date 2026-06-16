@@ -57,11 +57,11 @@ func (f internalFilterStrict) matchMetric(metric pmetric.Metric) bool {
 	return false
 }
 
-func (f internalFilterStrict) submatches(_ pmetric.Metric) []int {
+func (internalFilterStrict) submatches(pmetric.Metric) []int {
 	return nil
 }
 
-func (f internalFilterStrict) expand(_, _ string) string {
+func (internalFilterStrict) expand(string, string) string {
 	return ""
 }
 
@@ -91,9 +91,9 @@ func (f internalFilterRegexp) submatches(metric pmetric.Metric) []int {
 	return f.include.FindStringSubmatchIndex(metric.Name())
 }
 
-func (f internalFilterRegexp) expand(metricTempate, metricName string) string {
+func (f internalFilterRegexp) expand(metricTemplate, metricName string) string {
 	if submatches := f.include.FindStringSubmatchIndex(metricName); submatches != nil {
-		return string(f.include.ExpandString([]byte{}, metricTempate, metricName, submatches))
+		return string(f.include.ExpandString([]byte{}, metricTemplate, metricName, submatches))
 	}
 	return ""
 }
@@ -143,7 +143,7 @@ func matchDps(metric pmetric.Metric, f internalFilter) (matchedDps []bool, match
 		matchedDps = append(matchedDps, match)
 		return true
 	})
-	return
+	return matchedDps, matchedDpsCount
 }
 
 // extractMetricWithMatchingAttrs returns a metric with data points matching attrMatchers.
@@ -262,7 +262,7 @@ func (mtp *metricsTransformProcessor) processMetrics(_ context.Context, md pmetr
 				case Insert:
 					// Save len, so we don't iterate over the newly generated metrics that are appended at the end.
 					mLen := metrics.Len()
-					for i := 0; i < mLen; i++ {
+					for i := range mLen {
 						metric := metrics.At(i)
 						newMetric := transform.MetricIncludeFilter.extractMatchedMetric(metric)
 						if newMetric == (pmetric.Metric{}) {
@@ -368,7 +368,6 @@ func canBeCombined(metrics []pmetric.Metric) error {
 					"metrics cannot be combined as they have different aggregation temporalities: %v (%v) and %v (%v)",
 					firstMetric.Name(), firstMetric.Histogram().AggregationTemporality(), metric.Name(),
 					metric.Histogram().AggregationTemporality())
-
 			}
 		case pmetric.MetricTypeExponentialHistogram:
 			if firstMetric.ExponentialHistogram().AggregationTemporality() != metric.ExponentialHistogram().AggregationTemporality() {
@@ -376,7 +375,6 @@ func canBeCombined(metrics []pmetric.Metric) error {
 					"metrics cannot be combined as they have different aggregation temporalities: %v (%v) and %v (%v)",
 					firstMetric.Name(), firstMetric.ExponentialHistogram().AggregationTemporality(), metric.Name(),
 					metric.ExponentialHistogram().AggregationTemporality())
-
 			}
 		}
 	}
@@ -387,10 +385,9 @@ func canBeCombined(metrics []pmetric.Metric) error {
 func metricAttributeKeys(metric pmetric.Metric) map[string]struct{} {
 	attrKeys := map[string]struct{}{}
 	rangeDataPointAttributes(metric, func(attrs pcommon.Map) bool {
-		attrs.Range(func(k string, _ pcommon.Value) bool {
+		for k := range attrs.All() {
 			attrKeys[k] = struct{}{}
-			return true
-		})
+		}
 		return true
 	})
 	return attrKeys
@@ -444,7 +441,7 @@ func combine(transform internalTransform, metrics pmetric.MetricSlice) pmetric.M
 
 // groupMetrics groups all the provided timeseries that will be aggregated together based on all the label values.
 // Returns a map of grouped timeseries and the corresponding selected labels
-// canBeCombined must be callled before.
+// canBeCombined must be called before.
 func groupMetrics(metrics pmetric.MetricSlice, aggType aggregateutil.AggregationType, to pmetric.Metric) {
 	ag := aggregateutil.AggGroups{}
 	for i := 0; i < metrics.Len(); i++ {
@@ -548,7 +545,8 @@ func transformMetric(metric pmetric.Metric, transform internalTransform) bool {
 		}
 	}
 
-	for _, op := range transform.Operations {
+	for i := range transform.Operations {
+		op := &transform.Operations[i]
 		switch op.configOperation.Action {
 		case updateLabel:
 			updateLabelOp(metric, op, transform.MetricIncludeFilter)

@@ -14,6 +14,9 @@ type supportedJar struct {
 // Provided as a build time variable if a development or customer specific JMX Metrics Gatherer needs to be supported
 var MetricsGathererHash = "n/a"
 
+// Provided as a build time variable if a development or customer specific JMX Scraper needs to be supported
+var ScraperHash = "n/a"
+
 // Support for SSL properties passed via property file will be available starting in v1.14.0
 func oldFormatProperties(c *Config, j supportedJar) error {
 	if c.KeystorePassword != "" ||
@@ -28,9 +31,96 @@ func oldFormatProperties(c *Config, j supportedJar) error {
 	return nil
 }
 
+var jmxScraperVersions = map[string]supportedJar{
+	"aca7937cee3fc0f669553d594c0b80bb9ff6417c42902c0414ddcea9753c7171": {
+		version: "1.53.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"551ff618d4ae0c73c1df7596ed667fd1aab50563cf104c92f31cdbf95f735412": {
+		version: "1.52.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"7d0b7037feb9baf6eeaa88fc249742390ce04cc20a3d18e3dd3e9d61774c2a05": {
+		version: "1.51.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"d435d766b3cacc731713b95906b2204a1a4eab4ab58413163f6413573f35e0d3": {
+		version: "1.50.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"b821f96df239d1e1078c0f51f07977bc375e56e92c2d96eb7954ad30e617c677": {
+		version: "1.49.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"cec26ab77f7600b421d898cf08b2d7cd6fa34c8dcf25a12642223317058ed7a3": {
+		version: "1.48.0-alpha",
+		jar:     "JMX scraper",
+	},
+	"5599d696621c4cce7efc3e481d15d5790d275ad12354cab84401c4b24d3f53b3": {
+		version: "1.46.0-alpha",
+		jar:     "JMX scraper",
+	},
+}
+
 // If you change this variable name, please open an issue in opentelemetry-java-contrib
 // so that repository's release automation can be updated
 var jmxMetricsGathererVersions = map[string]supportedJar{
+	"10da69b4a8017403e81bc79f0cdd92813e1f6926ef9bbea4e1bae911d0ffe1a9": {
+		version: "1.53.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"5d4badffccfd55e566cbd3aebee4f23f848dbd04b5cc7dede61d49cc2f051184": {
+		version: "1.52.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"d70691074d36dfdc61f8bfc90222a5bd62ec35a01c49d1729f5ec90ad160ea09": {
+		version: "1.51.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"0ef4abb0da557fc424867bcd55d73459cf9f6374842775fa2e64a9fcc0fe232c": {
+		version: "1.50.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"914d590f31aa7fa8d0a8765eaea665fd15a345f3fce447949e09dd78c6e1d68c": {
+		version: "1.49.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"dd1ab4cb7fd45c30cf4e8090f9289a42b2c7bc1e7377536eef2c40c51d8641ae": {
+		version: "1.48.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"0344be738295602718934accd0557496b10464582681e69a251dc3b8d3f69b69": {
+		version: "1.47.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"291c6071e6702ae8d81b712582f8e2f312e6b35633b603eada46e3984e5cd020": {
+		version: "1.46.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"e0fc9b92364413ae33d1c33b5927e4eead70d6fab7ca626b56649947352636b4": {
+		version: "1.45.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"67a415eace3d513c3c5bf30518a9035c48b14e7c8ad43b0ddb572588de7b4ce6": {
+		version: "1.44.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"6c1d4c82d76f2826acf43981ef0b222f55eea841aebcc604a0daafbb2bddb93c": {
+		version: "1.43.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"e19041d478c2f3641cee499bae74baa66c97c193b0012369deeb587d5add958a": {
+		version: "1.42.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"8005bee5861f0a9f72577ee6e64d2f9f7ce72a063c88ba38db9568785c7f0cfd": {
+		version: "1.41.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
+	"a51b50329446ae7516888ef915e4b20fb61b986b2230d66eacaf61d8690525c9": {
+		version: "1.40.0-alpha",
+		jar:     "JMX metrics gatherer",
+	},
 	"43543679b12c7772fffe78ad9dcde3421cb5dd2a704231f9901d32578b2cf69e": {
 		version: "1.39.0-alpha",
 		jar:     "JMX metrics gatherer",
@@ -160,6 +250,14 @@ func initSupportedJars() {
 			MetricsGathererHash: {
 				version: "custom",
 				jar:     "JMX metrics gatherer",
+			},
+		}
+	}
+	if ScraperHash != "n/a" {
+		jmxScraperVersions = map[string]supportedJar{
+			ScraperHash: {
+				version: "custom",
+				jar:     "JMX scraper",
 			},
 		}
 	}

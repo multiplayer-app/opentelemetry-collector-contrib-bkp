@@ -20,40 +20,37 @@ type metricDataAccumulator struct {
 
 // getMetricsData generates OT Metrics data from task metadata and docker stats
 func (acc *metricDataAccumulator) getMetricsData(containerStatsMap map[string]*ContainerStats, metadata ecsutil.TaskMetadata, logger *zap.Logger) {
-
 	taskMetrics := ECSMetrics{}
 	timestamp := pcommon.NewTimestampFromTime(time.Now())
 	taskResource := taskResource(metadata)
 
-	for _, containerMetadata := range metadata.Containers {
-
+	for i := range metadata.Containers {
+		containerMetadata := &metadata.Containers[i]
 		containerResource := containerResource(containerMetadata, logger)
-		taskResource.Attributes().Range(func(k string, av pcommon.Value) bool {
+		for k, av := range taskResource.Attributes().All() {
 			av.CopyTo(containerResource.Attributes().PutEmpty(k))
-			return true
-		})
+		}
 
 		stats, ok := containerStatsMap[containerMetadata.DockerID]
 
 		if ok && !isEmptyStats(stats) {
-
 			containerMetrics := convertContainerMetrics(stats, logger, containerMetadata)
 			acc.accumulate(convertToOTLPMetrics(containerPrefix, containerMetrics, containerResource, timestamp))
 			aggregateTaskMetrics(&taskMetrics, containerMetrics)
-
 		} else if containerMetadata.FinishedAt != "" && containerMetadata.StartedAt != "" {
-
 			duration, err := calculateDuration(containerMetadata.StartedAt, containerMetadata.FinishedAt)
-
 			if err != nil {
 				logger.Warn("Error time format error found for this container:" + containerMetadata.ContainerName)
 			}
 
 			acc.accumulate(convertStoppedContainerDataToOTMetrics(containerPrefix, containerResource, timestamp, duration))
-
 		}
 	}
 	overrideWithTaskLevelLimit(&taskMetrics, metadata)
+	if metadata.EphemeralStorageMetrics != nil {
+		taskMetrics.EphemeralStorageUtilized = metadata.EphemeralStorageMetrics.Utilized
+		taskMetrics.EphemeralStorageReserved = metadata.EphemeralStorageMetrics.Reserved
+	}
 	acc.accumulate(convertToOTLPMetrics(taskPrefix, taskMetrics, taskResource, timestamp))
 }
 
@@ -65,7 +62,7 @@ func isEmptyStats(stats *ContainerStats) bool {
 	return stats == nil || stats.ID == ""
 }
 
-func convertContainerMetrics(stats *ContainerStats, logger *zap.Logger, containerMetadata ecsutil.ContainerMetadata) ECSMetrics {
+func convertContainerMetrics(stats *ContainerStats, logger *zap.Logger, containerMetadata *ecsutil.ContainerMetadata) ECSMetrics {
 	containerMetrics := getContainerMetrics(stats, logger)
 	if containerMetadata.Limits.Memory != nil {
 		containerMetrics.MemoryReserved = *containerMetadata.Limits.Memory

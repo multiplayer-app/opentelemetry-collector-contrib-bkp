@@ -8,239 +8,47 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	conventions "go.opentelemetry.io/collector/semconv/v1.22.0"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/azurelogs/internal/metadata"
 )
 
 var testBuildInfo = component.BuildInfo{
 	Version: "1.2.3",
 }
 
-var minimumLogRecord = func() plog.LogRecord {
-	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
-
-	ts, _ := asTimestamp("2022-11-11T04:48:27.6767145Z")
-	lr.SetTimestamp(ts)
-	lr.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID")
-	lr.Attributes().PutStr(eventName, eventNameValue)
-
-	body := lr.Body().SetEmptyMap()
-	body.PutStr(azureOperationName, "SecretGet")
-	body.PutStr(azureCategory, "AuditEvent")
-	body.CopyTo(lr.Body().Map())
-
-	return lr
-}()
-
-var maximumLogRecord1 = func() plog.LogRecord {
-	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
-
-	ts, _ := asTimestamp("2022-11-11T04:48:27.6767145Z")
-	lr.SetTimestamp(ts)
-	lr.SetSeverityNumber(plog.SeverityNumberWarn)
-	lr.SetSeverityText("Warning")
-	guid := "607964b6-41a5-4e24-a5db-db7aab3b9b34"
-
-	lr.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID-1")
-	lr.Attributes().PutStr(eventName, eventNameValue)
-
-	body := lr.Body().SetEmptyMap()
-	body.PutStr(azureTenantID, "/TENANT_ID")
-	body.PutStr(azureOperationName, "SecretGet")
-	body.PutStr(azureOperationVersion, "7.0")
-	body.PutStr(azureCategory, "AuditEvent")
-	body.PutStr(azureCorrelationID, guid)
-	body.PutStr(azureResultType, "Success")
-	body.PutStr(azureResultSignature, "Signature")
-	body.PutStr(azureResultDescription, "Description")
-	body.PutInt(azureDuration, 1234)
-	body.PutStr(networkPeerAddress, "127.0.0.1")
-	body.PutStr(conventions.AttributeCloudRegion, "ukso")
-	body.PutEmptyMap(azureIdentity).PutEmptyMap("claim").PutStr("oid", guid)
-
-	properties := body.PutEmptyMap(azureProperties)
-	properties.PutStr("string", "string")
-	properties.PutDouble("int", 429)
-	properties.PutDouble("float", 3.14)
-	properties.PutBool("bool", false)
-
-	return lr
-}()
-
-var maximumLogRecord2 = func() []plog.LogRecord {
-	sl := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
-	lr := sl.LogRecords().AppendEmpty()
-	lr2 := sl.LogRecords().AppendEmpty()
-
-	ts, _ := asTimestamp("2022-11-11T04:48:29.6767145Z")
-	lr.SetTimestamp(ts)
-	lr.SetSeverityNumber(plog.SeverityNumberWarn)
-	lr.SetSeverityText("Warning")
-	guid := "96317703-2132-4a8d-a5d7-e18d2f486783"
-
-	lr.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID-2")
-	lr.Attributes().PutStr(eventName, eventNameValue)
-
-	body := lr.Body().SetEmptyMap()
-	body.PutStr(azureTenantID, "/TENANT_ID")
-	body.PutStr(azureOperationName, "SecretSet")
-	body.PutStr(azureOperationVersion, "7.0")
-	body.PutStr(azureCategory, "AuditEvent")
-	body.PutStr(azureCorrelationID, guid)
-	body.PutStr(azureResultType, "Success")
-	body.PutStr(azureResultSignature, "Signature")
-	body.PutStr(azureResultDescription, "Description")
-	body.PutInt(azureDuration, 4321)
-	body.PutStr(networkPeerAddress, "127.0.0.1")
-	body.PutStr(conventions.AttributeCloudRegion, "ukso")
-
-	body.PutEmptyMap(azureIdentity).PutEmptyMap("claim").PutStr("oid", guid)
-	properties := body.PutEmptyMap(azureProperties)
-	properties.PutStr("string", "string")
-	properties.PutDouble("int", 924)
-	properties.PutDouble("float", 41.3)
-	properties.PutBool("bool", true)
-
-	ts, _ = asTimestamp("2022-11-11T04:48:31.6767145Z")
-	lr2.SetTimestamp(ts)
-	lr2.SetSeverityNumber(plog.SeverityNumberWarn)
-	lr2.SetSeverityText("Warning")
-	guid = "4ae807da-39d9-4327-b5b4-0ab685a57f9a"
-
-	lr2.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr2.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID-2")
-	lr2.Attributes().PutStr(eventName, eventNameValue)
-
-	body2 := lr2.Body().SetEmptyMap()
-	body2.PutStr(azureTenantID, "/TENANT_ID")
-	body2.PutStr(azureOperationName, "SecretGet")
-	body2.PutStr(azureOperationVersion, "7.0")
-	body2.PutStr(azureCategory, "AuditEvent")
-	body2.PutStr(azureCorrelationID, guid)
-	body2.PutStr(azureResultType, "Success")
-	body2.PutStr(azureResultSignature, "Signature")
-	body2.PutStr(azureResultDescription, "Description")
-	body2.PutInt(azureDuration, 321)
-	body2.PutStr(networkPeerAddress, "127.0.0.1")
-	body2.PutStr(conventions.AttributeCloudRegion, "ukso")
-
-	body2.PutEmptyMap(azureIdentity).PutEmptyMap("claim").PutStr("oid", guid)
-	properties = body2.PutEmptyMap(azureProperties)
-	properties.PutStr("string", "string")
-	properties.PutDouble("int", 925)
-	properties.PutDouble("float", 41.4)
-	properties.PutBool("bool", false)
-
-	var records []plog.LogRecord
-	return append(records, lr, lr2)
-}()
-
-var badLevelLogRecord = func() plog.LogRecord {
-	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
-
-	ts, _ := asTimestamp("2023-10-26T14:22:43.3416357Z")
-	lr.SetTimestamp(ts)
-	lr.SetSeverityNumber(plog.SeverityNumberTrace4)
-	lr.SetSeverityText("4")
-	guid := "128bc026-5ead-40c7-8853-ebb32bc077a3"
-
-	lr.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID")
-	lr.Attributes().PutStr(eventName, eventNameValue)
-
-	body := lr.Body().SetEmptyMap()
-	body.PutStr(azureOperationName, "Microsoft.ApiManagement/GatewayLogs")
-	body.PutStr(azureCategory, "GatewayLogs")
-	body.PutStr(azureCorrelationID, guid)
-	body.PutStr(azureResultType, "Succeeded")
-	body.PutInt(azureDuration, 243)
-	body.PutStr(networkPeerAddress, "13.14.15.16")
-	body.PutStr(conventions.AttributeCloudRegion, "West US")
-
-	properties := body.PutEmptyMap(azureProperties)
-	properties.PutStr("method", "GET")
-	properties.PutStr("url", "https://api.azure-api.net/sessions")
-	properties.PutDouble("backendResponseCode", 200)
-	properties.PutDouble("responseCode", 200)
-	properties.PutDouble("responseSize", 102945)
-	properties.PutStr("cache", "none")
-	properties.PutDouble("backendTime", 54)
-	properties.PutDouble("requestSize", 632)
-	properties.PutStr("apiId", "demo-api")
-	properties.PutStr("operationId", "GetSessions")
-	properties.PutStr("apimSubscriptionId", "master")
-	properties.PutDouble("clientTime", 190)
-	properties.PutStr("clientProtocol", "HTTP/1.1")
-	properties.PutStr("backendProtocol", "HTTP/1.1")
-	properties.PutStr("apiRevision", "1")
-	properties.PutStr("clientTlsVersion", "1.2")
-	properties.PutStr("backendMethod", "GET")
-	properties.PutStr("backendUrl", "https://api.azurewebsites.net/sessions")
-	return lr
-}()
-
-var badTimeLogRecord = func() plog.LogRecord {
-	lr := plog.NewLogs().ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
-
-	ts, _ := asTimestamp("2021-10-14T22:17:11+00:00")
-	lr.SetTimestamp(ts)
-
-	lr.Attributes().PutStr(conventions.AttributeCloudProvider, conventions.AttributeCloudProviderAzure)
-	lr.Attributes().PutStr(conventions.AttributeCloudResourceID, "/RESOURCE_ID")
-	lr.Attributes().PutStr(eventName, eventNameValue)
-
-	body := lr.Body().SetEmptyMap()
-	body.PutStr(azureOperationName, "ApplicationGatewayAccess")
-	body.PutStr(azureCategory, "ApplicationGatewayAccessLog")
-
-	properties := body.PutEmptyMap(azureProperties)
-	properties.PutStr("instanceId", "appgw_2")
-	properties.PutStr("clientIP", "185.42.129.24")
-	properties.PutDouble("clientPort", 45057)
-	properties.PutStr("httpMethod", "GET")
-	properties.PutStr("originalRequestUriWithArgs", "/")
-	properties.PutStr("requestUri", "/")
-	properties.PutStr("requestQuery", "")
-	properties.PutStr("userAgent", "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36")
-	properties.PutDouble("httpStatus", 200)
-	properties.PutStr("httpVersion", "HTTP/1.1")
-	properties.PutDouble("receivedBytes", 184)
-	properties.PutDouble("sentBytes", 466)
-	properties.PutDouble("clientResponseTime", 0)
-	properties.PutDouble("timeTaken", 0.034)
-	properties.PutStr("WAFEvaluationTime", "0.000")
-	properties.PutStr("WAFMode", "Detection")
-	properties.PutStr("transactionId", "592d1649f75a8d480a3c4dc6a975309d")
-	properties.PutStr("sslEnabled", "on")
-	properties.PutStr("sslCipher", "ECDHE-RSA-AES256-GCM-SHA384")
-	properties.PutStr("sslProtocol", "TLSv1.2")
-	properties.PutStr("sslClientVerify", "NONE")
-	properties.PutStr("sslClientCertificateFingerprint", "")
-	properties.PutStr("sslClientCertificateIssuerName", "")
-	properties.PutStr("serverRouted", "52.239.221.65:443")
-	properties.PutStr("serverStatus", "200")
-	properties.PutStr("serverResponseLatency", "0.028")
-	properties.PutStr("upstreamSourcePort", "21564")
-	properties.PutStr("originalHost", "20.110.30.194")
-	properties.PutStr("host", "20.110.30.194")
-	return lr
-}()
-
 func TestAsTimestamp(t *testing.T) {
 	timestamp := "2022-11-11T04:48:27.6767145Z"
 	nanos, err := asTimestamp(timestamp)
 	assert.NoError(t, err)
 	assert.Less(t, pcommon.Timestamp(0), nanos)
+
+	timestamp = "11/20/2024 13:57:18"
+	nanos, err = asTimestamp(timestamp, "01/02/2006 15:04:05")
+	assert.NoError(t, err)
+	assert.Less(t, pcommon.Timestamp(0), nanos)
+
+	// time_format set, but fallback to iso8601 and succeeded to parse
+	timestamp = "2022-11-11T04:48:27.6767145Z"
+	nanos, err = asTimestamp(timestamp, "01/02/2006 15:04:05")
+	assert.NoError(t, err)
+	assert.Less(t, pcommon.Timestamp(0), nanos)
+
+	// time_format set, but all failed to parse
+	timestamp = "11/20/2024 13:57:18"
+	nanos, err = asTimestamp(timestamp, "2006-01-02 15:04:05")
+	assert.Error(t, err)
+	assert.Equal(t, pcommon.Timestamp(0), nanos)
 
 	timestamp = "invalid-time"
 	nanos, err = asTimestamp(timestamp)
@@ -285,6 +93,48 @@ func TestSetIf(t *testing.T) {
 	assert.Equal(t, "ok", actual)
 }
 
+func TestParseUnixTimestamp(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectedResult string
+		expectedError  string
+	}{
+		{
+			name:           "valid timestamp",
+			input:          "1744711621",
+			expectedResult: "2025-04-15T10:07:01Z",
+		},
+		{
+			name:           "another valid timestamp",
+			input:          "1744717084",
+			expectedResult: "2025-04-15T11:38:04Z",
+		},
+		{
+			name:          "invalid timestamp",
+			input:         "invalid",
+			expectedError: "invalid syntax",
+		},
+		{
+			name:          "empty string",
+			input:         "",
+			expectedError: "invalid syntax",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseUnixTimestamp(tt.input)
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedError)
+				return
+			}
+			assert.Equal(t, tt.expectedResult, result.Format(time.RFC3339))
+		})
+	}
+}
+
 func TestExtractRawAttributes(t *testing.T) {
 	badDuration := json.Number("invalid")
 	goodDuration := json.Number("1234")
@@ -299,27 +149,37 @@ func TestExtractRawAttributes(t *testing.T) {
 	level := json.Number("Informational")
 	location := "location"
 
-	identity := any("someone")
+	identity := json.RawMessage(`"someone"`)
 
-	properties := any(map[string]any{
-		"a": uint64(1),
+	properties := map[string]any{
+		"a": float64(1),
 		"b": true,
 		"c": 1.23,
 		"d": "ok",
-	})
+	}
+	propertiesRaw, err := json.Marshal(properties)
+	require.NoError(t, err)
 
-	stringProperties := any("str")
-	intProperties := any(1)
-	jsonProperties := any("{\"a\": 1, \"b\": true, \"c\": 1.23, \"d\": \"ok\"}")
+	stringProperties := "str"
+	stringPropertiesRaw, err := json.Marshal(stringProperties)
+	require.NoError(t, err)
+
+	intProperties := 1
+	intPropertiesRaw, err := json.Marshal(intProperties)
+	require.NoError(t, err)
+
+	jsonProperties := "{\"a\": 1, \"b\": true, \"c\": 1.23, \"d\": \"ok\"}"
+	jsonPropertiesRaw, err := json.Marshal(jsonProperties)
+	require.NoError(t, err)
 
 	tests := []struct {
 		name     string
-		log      azureLogRecord
+		log      *azureLogRecord
 		expected map[string]any
 	}{
 		{
 			name: "minimal",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
@@ -333,7 +193,7 @@ func TestExtractRawAttributes(t *testing.T) {
 		},
 		{
 			name: "bad-duration",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
@@ -347,7 +207,7 @@ func TestExtractRawAttributes(t *testing.T) {
 		},
 		{
 			name: "everything",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:              "",
 				ResourceID:        "resource.id",
 				TenantID:          &tenantID,
@@ -360,30 +220,30 @@ func TestExtractRawAttributes(t *testing.T) {
 				DurationMs:        &goodDuration,
 				CallerIPAddress:   &callerIPAddress,
 				CorrelationID:     &correlationID,
-				Identity:          &identity,
+				Identity:          identity,
 				Level:             &level,
 				Location:          &location,
-				Properties:        &properties,
+				Properties:        propertiesRaw,
 			},
 			expected: map[string]any{
-				azureTenantID:                    "tenant.id",
-				azureOperationName:               "operation.name",
-				azureOperationVersion:            "operation.version",
-				azureCategory:                    "category",
-				azureCorrelationID:               correlationID,
-				azureResultType:                  "result.type",
-				azureResultSignature:             "result.signature",
-				azureResultDescription:           "result.description",
-				azureDuration:                    int64(1234),
-				networkPeerAddress:               "127.0.0.1",
-				azureIdentity:                    "someone",
-				conventions.AttributeCloudRegion: "location",
-				azureProperties:                  properties,
+				azureTenantID:          "tenant.id",
+				azureOperationName:     "operation.name",
+				azureOperationVersion:  "operation.version",
+				azureCategory:          "category",
+				azureCorrelationID:     correlationID,
+				azureResultType:        "result.type",
+				azureResultSignature:   "result.signature",
+				azureResultDescription: "result.description",
+				azureDuration:          int64(1234),
+				"network.peer.address": "127.0.0.1",
+				azureIdentity:          "someone",
+				"cloud.region":         "location",
+				azureProperties:        properties,
 			},
 		},
 		{
 			name: "nil properties",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
@@ -398,13 +258,13 @@ func TestExtractRawAttributes(t *testing.T) {
 		},
 		{
 			name: "string properties",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
 				Category:      "category",
 				DurationMs:    &badDuration,
-				Properties:    &stringProperties,
+				Properties:    stringPropertiesRaw,
 			},
 			expected: map[string]any{
 				azureOperationName: "operation.name",
@@ -414,29 +274,29 @@ func TestExtractRawAttributes(t *testing.T) {
 		},
 		{
 			name: "int properties",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
 				Category:      "category",
 				DurationMs:    &badDuration,
-				Properties:    &intProperties,
+				Properties:    intPropertiesRaw,
 			},
 			expected: map[string]any{
 				azureOperationName: "operation.name",
 				azureCategory:      "category",
-				azureProperties:    1,
+				azureProperties:    float64(1),
 			},
 		},
 		{
 			name: "json properties",
-			log: azureLogRecord{
+			log: &azureLogRecord{
 				Time:          "",
 				ResourceID:    "resource.id",
 				OperationName: "operation.name",
 				Category:      "category",
 				DurationMs:    &badDuration,
-				Properties:    &jsonProperties,
+				Properties:    jsonPropertiesRaw,
 			},
 			expected: map[string]any{
 				azureOperationName: "operation.name",
@@ -444,299 +304,641 @@ func TestExtractRawAttributes(t *testing.T) {
 				azureProperties:    "{\"a\": 1, \"b\": true, \"c\": 1.23, \"d\": \"ok\"}",
 			},
 		},
+		{
+			name: "unknown fields",
+			log: &azureLogRecord{
+				Time:          "",
+				ResourceID:    "resource.id",
+				OperationName: "operation.name",
+				Category:      "category",
+				DurationMs:    &badDuration,
+			},
+			expected: map[string]any{
+				azureOperationName: "operation.name",
+				azureCategory:      "category",
+			},
+		},
+		{
+			name: "primitive properties with unknown",
+			log: &azureLogRecord{
+				Time:          "",
+				ResourceID:    "resource.id",
+				OperationName: "operation.name",
+				Category:      "category",
+				DurationMs:    &badDuration,
+				Properties:    stringPropertiesRaw,
+			},
+			expected: map[string]any{
+				azureOperationName: "operation.name",
+				azureCategory:      "category",
+				azureProperties:    "str",
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, extractRawAttributes(tt.log))
+			assert.Equal(t, tt.expected, extractRawAttributes(tt.log, nil))
 		})
 	}
-
 }
 
-func TestUnmarshalLogs(t *testing.T) {
-	expectedMinimum := plog.NewLogs()
-	resourceLogs := expectedMinimum.ResourceLogs().AppendEmpty()
-	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	lr := scopeLogs.LogRecords().AppendEmpty()
-	minimumLogRecord.CopyTo(lr)
+func TestUnmarshalLogs_AzureCdnAccessLog(t *testing.T) {
+	t.Parallel()
 
-	expectedMinimum2 := plog.NewLogs()
-	resourceLogs = expectedMinimum2.ResourceLogs().AppendEmpty()
-	scopeLogs = resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	logRecords := scopeLogs.LogRecords()
-	lr = logRecords.AppendEmpty()
-	minimumLogRecord.CopyTo(lr)
-	lr = logRecords.AppendEmpty()
-	minimumLogRecord.CopyTo(lr)
-
-	expectedMaximum := plog.NewLogs()
-	resourceLogs = expectedMaximum.ResourceLogs().AppendEmpty()
-	scopeLogs = resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	lr = scopeLogs.LogRecords().AppendEmpty()
-	maximumLogRecord1.CopyTo(lr)
-
-	resourceLogs = expectedMaximum.ResourceLogs().AppendEmpty()
-	scopeLogs = resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	lr = scopeLogs.LogRecords().AppendEmpty()
-	lr2 := scopeLogs.LogRecords().AppendEmpty()
-	maximumLogRecord2[0].CopyTo(lr)
-	maximumLogRecord2[1].CopyTo(lr2)
-
-	expectedBadLevel := plog.NewLogs()
-	resourceLogs = expectedBadLevel.ResourceLogs().AppendEmpty()
-	scopeLogs = resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	lr = scopeLogs.LogRecords().AppendEmpty()
-	badLevelLogRecord.CopyTo(lr)
-
-	expectedBadTime := plog.NewLogs()
-	resourceLogs = expectedBadTime.ResourceLogs().AppendEmpty()
-	scopeLogs = resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("otelcol/azureresourcelogs")
-	scopeLogs.Scope().SetVersion(testBuildInfo.Version)
-	lr = scopeLogs.LogRecords().AppendEmpty()
-	badTimeLogRecord.CopyTo(lr)
-
-	tests := []struct {
-		file     string
-		expected plog.Logs
+	dir := "testdata/cdnaccesslog"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+		expectsErr       string
 	}{
-		{
-			file:     "log-minimum.json",
-			expected: expectedMinimum,
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
 		},
-		{
-			file:     "log-minimum-2.json",
-			expected: expectedMinimum2,
+		"valid_2": {
+			logFilename:      "valid_2.json",
+			expectedFilename: "valid_2_expected.yaml",
 		},
-		{
-			file:     "log-maximum.json",
-			expected: expectedMaximum,
-		},
-		{
-			file:     "log-bad-level.json",
-			expected: expectedBadLevel,
-		},
-		{
-			file:     "log-bad-time.json",
-			expected: expectedBadTime,
+		"valid_3": {
+			logFilename:      "valid_3.json",
+			expectedFilename: "valid_3_expected.yaml",
 		},
 	}
 
-	sut := &ResourceLogsUnmarshaler{
+	u := &ResourceLogsUnmarshaler{
 		Version: testBuildInfo.Version,
 		Logger:  zap.NewNop(),
 	}
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join("testdata", tt.file))
-			assert.NoError(t, err)
-			assert.NotNil(t, data)
 
-			logs, err := sut.UnmarshalLogs(data)
-			assert.NoError(t, err)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
 
-			assert.NoError(t, plogtest.CompareLogs(tt.expected, logs))
+			logs, err := u.UnmarshalLogs(data)
+
+			if test.expectsErr != "" {
+				require.ErrorContains(t, err, test.expectsErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
 		})
 	}
 }
 
-func loadJSONLogsAndApplySemanticConventions(filename string) (plog.Logs, error) {
-	l := plog.NewLogs()
+func TestUnmarshalLogs_FrontDoorWebApplicationFirewallLog(t *testing.T) {
+	t.Parallel()
 
-	sut := &ResourceLogsUnmarshaler{
+	dir := "testdata/frontdoorwebapplicationfirewalllog"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+		expectsErr       string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
+
+	u := &ResourceLogsUnmarshaler{
 		Version: testBuildInfo.Version,
 		Logger:  zap.NewNop(),
 	}
 
-	data, err := os.ReadFile(filepath.Join("testdata", filename))
-	if err != nil {
-		return l, err
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+
+			if test.expectsErr != "" {
+				require.ErrorContains(t, err, test.expectsErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
+}
+
+func TestUnmarshalLogs_FrontDoorAccessLog(t *testing.T) {
+	t.Parallel()
+
+	dir := "testdata/frontdooraccesslog"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+		expectsErr       string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
 	}
 
-	logs, err := sut.UnmarshalLogs(data)
-
-	if err != nil {
-		return l, err
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
 	}
 
-	return logs, nil
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+
+			if test.expectsErr != "" {
+				require.ErrorContains(t, err, test.expectsErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAzureCdnAccessLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-azurecdnaccesslog.json")
+func TestUnmarshalLogs_VNetFlowLog(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/azurevnetflowlog"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+		expectsErr       string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "GET", record["http.request.method"])
-	assert.Equal(t, "1.1.0.0", record["network.protocol.version"])
-	assert.Equal(t, "TRACKING_REFERENCE", record["az.service_request_id"])
-	assert.Equal(t, "https://test.net/", record["url.full"])
-	assert.Equal(t, int64(1234), record["http.request.size"])
-	assert.Equal(t, int64(12345), record["http.response.size"])
-	assert.Equal(t, "Mozilla/5.0", record["user_agent.original"])
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, "0", record["client.port"])
-	assert.Equal(t, "tls", record["tls.protocol.name"])
-	assert.Equal(t, "1.3", record["tls.protocol.version"])
-	assert.Equal(t, int64(200), record["http.response.status_code"])
-	assert.Equal(t, "NoError", record["error.type"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+
+			if test.expectsErr != "" {
+				require.ErrorContains(t, err, test.expectsErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestFrontDoorAccessLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-frontdooraccesslog.json")
+func TestUnmarshalLogs_Files(t *testing.T) {
+	// TODO @constanca-m Eventually this test function will be fully
+	// replaced with TestUnmarshalLogs_<category>, once all the currently supported
+	// categories are handled in category_logs.log
 
-	assert.NoError(t, err)
+	t.Parallel()
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	logsDir := "testdata"
+	expectedDir := "testdata"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"app_logs": {
+			logFilename:      "appservicelog/appservice_applogs.json",
+			expectedFilename: "appservicelog/appservice_applogs_expected.yaml",
+		},
+		"audit_logs": {
+			logFilename:      "appservicelog/appservice_auditlogs.json",
+			expectedFilename: "appservicelog/appservice_auditlogs_expected.yaml",
+		},
+		"audit_logs_2": {
+			logFilename:      "appservicelog/appservice_ipsecauditlogs.json",
+			expectedFilename: "appservicelog/appservice_ipsecauditlogs_expected.yaml",
+		},
+		"console_logs": {
+			logFilename:      "appservicelog/appservice_consolelogs.json",
+			expectedFilename: "appservicelog/appservice_consolelogs_expected.yaml",
+		},
+		"http_logs": {
+			logFilename:      "appservicelog/appservice_httplogs.json",
+			expectedFilename: "appservicelog/appservice_httplogs_expected.yaml",
+		},
+		"platform_logs": {
+			logFilename:      "appservicelog/appservice_platformlogs.json",
+			expectedFilename: "appservicelog/appservice_platformlogs_expected.yaml",
+		},
+		"front_door_health_probe_logs": {
+			logFilename:      "frontdoorhealthprobelog/valid_1.json",
+			expectedFilename: "frontdoorhealthprobelog/valid_1_expected.yaml",
+		},
+		"log_bad_time": {
+			logFilename:      "cornercases/bad_time.json",
+			expectedFilename: "cornercases/bad_time_expected.yaml",
+		},
+		"log_bad_level": {
+			logFilename:      "cornercases/bad_level.json",
+			expectedFilename: "cornercases/bad_level_expected.yaml",
+		},
+		"log_maximum": {
+			logFilename:      "cornercases/maximum.json",
+			expectedFilename: "cornercases/maximum_expected.yaml",
+		},
+		"log_minimum": {
+			logFilename:      "cornercases/minimum.json",
+			expectedFilename: "cornercases/minimum_expected.yaml",
+		},
+		"log_minimum_2": {
+			logFilename:      "cornercases/minimum-2.json",
+			expectedFilename: "cornercases/minimum-2_expected.yaml",
+		},
+		"log_identity_as_string": {
+			logFilename:      "cornercases/identity_as_string.json",
+			expectedFilename: "cornercases/identity_as_string_expected.yaml",
+		},
+		"log_identity_as_object": {
+			logFilename:      "cornercases/identity_as_object.json",
+			expectedFilename: "cornercases/identity_as_object_expected.yaml",
+		},
+	}
 
-	assert.Equal(t, "GET", record["http.request.method"])
-	assert.Equal(t, "1.1.0.0", record["network.protocol.version"])
-	assert.Equal(t, "TRACKING_REFERENCE", record["az.service_request_id"])
-	assert.Equal(t, "https://test.net/", record["url.full"])
-	assert.Equal(t, int64(1234), record["http.request.size"])
-	assert.Equal(t, int64(12345), record["http.response.size"])
-	assert.Equal(t, "Mozilla/5.0", record["user_agent.original"])
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, "0", record["client.port"])
-	assert.Equal(t, "23.23.23.23", record["network.peer.address"])
-	assert.Equal(t, float64(0.23), record["http.server.request.duration"])
-	assert.Equal(t, "https", record["network.protocol.name"])
-	assert.Equal(t, "tls", record["tls.protocol.name"])
-	assert.Equal(t, "1.3", record["tls.protocol.version"])
-	assert.Equal(t, "TLS_AES_256_GCM_SHA384", record["tls.cipher"])
-	assert.Equal(t, "secp384r1", record["tls.curve"])
-	assert.Equal(t, int64(200), record["http.response.status_code"])
-	assert.Equal(t, "REFERER", record["http.request.header.referer"])
-	assert.Equal(t, "NoError", record["error.type"])
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(logsDir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(expectedDir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestFrontDoorHealthProbeLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-frontdoorhealthprobelog.json")
+func TestUnmarshalLogs_Administrative(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/administrative"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "GET", record["http.request.method"])
-	assert.Equal(t, int64(200), record["http.response.status_code"])
-	assert.Equal(t, "https://probe.net/health", record["url.full"])
-	assert.Equal(t, "42.42.42.42", record["server.address"])
-	assert.Equal(t, 0.042, record["http.request.duration"])
-	assert.Equal(t, 0.00023, record["dns.lookup.duration"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestFrontDoorWAFLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-frontdoorwaflog.json")
+func TestUnmarshalLogs_Alert(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/alert"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+		"valid_2": {
+			logFilename:      "valid_2.json",
+			expectedFilename: "valid_2_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "TRACKING_REFERENCE", record["az.service_request_id"])
-	assert.Equal(t, "https://test.net/", record["url.full"])
-	assert.Equal(t, "test.net", record["server.address"])
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, "0", record["client.port"])
-	assert.Equal(t, "23.23.23.23", record["network.peer.address"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServiceAppLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appserviceapplogs.json")
+func TestUnmarshalLogs_Autoscale(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/autoscale"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "CONTAINER_ID", record["container.id"])
-	assert.Equal(t, "EXCEPTION_CLASS", record["exception.type"])
-	assert.Equal(t, "HOST", record["host.id"])
-	assert.Equal(t, "METHOD", record["code.function"])
-	assert.Equal(t, "FILEPATH", record["code.filepath"])
-	assert.Equal(t, "STACKTRACE", record["exception.stacktrace"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServiceConsoleLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appserviceconsolelogs.json")
+func TestUnmarshalLogs_Policy(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/policy"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "CONTAINER_ID", record["container.id"])
-	assert.Equal(t, "HOST", record["host.id"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServiceAuditLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appserviceauditlogs.json")
+func TestUnmarshalLogs_Recommendation(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/recommendation"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "USER_ID", record["enduser.id"])
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, "kudu", record["network.protocol.name"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServiceHTTPLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appservicehttplogs.json")
+func TestUnmarshalLogs_Security(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/security"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "test.com", record["url.domain"])
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, int64(80), record["server.port"])
-	assert.Equal(t, "/api/test/", record["url.path"])
-	assert.Equal(t, "foo=42", record["url.query"])
-	assert.Equal(t, "GET", record["http.request.method"])
-	assert.Equal(t, 0.42, record["http.server.request.duration"])
-	assert.Equal(t, int64(200), record["http.response.status_code"])
-	assert.Equal(t, int64(4242), record["http.request.body.size"])
-	assert.Equal(t, int64(42), record["http.response.body.size"])
-	assert.Equal(t, "Mozilla/5.0", record["user_agent.original"])
-	assert.Equal(t, "REFERER", record["http.request.header.referer"])
-	assert.Equal(t, "COMPUTER_NAME", record["host.name"])
-	assert.Equal(t, "http", record["network.protocol.name"])
-	assert.Equal(t, "1.1", record["network.protocol.version"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServicePlatformLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appserviceplatformlogs.json")
+func TestUnmarshalLogs_ServiceHealth(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/servicehealth"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "CONTAINER_ID", record["container.id"])
-	assert.Equal(t, "CONTAINER_NAME", record["container.name"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }
 
-func TestAppServiceIPSecAuditLog(t *testing.T) {
-	logs, err := loadJSONLogsAndApplySemanticConventions("log-appserviceipsecauditlogs.json")
+func TestUnmarshalLogs_ResourceHealth(t *testing.T) {
+	t.Parallel()
 
-	assert.NoError(t, err)
+	dir := "testdata/resourcehealth"
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"valid_1": {
+			logFilename:      "valid_1.json",
+			expectedFilename: "valid_1_expected.yaml",
+		},
+	}
 
-	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Map().AsRaw()
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
 
-	assert.Equal(t, "42.42.42.42", record["client.address"])
-	assert.Equal(t, "HOST", record["url.domain"])
-	assert.Equal(t, "FDID", record["http.request.header.x-azure-fdid"])
-	assert.Equal(t, "HEALTH_PROBE", record["http.request.header.x-fd-healthprobe"])
-	assert.Equal(t, "FORWARDED_FOR", record["http.request.header.x-forwarded-for"])
-	assert.Equal(t, "FORWARDED_HOST", record["http.request.header.x-forwarded-host"])
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, test.logFilename))
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			expectedLogs, err := golden.ReadLogs(filepath.Join(dir, test.expectedFilename))
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
+}
+
+func TestUnmarshalLogs_GateValidationError(t *testing.T) {
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsDontEmitV0LogConventionsFeatureGate.ID(), true))
+	defer func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsDontEmitV0LogConventionsFeatureGate.ID(), false))
+	}()
+
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
+
+	data, err := os.ReadFile("testdata/cornercases/minimum.json")
+	require.NoError(t, err)
+
+	_, err = u.UnmarshalLogs(data)
+	require.ErrorContains(t, err, "pkg.translator.azurelogs.DontEmitV0LogConventions cannot be enabled without enabling pkg.translator.azurelogs.EmitV1LogConventions")
+}
+
+func TestUnmarshalLogs_StableGates(t *testing.T) {
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsEmitV1LogConventionsFeatureGate.ID(), true))
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsDontEmitV0LogConventionsFeatureGate.ID(), true))
+	defer func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsDontEmitV0LogConventionsFeatureGate.ID(), false))
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.PkgTranslatorAzurelogsEmitV1LogConventionsFeatureGate.ID(), false))
+	}()
+
+	tests := map[string]struct {
+		logFilename      string
+		expectedFilename string
+	}{
+		"app_logs": {
+			logFilename:      "testdata/appservicelog/appservice_applogs.json",
+			expectedFilename: "testdata/appservicelog/appservice_applogs_stable_expected.yaml",
+		},
+		"minimum": {
+			logFilename:      "testdata/cornercases/minimum.json",
+			expectedFilename: "testdata/cornercases/minimum_stable_expected.yaml",
+		},
+	}
+
+	u := &ResourceLogsUnmarshaler{
+		Version: testBuildInfo.Version,
+		Logger:  zap.NewNop(),
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(test.logFilename)
+			require.NoError(t, err)
+
+			logs, err := u.UnmarshalLogs(data)
+			require.NoError(t, err)
+
+			// golden.WriteLogs(t, test.expectedFilename, logs)
+			expectedLogs, err := golden.ReadLogs(test.expectedFilename)
+			require.NoError(t, err)
+			require.NoError(t, plogtest.CompareLogs(expectedLogs, logs, plogtest.IgnoreResourceLogsOrder(), plogtest.IgnoreObservedTimestamp()))
+		})
+	}
 }

@@ -4,7 +4,6 @@
 package attributesprocessor
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +18,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterconfig"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterset"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor/internal/metadata"
 )
 
 // Common structure for all the Tests
@@ -32,7 +32,7 @@ type metricTestCase struct {
 func runIndividualMetricTestCase(t *testing.T, mt metricTestCase, mp processor.Metrics) {
 	t.Run(mt.name, func(t *testing.T) {
 		md := generateMetricData(mt.name, mt.inputAttributes)
-		assert.NoError(t, mp.ConsumeMetrics(context.Background(), md))
+		assert.NoError(t, mp.ConsumeMetrics(t.Context(), md))
 		require.NoError(t, pmetrictest.CompareMetrics(generateMetricData(mt.name, mt.expectedAttributes), md))
 	})
 }
@@ -83,19 +83,19 @@ func TestMetricProcessor_NilEmptyData(t *testing.T) {
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	oCfg := cfg.(*Config)
-	oCfg.Settings.Actions = []attraction.ActionKeyValue{
+	oCfg.Actions = []attraction.ActionKeyValue{
 		{Key: "attribute1", Action: attraction.INSERT, Value: 123},
 		{Key: "attribute1", Action: attraction.DELETE},
 	}
 
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), oCfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), oCfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, mp)
 	for i := range metricTestCases {
 		tc := metricTestCases[i]
 		t.Run(tc.name, func(t *testing.T) {
-			assert.NoError(t, mp.ConsumeMetrics(context.Background(), tc.input))
-			assert.EqualValues(t, tc.output, tc.input)
+			assert.NoError(t, mp.ConsumeMetrics(t.Context(), tc.input))
+			assert.Equal(t, tc.output, tc.input)
 		})
 	}
 }
@@ -152,7 +152,7 @@ func TestAttributes_FilterMetrics(t *testing.T) {
 		},
 		Config: *createConfig(filterset.Strict),
 	}
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, mp)
 
@@ -216,7 +216,7 @@ func TestAttributes_FilterMetricsByNameStrict(t *testing.T) {
 		Resources: []filterconfig.Attribute{{Key: "name", Value: "dont_apply"}},
 		Config:    *createConfig(filterset.Strict),
 	}
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, mp)
 
@@ -280,7 +280,7 @@ func TestAttributes_FilterMetricsByNameRegexp(t *testing.T) {
 		Resources: []filterconfig.Attribute{{Key: "name", Value: ".*dont_apply$"}},
 		Config:    *createConfig(filterset.Regexp),
 	}
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, mp)
 
@@ -339,7 +339,7 @@ func TestMetricAttributes_Hash(t *testing.T) {
 		{Key: "user.authenticated", Action: attraction.HASH},
 	}
 
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, mp)
 
@@ -347,6 +347,7 @@ func TestMetricAttributes_Hash(t *testing.T) {
 		runIndividualMetricTestCase(t, tc, mp)
 	}
 }
+
 func TestMetricAttributes_Convert(t *testing.T) {
 	testCases := []metricTestCase{
 		{
@@ -396,12 +397,124 @@ func TestMetricAttributes_Convert(t *testing.T) {
 		{Key: "to.string", Action: attraction.CONVERT, ConvertedType: "string"},
 	}
 
-	tp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	tp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, tp)
 
 	for _, tt := range testCases {
 		runIndividualMetricTestCase(t, tt, tp)
+	}
+}
+
+func TestMetricProcessor_WithDefaultValue(t *testing.T) {
+	testCases := []struct {
+		name               string
+		config             *Config
+		inputAttributes    map[string]any
+		expectedAttributes map[string]any
+	}{
+		{
+			name: "default_value_used_when_from_attribute_missing",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "env", FromAttribute: "environment", DefaultValue: "production", Action: attraction.INSERT},
+					},
+				},
+			},
+			inputAttributes: map[string]any{},
+			expectedAttributes: map[string]any{
+				"env": "production",
+			},
+		},
+		{
+			name: "default_value_not_used_when_from_attribute_exists",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "env", FromAttribute: "environment", DefaultValue: "production", Action: attraction.INSERT},
+					},
+				},
+			},
+			inputAttributes: map[string]any{
+				"environment": "staging",
+			},
+			expectedAttributes: map[string]any{
+				"environment": "staging",
+				"env":         "staging",
+			},
+		},
+		{
+			name: "default_value_with_upsert_creates_new_attribute",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "region", FromAttribute: "cloud.region", DefaultValue: "us-east-1", Action: attraction.UPSERT},
+					},
+				},
+			},
+			inputAttributes:    map[string]any{},
+			expectedAttributes: map[string]any{"region": "us-east-1"},
+		},
+		{
+			name: "default_value_with_update_does_not_create_new",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "service.namespace", FromAttribute: "namespace", DefaultValue: "default", Action: attraction.UPDATE},
+					},
+				},
+			},
+			inputAttributes:    map[string]any{},
+			expectedAttributes: map[string]any{},
+		},
+		{
+			name: "default_value_with_update_modifies_existing",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "service.namespace", FromAttribute: "namespace", DefaultValue: "default", Action: attraction.UPDATE},
+					},
+				},
+			},
+			inputAttributes: map[string]any{
+				"service.namespace": "old",
+			},
+			expectedAttributes: map[string]any{
+				"service.namespace": "default",
+			},
+		},
+		{
+			name: "default_value_with_different_types",
+			config: &Config{
+				Settings: attraction.Settings{
+					Actions: []attraction.ActionKeyValue{
+						{Key: "string_attr", FromAttribute: "missing", DefaultValue: "default_string", Action: attraction.INSERT},
+						{Key: "int_attr", FromAttribute: "missing", DefaultValue: 42, Action: attraction.INSERT},
+						{Key: "bool_attr", FromAttribute: "missing", DefaultValue: true, Action: attraction.INSERT},
+					},
+				},
+			},
+			inputAttributes: map[string]any{},
+			expectedAttributes: map[string]any{
+				"string_attr": "default_string",
+				"int_attr":    int64(42),
+				"bool_attr":   true,
+			},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			factory := NewFactory()
+			mp, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), tt.config, consumertest.NewNop())
+			require.NoError(t, err)
+			require.NotNil(t, mp)
+
+			md := generateMetricData(tt.name, tt.inputAttributes)
+			assert.NoError(t, mp.ConsumeMetrics(t.Context(), md))
+			require.NoError(t, pmetrictest.CompareMetrics(generateMetricData(tt.name, tt.expectedAttributes), md))
+		})
 	}
 }
 
@@ -441,7 +554,7 @@ func BenchmarkAttributes_FilterMetricsByName(b *testing.B) {
 		Config:    *createConfig(filterset.Regexp),
 		Resources: []filterconfig.Attribute{{Key: "name", Value: "^apply.*"}},
 	}
-	mp, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, consumertest.NewNop())
+	mp, err := factory.CreateMetrics(b.Context(), processortest.NewNopSettings(metadata.Type), cfg, consumertest.NewNop())
 	require.NoError(b, err)
 	require.NotNil(b, mp)
 
@@ -449,8 +562,8 @@ func BenchmarkAttributes_FilterMetricsByName(b *testing.B) {
 		md := generateMetricData(tc.name, tc.inputAttributes)
 
 		b.Run(tc.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				assert.NoError(b, mp.ConsumeMetrics(context.Background(), md))
+			for b.Loop() {
+				assert.NoError(b, mp.ConsumeMetrics(b.Context(), md))
 			}
 		})
 

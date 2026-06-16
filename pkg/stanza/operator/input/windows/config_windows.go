@@ -6,10 +6,11 @@
 package windows // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/input/windows"
 
 import (
-	"fmt"
+	"errors"
 
 	"go.opentelemetry.io/collector/component"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator"
 )
 
@@ -24,33 +25,61 @@ func (c *Config) Build(set component.TelemetrySettings) (operator.Operator, erro
 		return nil, err
 	}
 
-	if c.Channel == "" {
-		return nil, fmt.Errorf("missing required `channel` field")
+	if c.Channel == "" && c.Query == nil && c.Path == nil {
+		return nil, errors.New("either `channel`, `query` or `path` must be set")
+	}
+
+	if c.Path != nil && (c.Channel != "" || c.Query != nil) {
+		return nil, errors.New("the `path` field cannot be used with `channel` or `query`")
+	}
+
+	if c.Channel != "" && c.Query != nil {
+		return nil, errors.New("either `channel` or `query` must be set, but not both")
 	}
 
 	if c.MaxReads < 1 {
-		return nil, fmt.Errorf("the `max_reads` field must be greater than zero")
+		return nil, errors.New("the `max_reads` field must be greater than zero")
 	}
 
 	if c.StartAt != "end" && c.StartAt != "beginning" {
-		return nil, fmt.Errorf("the `start_at` field must be set to `beginning` or `end`")
+		return nil, errors.New("the `start_at` field must be set to `beginning` or `end`")
+	}
+
+	if c.EventDataFormat != EventDataFormatMap && c.EventDataFormat != EventDataFormatArray {
+		return nil, errors.New("the `event_data_format` field must be set to `map` or `array`")
 	}
 
 	if (c.Remote.Server != "" || c.Remote.Username != "" || c.Remote.Password != "") && // any not empty
 		(c.Remote.Server == "" || c.Remote.Username == "" || c.Remote.Password == "") { // any empty
-		return nil, fmt.Errorf("remote configuration must have non-empty `username` and `password`")
+		return nil, errors.New("remote configuration must have non-empty `username` and `password`")
+	}
+
+	eventDrivenScraping := c.EventDrivenScraping || metadata.StanzaWindowsEventDrivenScrapingFeatureGate.IsEnabled()
+
+	maxEventsPerPoll := c.MaxEventsPerPoll
+	if eventDrivenScraping {
+		maxEventsPerPoll = 0
 	}
 
 	input := &Input{
-		InputOperator:    inputOperator,
-		buffer:           NewBuffer(),
-		channel:          c.Channel,
-		maxReads:         c.MaxReads,
-		startAt:          c.StartAt,
-		pollInterval:     c.PollInterval,
-		raw:              c.Raw,
-		excludeProviders: excludeProvidersSet(c.ExcludeProviders),
-		remote:           c.Remote,
+		InputOperator:            inputOperator,
+		buffer:                   NewBuffer(),
+		channel:                  c.Channel,
+		ignoreChannelErrors:      c.IgnoreChannelErrors,
+		maxReads:                 c.MaxReads,
+		maxEventsPerPollCycle:    maxEventsPerPoll,
+		currentMaxReads:          c.MaxReads,
+		startAt:                  c.StartAt,
+		pollInterval:             c.PollInterval,
+		waitTimeout:              c.WaitTimeout,
+		eventDrivenScraping:      eventDrivenScraping,
+		raw:                      c.Raw,
+		eventDataFormat:          c.EventDataFormat,
+		includeLogRecordOriginal: c.IncludeLogRecordOriginal,
+		excludeProviders:         excludeProvidersSet(c.ExcludeProviders),
+		remote:                   c.Remote,
+		query:                    c.Query,
+		path:                     c.Path,
 	}
 	input.startRemoteSession = input.defaultStartRemoteSession
 

@@ -5,23 +5,25 @@ package geoipprocessor
 
 import (
 	"context"
-	"net"
+	"errors"
+	"net/netip"
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processortest"
 	"go.opentelemetry.io/otel/attribute"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetricassert"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/ptracetest"
 	conventions "github.com/open-telemetry/opentelemetry-collector-contrib/processor/geoipprocessor/internal/convention"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/geoipprocessor/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/geoipprocessor/internal/provider"
 )
 
@@ -35,11 +37,11 @@ type providerFactoryMock struct {
 }
 
 type providerMock struct {
-	LocationF func(context.Context, net.IP) (attribute.Set, error)
+	LocationF func(context.Context, netip.Addr) (attribute.Set, error)
+	CloseF    func(context.Context) error
 }
 
 var (
-	_ provider.GeoIPProvider        = (*providerMock)(nil)
 	_ provider.GeoIPProvider        = (*providerMock)(nil)
 	_ provider.GeoIPProviderFactory = (*providerFactoryMock)(nil)
 )
@@ -56,13 +58,20 @@ func (fm *providerFactoryMock) CreateGeoIPProvider(ctx context.Context, settings
 	return fm.CreateGeoIPProviderF(ctx, settings, cfg)
 }
 
-func (pm *providerMock) Location(ctx context.Context, ip net.IP) (attribute.Set, error) {
+func (pm *providerMock) Location(ctx context.Context, ip netip.Addr) (attribute.Set, error) {
 	return pm.LocationF(ctx, ip)
 }
 
+func (pm *providerMock) Close(ctx context.Context) error {
+	return pm.CloseF(ctx)
+}
+
 var baseMockProvider = providerMock{
-	LocationF: func(context.Context, net.IP) (attribute.Set, error) {
+	LocationF: func(context.Context, netip.Addr) (attribute.Set, error) {
 		return attribute.Set{}, nil
+	},
+	CloseF: func(context.Context) error {
+		return nil
 	},
 }
 
@@ -76,58 +85,60 @@ var baseMockFactory = providerFactoryMock{
 }
 
 var baseProviderMock = providerMock{
-	LocationF: func(context.Context, net.IP) (attribute.Set, error) {
+	LocationF: func(context.Context, netip.Addr) (attribute.Set, error) {
 		return attribute.Set{}, nil
+	},
+	CloseF: func(context.Context) error {
+		return nil
 	},
 }
 
 var testCases = []struct {
-	name             string
-	goldenDir        string
-	context          ContextID
-	lookupAttributes []attribute.Key
+	name       string
+	goldenDir  string
+	context    ContextID
+	attributes []attribute.Key
 }{
 	{
-		name:             "default source.address attribute, not found",
-		goldenDir:        "no_source_address",
-		context:          resource,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "default source.address attribute, not found",
+		goldenDir: "resource_no_source_address",
+		context:   resource,
 	},
 	{
-		name:             "default source.address attribute",
-		goldenDir:        "source_address",
-		context:          resource,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "default source.address attribute",
+		goldenDir: "resource_source_address",
+		context:   resource,
 	},
 	{
-		name:             "default source.address attribute no geo metadata found by providers",
-		goldenDir:        "source_address_geo_not_found",
-		context:          resource,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "default source.address attribute no geo metadata found by providers",
+		goldenDir: "resource_source_address_geo_not_found",
+		context:   resource,
 	},
 	{
-		name:             "default source.ip attribute with an unspecified IP address should be skipped",
-		goldenDir:        "unspecified_address",
-		context:          resource,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "default source.ip attribute with an unspecified IP address should be skipped",
+		goldenDir: "resource_unspecified_address",
+		context:   resource,
 	},
 	{
-		name:             "custom source attributes",
-		goldenDir:        "custom_sources",
-		context:          resource,
-		lookupAttributes: []attribute.Key{"ip", "host.ip"},
+		name:      "do not add resource attributes with an invalid ip",
+		goldenDir: "resource_invalid_address",
+		context:   resource,
 	},
 	{
-		name:             "do not add resource attributes with an invalid ip",
-		goldenDir:        "invalid_address",
-		context:          resource,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "source address located in the record attributes",
+		goldenDir: "record_source_address",
+		context:   record,
 	},
 	{
-		name:             "source address located in inner attributes",
-		goldenDir:        "attribute_source_address",
-		context:          record,
-		lookupAttributes: defaultResourceAttributes,
+		name:      "client address located in the record attributes",
+		goldenDir: "record_client_address",
+		context:   record,
+	},
+	{
+		name:       "custom address located in the record attributes",
+		goldenDir:  "record_custom_address",
+		context:    record,
+		attributes: []attribute.Key{"source.address", "client.address", "custom.address"},
 	},
 }
 
@@ -138,26 +149,24 @@ func compareAllSignals(cfg component.Config, goldenDir string) func(t *testing.T
 
 		// compare metrics
 		nextMetrics := new(consumertest.MetricsSink)
-		metricsProcessor, err := factory.CreateMetrics(context.Background(), processortest.NewNopSettings(), cfg, nextMetrics)
+		metricsProcessor, err := factory.CreateMetrics(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, nextMetrics)
 		require.NoError(t, err)
 
 		inputMetrics, err := golden.ReadMetrics(filepath.Join(dir, "input-metrics.yaml"))
 		require.NoError(t, err)
 
-		expectedMetrics, err := golden.ReadMetrics(filepath.Join(dir, "output-metrics.yaml"))
+		err = metricsProcessor.ConsumeMetrics(t.Context(), inputMetrics)
 		require.NoError(t, err)
-
-		err = metricsProcessor.ConsumeMetrics(context.Background(), inputMetrics)
-		require.NoError(t, err)
+		require.NoError(t, metricsProcessor.Shutdown(t.Context()))
 
 		actualMetrics := nextMetrics.AllMetrics()
 		require.Len(t, actualMetrics, 1)
-		// golden.WriteMetrics(t, filepath.Join(dir, "output-metrics.yaml"), actualMetrics[0])
-		require.NoError(t, pmetrictest.CompareMetrics(expectedMetrics, actualMetrics[0]))
+
+		require.NoError(t, pmetricassert.AssertMetrics(filepath.Join(dir, "output-metrics.assert.yaml"), actualMetrics[0]))
 
 		// compare traces
 		nextTraces := new(consumertest.TracesSink)
-		tracesProcessor, err := factory.CreateTraces(context.Background(), processortest.NewNopSettings(), cfg, nextTraces)
+		tracesProcessor, err := factory.CreateTraces(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, nextTraces)
 		require.NoError(t, err)
 
 		inputTraces, err := golden.ReadTraces(filepath.Join(dir, "input-traces.yaml"))
@@ -166,8 +175,9 @@ func compareAllSignals(cfg component.Config, goldenDir string) func(t *testing.T
 		expectedTraces, err := golden.ReadTraces(filepath.Join(dir, "output-traces.yaml"))
 		require.NoError(t, err)
 
-		err = tracesProcessor.ConsumeTraces(context.Background(), inputTraces)
+		err = tracesProcessor.ConsumeTraces(t.Context(), inputTraces)
 		require.NoError(t, err)
+		require.NoError(t, tracesProcessor.Shutdown(t.Context()))
 
 		actualTraces := nextTraces.AllTraces()
 		require.Len(t, actualTraces, 1)
@@ -176,13 +186,13 @@ func compareAllSignals(cfg component.Config, goldenDir string) func(t *testing.T
 
 		// compare logs
 		nextLogs := new(consumertest.LogsSink)
-		logsProcessor, err := factory.CreateLogs(context.Background(), processortest.NewNopSettings(), cfg, nextLogs)
+		logsProcessor, err := factory.CreateLogs(t.Context(), processortest.NewNopSettings(metadata.Type), cfg, nextLogs)
 		require.NoError(t, err)
 
 		inputLogs, err := golden.ReadLogs(filepath.Join(dir, "input-logs.yaml"))
 		require.NoError(t, err)
 
-		err = logsProcessor.ConsumeLogs(context.Background(), inputLogs)
+		err = logsProcessor.ConsumeLogs(t.Context(), inputLogs)
 		require.NoError(t, err)
 
 		expectedLogs, err := golden.ReadLogs(filepath.Join(dir, "output-logs.yaml"))
@@ -192,6 +202,7 @@ func compareAllSignals(cfg component.Config, goldenDir string) func(t *testing.T
 		require.Len(t, actualLogs, 1)
 		// golden.WriteLogs(t, filepath.Join(dir, "output-logs.yaml"), actualLogs[0])
 		require.NoError(t, plogtest.CompareLogs(expectedLogs, actualLogs[0]))
+		require.NoError(t, logsProcessor.Shutdown(t.Context()))
 	}
 }
 
@@ -202,10 +213,9 @@ func TestProcessor(t *testing.T) {
 		return &baseProviderMock, nil
 	}
 
-	baseProviderMock.LocationF = func(_ context.Context, sourceIP net.IP) (attribute.Set, error) {
-		if sourceIP.Equal(net.IPv4(1, 2, 3, 4)) {
+	baseProviderMock.LocationF = func(_ context.Context, sourceIP netip.Addr) (attribute.Set, error) {
+		if sourceIP.Compare(netip.AddrFrom4([4]byte{1, 2, 3, 4})) == 0 {
 			return attribute.NewSet([]attribute.KeyValue{
-				semconv.SourceAddress("1.2.3.4"),
 				attribute.String(conventions.AttributeGeoCityName, "Boxford"),
 				attribute.String(conventions.AttributeGeoContinentCode, "EU"),
 				attribute.String(conventions.AttributeGeoContinentName, "Europe"),
@@ -226,8 +236,32 @@ func TestProcessor(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{Context: tt.context, Providers: map[string]provider.Config{providerKey: &providerConfigMock{}}}
+			attributes := defaultAttributes
+			if tt.attributes != nil {
+				attributes = tt.attributes
+			}
+			cfg := &Config{Context: tt.context, Providers: map[string]provider.Config{providerKey: &providerConfigMock{}}, Attributes: attributes}
 			compareAllSignals(cfg, tt.goldenDir)(t)
 		})
 	}
+}
+
+func TestProcessorShutdownError(t *testing.T) {
+	// processor with two mocked providers that return error on close
+	processor := geoIPProcessor{
+		providers: []provider.GeoIPProvider{
+			&providerMock{
+				CloseF: func(context.Context) error {
+					return errors.New("test error 1")
+				},
+			},
+			&providerMock{
+				CloseF: func(context.Context) error {
+					return errors.New("test error 2")
+				},
+			},
+		},
+	}
+
+	assert.EqualError(t, processor.shutdown(t.Context()), "test error 1; test error 2")
 }

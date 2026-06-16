@@ -4,11 +4,9 @@
 package honeycombmarkerexporter
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +14,8 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/honeycombmarkerexporter/internal/metadata"
 )
 
 func TestExportMarkers(t *testing.T) {
@@ -116,6 +116,31 @@ func TestExportMarkers(t *testing.T) {
 			},
 			expectedURL: "/1/markers/__all__",
 		},
+		{
+			name: "path context syntax",
+			config: Config{
+				APIKey: "test-apikey",
+				Markers: []Marker{
+					{
+						Type:        "test-type",
+						MessageKey:  "message",
+						URLKey:      "url",
+						DatasetSlug: "test-dataset",
+						Rules: Rules{
+							LogConditions: []string{
+								`log.body == "test"`,
+							},
+						},
+					},
+				},
+			},
+			attributeMap: map[string]string{
+				"message": "this is a test message",
+				"url":     "https://api.testhost.io",
+				"type":    "test-type",
+			},
+			expectedURL: "/1/markers/test-dataset",
+		},
 	}
 
 	for _, tt := range tests {
@@ -126,7 +151,7 @@ func TestExportMarkers(t *testing.T) {
 
 				assert.NoError(t, err)
 
-				assert.Equal(t, len(tt.attributeMap), len(decodedBody))
+				assert.Len(t, decodedBody, len(tt.attributeMap))
 
 				for attr := range tt.attributeMap {
 					assert.Equal(t, tt.attributeMap[attr], decodedBody[attr])
@@ -138,7 +163,7 @@ func TestExportMarkers(t *testing.T) {
 
 				userAgent := req.Header.Get(userAgentHeaderKey)
 				assert.NotEmpty(t, userAgent)
-				assert.True(t, strings.Contains(userAgent, "OpenTelemetry Collector"))
+				assert.Contains(t, userAgent, "OpenTelemetry Collector")
 
 				rw.WriteHeader(http.StatusAccepted)
 			}))
@@ -148,14 +173,14 @@ func TestExportMarkers(t *testing.T) {
 			config.APIURL = markerServer.URL
 
 			f := NewFactory()
-			exp, err := f.CreateLogsExporter(context.Background(), exportertest.NewNopSettings(), &config)
+			exp, err := f.CreateLogs(t.Context(), exportertest.NewNopSettings(metadata.Type), &config)
 			require.NoError(t, err)
 
-			err = exp.Start(context.Background(), componenttest.NewNopHost())
+			err = exp.Start(t.Context(), componenttest.NewNopHost())
 			assert.NoError(t, err)
 
 			logs := constructLogs(tt.attributeMap)
-			err = exp.ConsumeLogs(context.Background(), logs)
+			err = exp.ConsumeLogs(t.Context(), logs)
 			assert.NoError(t, err)
 		})
 	}
@@ -236,14 +261,14 @@ func TestExportMarkers_Error(t *testing.T) {
 			config.APIURL = markerServer.URL
 
 			f := NewFactory()
-			exp, err := f.CreateLogsExporter(context.Background(), exportertest.NewNopSettings(), &config)
+			exp, err := f.CreateLogs(t.Context(), exportertest.NewNopSettings(metadata.Type), &config)
 			require.NoError(t, err)
 
-			err = exp.Start(context.Background(), componenttest.NewNopHost())
+			err = exp.Start(t.Context(), componenttest.NewNopHost())
 			assert.NoError(t, err)
 
 			logs := constructLogs(map[string]string{})
-			err = exp.ConsumeLogs(context.Background(), logs)
+			err = exp.ConsumeLogs(t.Context(), logs)
 			assert.ErrorContains(t, err, tt.errorMessage)
 		})
 	}
@@ -287,14 +312,14 @@ func TestExportMarkers_NoAPICall(t *testing.T) {
 			config.APIURL = markerServer.URL
 
 			f := NewFactory()
-			exp, err := f.CreateLogsExporter(context.Background(), exportertest.NewNopSettings(), &config)
+			exp, err := f.CreateLogs(t.Context(), exportertest.NewNopSettings(metadata.Type), &config)
 			require.NoError(t, err)
 
-			err = exp.Start(context.Background(), componenttest.NewNopHost())
+			err = exp.Start(t.Context(), componenttest.NewNopHost())
 			assert.NoError(t, err)
 
 			logs := constructLogs(map[string]string{})
-			err = exp.ConsumeLogs(context.Background(), logs)
+			err = exp.ConsumeLogs(t.Context(), logs)
 			assert.NoError(t, err)
 		})
 	}

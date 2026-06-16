@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- SHA1 is the algorithm mongodbatlas uses, it must be used to calculate the HMAC signature
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,10 +22,12 @@ import (
 	"go.mongodb.org/atlas/mongodbatlas"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
+	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
-	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/extension/experimental/storage"
+	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	rcvr "go.opentelemetry.io/collector/receiver"
@@ -60,17 +61,17 @@ type alertsClient interface {
 }
 
 type alertsReceiver struct {
-	addr        string
-	secret      string
-	server      *http.Server
-	mode        string
-	tlsSettings *configtls.ServerConfig
-	consumer    consumer.Logs
-	wg          *sync.WaitGroup
+	secret       string
+	mode         string
+	serverConfig *confighttp.ServerConfig
+	consumer     consumer.Logs
+	wg           *sync.WaitGroup
+	listenClose  func(ctx context.Context) error
 
 	// only relevant in `poll` mode
 	projects          []*ProjectConfig
 	client            alertsClient
+	baseURL           string
 	privateKey        string
 	publicKey         string
 	backoffConfig     configretry.BackOffConfig
@@ -85,12 +86,12 @@ type alertsReceiver struct {
 
 func newAlertsReceiver(params rcvr.Settings, baseConfig *Config, consumer consumer.Logs) (*alertsReceiver, error) {
 	cfg := baseConfig.Alerts
-	var tlsConfig *tls.Config
 
+	// Validate TLS
 	if cfg.TLS != nil {
 		var err error
 
-		tlsConfig, err = cfg.TLS.LoadTLSConfig(context.Background())
+		_, err = cfg.TLS.LoadTLSConfig(context.Background())
 		if err != nil {
 			return nil, err
 		}
@@ -101,13 +102,12 @@ func newAlertsReceiver(params rcvr.Settings, baseConfig *Config, consumer consum
 	}
 
 	recv := &alertsReceiver{
-		addr:              cfg.Endpoint,
 		secret:            string(cfg.Secret),
-		tlsSettings:       cfg.TLS,
 		consumer:          consumer,
 		mode:              cfg.Mode,
 		projects:          cfg.Projects,
 		backoffConfig:     baseConfig.BackOffConfig,
+		baseURL:           baseConfig.BaseURL,
 		publicKey:         baseConfig.PublicKey,
 		privateKey:        string(baseConfig.PrivateKey),
 		wg:                &sync.WaitGroup{},
@@ -119,15 +119,26 @@ func newAlertsReceiver(params rcvr.Settings, baseConfig *Config, consumer consum
 	}
 
 	if recv.mode == alertModePoll {
-		recv.client = internal.NewMongoDBAtlasClient(recv.publicKey, recv.privateKey, recv.backoffConfig, recv.telemetrySettings.Logger)
+		client, err := internal.NewMongoDBAtlasClient(recv.baseURL, recv.publicKey, recv.privateKey, recv.backoffConfig, recv.telemetrySettings.Logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create MongoDB Atlas client for alerts receiver: %w", err)
+		}
+
+		recv.client = client
 		return recv, nil
 	}
-	s := &http.Server{
-		TLSConfig:         tlsConfig,
-		Handler:           http.HandlerFunc(recv.handleRequest),
+	serverConfig := confighttp.ServerConfig{
+		NetAddr: confignet.AddrConfig{
+			Endpoint:  cfg.Endpoint,
+			Transport: "tcp",
+		},
 		ReadHeaderTimeout: 20 * time.Second,
 	}
-	recv.server = s
+	if cfg.TLS != nil {
+		serverConfig.TLS = configoptional.Some(*cfg.TLS)
+	}
+	recv.serverConfig = &serverConfig
+
 	return recv, nil
 }
 
@@ -147,9 +158,7 @@ func (a *alertsReceiver) startPolling(ctx context.Context, storageClient storage
 	}
 
 	t := time.NewTicker(a.pollInterval)
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
+	a.wg.Go(func() {
 		for {
 			select {
 			case <-t.C:
@@ -162,7 +171,7 @@ func (a *alertsReceiver) startPolling(ctx context.Context, storageClient storage
 				return
 			}
 		}
-	}()
+	})
 
 	return nil
 }
@@ -212,49 +221,34 @@ func (a *alertsReceiver) pollAndProcess(ctx context.Context, pc *ProjectConfig, 
 
 func (a *alertsReceiver) startListening(ctx context.Context, host component.Host) error {
 	a.telemetrySettings.Logger.Debug("starting alerts receiver in listening mode")
-	// We use a.server.Serve* over a.server.ListenAndServe*
-	// So that we can catch and return errors relating to binding to network interface on start.
-	var lc net.ListenConfig
-
-	l, err := lc.Listen(ctx, "tcp", a.addr)
+	server, err := a.serverConfig.ToServer(
+		ctx,
+		host.GetExtensions(),
+		a.telemetrySettings,
+		http.HandlerFunc(a.handleRequest),
+	)
 	if err != nil {
 		return err
 	}
-
-	a.wg.Add(1)
-	if a.tlsSettings != nil {
-		go func() {
-			defer a.wg.Done()
-
-			a.telemetrySettings.Logger.Debug("Starting ServeTLS",
-				zap.String("address", a.addr),
-				zap.String("certfile", a.tlsSettings.CertFile),
-				zap.String("keyfile", a.tlsSettings.KeyFile))
-
-			err := a.server.ServeTLS(l, a.tlsSettings.CertFile, a.tlsSettings.KeyFile)
-
-			a.telemetrySettings.Logger.Debug("Serve TLS done")
-
-			if err != http.ErrServerClosed {
-				a.telemetrySettings.Logger.Error("ServeTLS failed", zap.Error(err))
-				componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
-			}
-		}()
-	} else {
-		go func() {
-			defer a.wg.Done()
-
-			a.telemetrySettings.Logger.Debug("Starting Serve", zap.String("address", a.addr))
-
-			err := a.server.Serve(l)
-
-			a.telemetrySettings.Logger.Debug("Serve done")
-
-			if err != http.ErrServerClosed {
-				componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
-			}
-		}()
+	listener, err := a.serverConfig.ToListener(ctx)
+	if err != nil {
+		return err
 	}
+	a.listenClose = server.Shutdown
+	a.wg.Go(func() {
+		a.telemetrySettings.Logger.Debug(
+			"Starting Serve",
+			zap.String("address", a.serverConfig.NetAddr.Endpoint),
+		)
+
+		err := server.Serve(listener)
+
+		a.telemetrySettings.Logger.Debug("Serve done")
+
+		if err != http.ErrServerClosed {
+			componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
+		}
+	})
 	return nil
 }
 
@@ -320,11 +314,12 @@ func (a *alertsReceiver) Shutdown(ctx context.Context) error {
 
 func (a *alertsReceiver) shutdownListener(ctx context.Context) error {
 	a.telemetrySettings.Logger.Debug("Shutting down server")
-	err := a.server.Shutdown(ctx)
-	if err != nil {
-		return err
+	if a.listenClose != nil {
+		err := a.listenClose(ctx)
+		if err != nil {
+			return err
+		}
 	}
-
 	a.telemetrySettings.Logger.Debug("Waiting for shutdown to complete.")
 	a.wg.Wait()
 	return nil
@@ -337,7 +332,7 @@ func (a *alertsReceiver) shutdownPoller(ctx context.Context) error {
 	return a.writeCheckpoint(ctx)
 }
 
-func (a *alertsReceiver) convertAlerts(now pcommon.Timestamp, alerts []mongodbatlas.Alert, project *mongodbatlas.Project) (plog.Logs, error) {
+func (a *alertsReceiver) convertAlerts(now pcommon.Timestamp, alerts []*mongodbatlas.Alert, project *mongodbatlas.Project) (plog.Logs, error) {
 	logs := plog.NewLogs()
 	var errs error
 	for i := range alerts {
@@ -498,7 +493,6 @@ func payloadToLogs(now time.Time, payload []byte) (plog.Logs, error) {
 
 		attrs.PutStr("net.peer.name", host)
 		attrs.PutInt("net.peer.port", port)
-
 	}
 
 	return logs, nil
@@ -547,17 +541,18 @@ func (a *alertsReceiver) writeCheckpoint(ctx context.Context) error {
 	return a.storageClient.Set(ctx, alertCacheKey, marshalBytes)
 }
 
-func (a *alertsReceiver) applyFilters(pConf *ProjectConfig, alerts []mongodbatlas.Alert) []mongodbatlas.Alert {
-	filtered := []mongodbatlas.Alert{}
+func (a *alertsReceiver) applyFilters(pConf *ProjectConfig, alerts []mongodbatlas.Alert) []*mongodbatlas.Alert {
+	filtered := []*mongodbatlas.Alert{}
 
-	var lastRecordedTime = pcommon.Timestamp(0).AsTime()
+	lastRecordedTime := pcommon.Timestamp(0).AsTime()
 	if a.record.LastRecordedTime != nil {
 		lastRecordedTime = *a.record.LastRecordedTime
 	}
 	// we need to maintain two timestamps in order to not conflict while iterating
-	var latestInPayload = pcommon.Timestamp(0).AsTime()
+	latestInPayload := pcommon.Timestamp(0).AsTime()
 
-	for _, alert := range alerts {
+	for i := range alerts {
+		alert := &alerts[i]
 		updatedTime, err := time.Parse(time.RFC3339, alert.Updated)
 		if err != nil {
 			a.telemetrySettings.Logger.Warn("unable to interpret updated time for alert, expecting a RFC3339 timestamp", zap.String("timestamp", alert.Updated))

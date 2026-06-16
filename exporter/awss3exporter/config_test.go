@@ -7,10 +7,14 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/otelcol/otelcoltest"
 	"go.uber.org/multierr"
 
@@ -23,8 +27,6 @@ func TestLoadConfig(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Exporters[metadata.Type] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "default.yaml"), factories)
 
 	require.NoError(t, err)
@@ -32,15 +34,28 @@ func TestLoadConfig(t *testing.T) {
 
 	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
 	encoding := component.MustNewIDWithName("foo", "bar")
+
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	backoffConfig := configretry.NewDefaultBackOffConfig()
+
 	assert.Equal(t, &Config{
+		QueueSettings:         queueCfg,
+		TimeoutSettings:       timeoutCfg,
 		Encoding:              &encoding,
 		EncodingFileExtension: "baz",
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "foo",
-			S3Partition: "minute",
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_json",
+		BackOffConfig: backoffConfig,
 	}, e,
 	)
 }
@@ -51,25 +66,162 @@ func TestConfig(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Exporters[factory.Type()] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(
 		filepath.Join("testdata", "config.yaml"), factories)
 
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
+	queueCfg := configoptional.Some(func() exporterhelper.QueueBatchConfig {
+		queue := exporterhelper.NewDefaultQueueConfig()
+		queue.NumConsumers = 23
+		queue.QueueSize = 42
+		return queue
+	}())
+
+	timeoutCfg := exporterhelper.TimeoutConfig{
+		Timeout: 8,
+	}
+
 	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "foo",
-			S3Prefix:    "bar",
-			S3Partition: "minute",
-			Endpoint:    "http://endpoint.com",
+			Region:              "us-east-1",
+			S3Bucket:            "foo",
+			S3Prefix:            "bar",
+			S3PartitionFormat:   "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionTimezone: "Europe/London",
+			Endpoint:            "http://endpoint.com",
+			StorageClass:        "STANDARD",
+			RetryMode:           DefaultRetryMode,
+			RetryMaxAttempts:    DefaultRetryMaxAttempts,
+			RetryMaxBackoff:     DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_json",
+		BackOffConfig: configretry.BackOffConfig{
+			Enabled:             true,
+			InitialInterval:     5 * time.Second,
+			RandomizationFactor: 0.3,
+			Multiplier:          1.5,
+			MaxInterval:         30 * time.Second,
+			MaxElapsedTime:      5 * time.Minute,
+		},
+	}, e,
+	)
+}
+
+func TestConfigS3StorageClass(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_storage_class.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD_IA",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestConfigS3ACL(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_acl.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD",
+			ACL:               "bucket-owner-read",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestConfigS3ACLDefined(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_canned-acl.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD",
+			ACL:               "bucket-owner-full-control",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
 }
@@ -80,27 +232,35 @@ func TestConfigForS3CompatibleSystems(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Exporters[factory.Type()] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(
 		filepath.Join("testdata", "config-s3-compatible-systems.yaml"), factories)
 
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
 	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:           "us-east-1",
-			S3Bucket:         "foo",
-			S3Prefix:         "bar",
-			S3Partition:      "minute",
-			Endpoint:         "alternative-s3-system.example.com",
-			S3ForcePathStyle: true,
-			DisableSSL:       true,
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "alternative-s3-system.example.com",
+			S3ForcePathStyle:  true,
+			DisableSSL:        true,
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_json",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
 }
@@ -176,6 +336,50 @@ func TestConfig_Validate(t *testing.T) {
 			}(),
 			errExpected: errors.New("region is required"),
 		},
+		{
+			name: "valid storage class GLACIER_IR",
+			config: func() *Config {
+				c := createDefaultConfig().(*Config)
+				c.S3Uploader.Region = "us-east-1"
+				c.S3Uploader.S3Bucket = "mybucket"
+				c.S3Uploader.StorageClass = "GLACIER_IR"
+				return c
+			}(),
+			errExpected: nil,
+		},
+		{
+			name: "valid storage class REDUCED_REDUNDANCY",
+			config: func() *Config {
+				c := createDefaultConfig().(*Config)
+				c.S3Uploader.Region = "us-east-1"
+				c.S3Uploader.S3Bucket = "mybucket"
+				c.S3Uploader.StorageClass = "REDUCED_REDUNDANCY"
+				return c
+			}(),
+			errExpected: nil,
+		},
+		{
+			name: "valid storage class EXPRESS_ONEZONE",
+			config: func() *Config {
+				c := createDefaultConfig().(*Config)
+				c.S3Uploader.Region = "us-east-1"
+				c.S3Uploader.S3Bucket = "mybucket"
+				c.S3Uploader.StorageClass = "EXPRESS_ONEZONE"
+				return c
+			}(),
+			errExpected: nil,
+		},
+		{
+			name: "invalid storage class FAKE_CLASS",
+			config: func() *Config {
+				c := createDefaultConfig().(*Config)
+				c.S3Uploader.Region = "us-east-1"
+				c.S3Uploader.S3Bucket = "mybucket"
+				c.S3Uploader.StorageClass = "FAKE_CLASS"
+				return c
+			}(),
+			errExpected: errors.New("invalid StorageClass"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -192,38 +396,52 @@ func TestMarshallerName(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Exporters[factory.Type()] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(
 		filepath.Join("testdata", "marshaler.yaml"), factories)
 
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
 	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "foo",
-			S3Partition: "minute",
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "sumo_ic",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
 
 	e = cfg.Exporters[component.MustNewIDWithName("awss3", "proto")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "bar",
-			S3Partition: "minute",
+			Region:            "us-east-1",
+			S3Bucket:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_proto",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
-
 }
 
 func TestCompressionName(t *testing.T) {
@@ -232,38 +450,269 @@ func TestCompressionName(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Exporters[factory.Type()] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(
 		filepath.Join("testdata", "compression.yaml"), factories)
 
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
 	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "foo",
-			S3Partition: "minute",
-			Compression: "gzip",
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Compression:       "gzip",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_json",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
 
 	e = cfg.Exporters[component.MustNewIDWithName("awss3", "proto")].(*Config)
 
 	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
-			Region:      "us-east-1",
-			S3Bucket:    "bar",
-			S3Partition: "minute",
-			Compression: "none",
+			Region:            "us-east-1",
+			S3Bucket:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Compression:       "none",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
 		MarshalerName: "otlp_proto",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
 	}, e,
 	)
 
+	e = cfg.Exporters[component.MustNewIDWithName("awss3", "zstd")].(*Config)
+
+	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Compression:       "zstd",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		MarshalerName: "otlp_json",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestResourceAttrsToS3(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_resource-attrs-to-s3.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+
+	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		MarshalerName: "otlp_json",
+		ResourceAttrsToS3: ResourceAttrsToS3{
+			S3Bucket: "com.awss3.bucket",
+			S3Prefix: "com.awss3.prefix",
+		},
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestRetry(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "retry.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+
+	assert.Equal(t, &Config{
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD_IA",
+			RetryMode:         "standard",
+			RetryMaxAttempts:  5,
+			RetryMaxBackoff:   30 * time.Second,
+		},
+		MarshalerName: "otlp_json",
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestConfigS3UniqueKeyFunc(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_unique_key_func.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.Default(exporterhelper.NewDefaultQueueConfig())
+	timeoutCfg := exporterhelper.NewDefaultTimeoutConfig()
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+			StorageClass:      "STANDARD",
+			UniqueKeyFuncName: "uuidv7",
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestConfigS3BasePrefix(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_base_prefix.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.None[exporterhelper.QueueBatchConfig]()
+	timeoutCfg := exporterhelper.TimeoutConfig{
+		Timeout: 5 * time.Second,
+	}
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "bar",
+			S3BasePrefix:      "base/prefix",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		BackOffConfig:   configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
+}
+
+func TestConfigS3BasePrefixWithResourceAttrs(t *testing.T) {
+	factories, err := otelcoltest.NopFactories()
+	assert.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[factory.Type()] = factory
+	cfg, err := otelcoltest.LoadConfigAndValidate(
+		filepath.Join("testdata", "config-s3_base_prefix_with_resource_attrs.yaml"), factories)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	e := cfg.Exporters[component.MustNewID("awss3")].(*Config)
+	queueCfg := configoptional.None[exporterhelper.QueueBatchConfig]()
+	timeoutCfg := exporterhelper.TimeoutConfig{
+		Timeout: 5 * time.Second,
+	}
+
+	assert.Equal(t, &Config{
+		S3Uploader: S3UploaderConfig{
+			Region:            "us-east-1",
+			S3Bucket:          "foo",
+			S3Prefix:          "default-metric",
+			S3BasePrefix:      "environment/prod",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			Endpoint:          "http://endpoint.com",
+			StorageClass:      "STANDARD",
+			RetryMode:         DefaultRetryMode,
+			RetryMaxAttempts:  DefaultRetryMaxAttempts,
+			RetryMaxBackoff:   DefaultRetryMaxBackoff,
+		},
+		QueueSettings:   queueCfg,
+		TimeoutSettings: timeoutCfg,
+		MarshalerName:   "otlp_json",
+		ResourceAttrsToS3: ResourceAttrsToS3{
+			S3Prefix: "com.awss3.prefix",
+		},
+		BackOffConfig: configretry.NewDefaultBackOffConfig(),
+	}, e,
+	)
 }

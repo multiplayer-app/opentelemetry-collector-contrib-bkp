@@ -8,21 +8,22 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/splunk"
+	translator "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/splunk"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/splunkhecreceiver/internal/metadata"
 )
 
 // This file implements factory for Splunk HEC receiver.
 
 const (
-	// Default endpoints to bind to.
-	defaultPort = 8088
+	// Default endpoint to bind to.
+	defaultEndpoint = "localhost:8088"
 )
 
 // NewFactory creates a factory for Splunk HEC receiver.
@@ -36,16 +37,17 @@ func NewFactory() receiver.Factory {
 
 // CreateDefaultConfig creates the default configuration for Splunk HEC receiver.
 func createDefaultConfig() component.Config {
+	netAddr := confignet.NewDefaultAddrConfig()
+	netAddr.Transport = confignet.TransportTypeTCP
+	netAddr.Endpoint = defaultEndpoint
 	return &Config{
-		ServerConfig: confighttp.ServerConfig{
-			Endpoint: testutil.EndpointForPort(defaultPort),
-		},
+		ServerConfig:                 confighttp.ServerConfig{NetAddr: netAddr},
 		AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{},
-		HecToOtelAttrs: splunk.HecToOtelAttrs{
+		HecToOtelAttrs: translator.HecToOtelAttrs{
 			Source:     splunk.DefaultSourceLabel,
 			SourceType: splunk.DefaultSourceTypeLabel,
 			Index:      splunk.DefaultIndexLabel,
-			Host:       conventions.AttributeHostName,
+			Host:       string(conventions.HostNameKey),
 		},
 		RawPath:    splunk.DefaultRawPath,
 		HealthPath: splunk.DefaultHealthPath,
@@ -68,7 +70,7 @@ func createMetricsReceiver(
 	var recv receiver.Metrics
 	rCfg := cfg.(*Config)
 	r := receivers.GetOrAdd(cfg, func() component.Component {
-		recv, err = newMetricsReceiver(params, *rCfg, consumer)
+		recv, err = newReceiver(params, *rCfg)
 		return recv
 	})
 	if err != nil {
@@ -89,7 +91,7 @@ func createLogsReceiver(
 	var recv receiver.Logs
 	rCfg := cfg.(*Config)
 	r := receivers.GetOrAdd(cfg, func() component.Component {
-		recv, err = newLogsReceiver(params, *rCfg, consumer)
+		recv, err = newReceiver(params, *rCfg)
 		return recv
 	})
 	if err != nil {

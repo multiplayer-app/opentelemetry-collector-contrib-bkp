@@ -7,9 +7,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubreceiver/internal"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubreceiver/internal/metadata"
@@ -18,31 +20,46 @@ import (
 // This file implements factory for the GitHub Scraper as part of the GitHub Receiver
 
 const (
-	defaultHTTPTimeout = 15 * time.Second
+	TypeStr                     = "scraper"
+	defaultConcurrencyLimit     = 50
+	defaultHTTPTimeout          = 15 * time.Second
+	defaultMergedPRLookbackDays = 30
+	defaultMaxRetries           = 10
 )
 
 type Factory struct{}
 
-func (f *Factory) CreateDefaultConfig() internal.Config {
+func (*Factory) CreateDefaultConfig() internal.Config {
 	clientConfig := confighttp.NewDefaultClientConfig()
 	clientConfig.Timeout = defaultHTTPTimeout
 	return &Config{
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
 		ClientConfig:         clientConfig,
+		ConcurrencyLimit:     defaultConcurrencyLimit, // Default to 50 concurrent goroutines
+		MergedPRLookbackDays: defaultMergedPRLookbackDays,
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+		RetryConfig: RetryConfig{
+			BackOffConfig: configretry.BackOffConfig{
+				Enabled:             true,
+				InitialInterval:     1 * time.Second,
+				RandomizationFactor: backoff.DefaultRandomizationFactor,
+				Multiplier:          backoff.DefaultMultiplier,
+				MaxInterval:         30 * time.Second,
+			},
+			MaxRetries: defaultMaxRetries,
+		},
 	}
 }
 
-func (f *Factory) CreateMetricsScraper(
-	ctx context.Context,
+func (*Factory) CreateMetricsScraper(
+	_ context.Context,
 	params receiver.Settings,
 	cfg internal.Config,
-) (scraperhelper.Scraper, error) {
+) (scraper.Metrics, error) {
 	conf := cfg.(*Config)
-	s := newGitHubScraper(ctx, params, conf)
+	s := newGitHubScraper(params, conf)
 
-	return scraperhelper.NewScraper(
-		metadata.Type,
+	return scraper.NewMetrics(
 		s.scrape,
-		scraperhelper.WithStart(s.start),
+		scraper.WithStart(s.start),
 	)
 }

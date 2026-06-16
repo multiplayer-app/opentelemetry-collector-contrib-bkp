@@ -4,15 +4,76 @@
 package testutils // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver/internal/testutils"
 
 import (
+	"time"
+
 	quotav1 "github.com/openshift/api/quota/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+func NewService(id string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-service-" + id,
+			Namespace: "test-namespace",
+			UID:       types.UID("test-service-" + id + "-uid"),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+		},
+	}
+}
+
+func NewEndpointSlice(id string) *discoveryv1.EndpointSlice {
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-endpointslice-" + id,
+			Namespace: "test-namespace",
+			UID:       types.UID("test-endpointslice-" + id + "-uid"),
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "test-service-" + id,
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{
+			{
+				Addresses: []string{"1.2.3.4"},
+				Zone:      func() *string { z := "us-east-1a"; return &z }(),
+				Conditions: discoveryv1.EndpointConditions{
+					Ready:       func() *bool { b := true; return &b }(),
+					Serving:     func() *bool { b := true; return &b }(),
+					Terminating: func() *bool { b := false; return &b }(),
+				},
+			},
+		},
+	}
+}
+
+func NewLoadBalancerService(id string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-lb-service-" + id,
+			Namespace: "test-namespace",
+			UID:       types.UID("test-lb-service-" + id + "-uid"),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{IP: "1.2.3.4"},
+				},
+			},
+		},
+	}
+}
 
 func NewHPA(id string) *autoscalingv2.HorizontalPodAutoscaler {
 	minReplicas := int32(2)
@@ -29,6 +90,11 @@ func NewHPA(id string) *autoscalingv2.HorizontalPodAutoscaler {
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			MinReplicas: &minReplicas,
 			MaxReplicas: 10,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				Kind:       "Deployment",
+				Name:       "test-deployment",
+				APIVersion: "apps/v1",
+			},
 		},
 	}
 }
@@ -257,7 +323,9 @@ func NewPodStatusWithContainer(containerName, containerID string) *corev1.PodSta
 				Image:        "container-image-name",
 				ContainerID:  containerID,
 				State: corev1.ContainerState{
-					Running: &corev1.ContainerStateRunning{},
+					Running: &corev1.ContainerStateRunning{
+						StartedAt: v1.Time{Time: time.Date(1, time.January, 1, 1, 1, 1, 1, time.UTC)},
+					},
 				},
 			},
 		},
@@ -288,6 +356,7 @@ func NewEvictedTerminatedPodStatusWithContainer(containerName, containerID strin
 		},
 	}
 }
+
 func WithOwnerReferences(or []v1.OwnerReference, obj any) any {
 	switch o := obj.(type) {
 	case *corev1.Pod:
@@ -401,6 +470,66 @@ func NewCronJob(id string) *batchv1.CronJob {
 		},
 		Status: batchv1.CronJobStatus{
 			Active: []corev1.ObjectReference{{}, {}},
+		},
+	}
+}
+
+func NewPersistentVolume(id string) *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "test-pv-" + id,
+			UID:  types.UID("test-pv-" + id + "-uid"),
+			Labels: map[string]string{
+				"foo":  "bar",
+				"foo1": "",
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{
+				corev1.ResourceStorage: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+			},
+			StorageClassName:              "standard",
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			ClaimRef: &corev1.ObjectReference{
+				Name:      "test-pvc-" + id,
+				Namespace: "test-namespace",
+				UID:       types.UID("test-pvc-" + id + "-uid"),
+			},
+		},
+		Status: corev1.PersistentVolumeStatus{
+			Phase: corev1.VolumeBound,
+		},
+	}
+}
+
+func NewPersistentVolumeClaim(id string) *corev1.PersistentVolumeClaim {
+	storageClassName := "standard"
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-pvc-" + id,
+			Namespace: "test-namespace",
+			UID:       types.UID("test-pvc-" + id + "-uid"),
+			Labels: map[string]string{
+				"foo":  "bar",
+				"foo1": "",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: &storageClassName,
+			VolumeName:       "test-pv-" + id,
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: *resource.NewQuantity(5*1024*1024*1024, resource.BinarySI),
+				},
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+			Capacity: corev1.ResourceList{
+				corev1.ResourceStorage: *resource.NewQuantity(10*1024*1024*1024, resource.BinarySI),
+			},
 		},
 	}
 }

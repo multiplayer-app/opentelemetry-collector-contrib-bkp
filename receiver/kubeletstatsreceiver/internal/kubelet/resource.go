@@ -12,8 +12,9 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver/internal/metadata"
 )
 
-func getContainerResource(rb *metadata.ResourceBuilder, sPod stats.PodStats, sContainer stats.ContainerStats,
-	k8sMetadata Metadata) (pcommon.Resource, error) {
+func getContainerResource(rb *metadata.ResourceBuilder, sPod *stats.PodStats, sContainer *stats.ContainerStats,
+	k8sMetadata Metadata,
+) (pcommon.Resource, error) {
 	rb.SetK8sPodUID(sPod.PodRef.UID)
 	rb.SetK8sPodName(sPod.PodRef.Name)
 	rb.SetK8sNamespaceName(sPod.PodRef.Namespace)
@@ -27,8 +28,9 @@ func getContainerResource(rb *metadata.ResourceBuilder, sPod stats.PodStats, sCo
 	return rb.Emit(), nil
 }
 
-func getVolumeResourceOptions(rb *metadata.ResourceBuilder, sPod stats.PodStats, vs stats.VolumeStats,
-	k8sMetadata Metadata) (pcommon.Resource, error) {
+func getVolumeResourceOptions(rb *metadata.ResourceBuilder, sPod *stats.PodStats, vs *stats.VolumeStats,
+	k8sMetadata Metadata,
+) (pcommon.Resource, error) {
 	rb.SetK8sPodUID(sPod.PodRef.UID)
 	rb.SetK8sPodName(sPod.PodRef.Name)
 	rb.SetK8sNamespaceName(sPod.PodRef.Namespace)

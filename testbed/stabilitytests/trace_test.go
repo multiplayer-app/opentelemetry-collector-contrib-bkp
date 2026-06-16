@@ -15,8 +15,12 @@ import (
 	"time"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datasenders"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers/datadogdatareceiver"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers/jaegerdatareceiver"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers/zipkindatareceiver"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datasenders/datadogdatasender"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datasenders/jaegerdatasender"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datasenders/zipkindatasender"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/testbed"
 	scenarios "github.com/open-telemetry/opentelemetry-collector-contrib/testbed/tests"
 )
@@ -24,48 +28,19 @@ import (
 var (
 	contribPerfResultsSummary = &testbed.PerformanceResults{}
 	resourceCheckPeriod, _    = time.ParseDuration("1m")
-	processorsConfig          = map[string]string{
-		"batch": `
+	processorsConfig          = []scenarios.ProcessorNameAndConfigBody{
+		{
+			Name: "batch",
+			Body: `
   batch:
 `,
+		},
 	}
 )
 
 // TestMain is used to initiate setup, execution and tear down of testbed.
 func TestMain(m *testing.M) {
 	testbed.DoTestMain(m, contribPerfResultsSummary)
-}
-
-func TestStabilityTracesOpenCensus(t *testing.T) {
-	scenarios.Scenario10kItemsPerSecond(
-		t,
-		datasenders.NewOCTraceDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
-		datareceivers.NewOCDataReceiver(testutil.GetAvailablePort(t)),
-		testbed.ResourceSpec{
-			ExpectedMaxCPU:      39,
-			ExpectedMaxRAM:      90,
-			ResourceCheckPeriod: resourceCheckPeriod,
-		},
-		contribPerfResultsSummary,
-		processorsConfig,
-		nil,
-	)
-}
-
-func TestStabilityTracesSAPM(t *testing.T) {
-	scenarios.Scenario10kItemsPerSecond(
-		t,
-		datasenders.NewSapmDataSender(testutil.GetAvailablePort(t), ""),
-		datareceivers.NewSapmDataReceiver(testutil.GetAvailablePort(t), ""),
-		testbed.ResourceSpec{
-			ExpectedMaxCPU:      40,
-			ExpectedMaxRAM:      100,
-			ResourceCheckPeriod: resourceCheckPeriod,
-		},
-		contribPerfResultsSummary,
-		processorsConfig,
-		nil,
-	)
 }
 
 func TestStabilityTracesOTLP(t *testing.T) {
@@ -81,14 +56,15 @@ func TestStabilityTracesOTLP(t *testing.T) {
 		contribPerfResultsSummary,
 		processorsConfig,
 		nil,
+		nil,
 	)
 }
 
 func TestStabilityTracesJaegerGRPC(t *testing.T) {
 	scenarios.Scenario10kItemsPerSecond(
 		t,
-		datasenders.NewJaegerGRPCDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
-		datareceivers.NewJaegerDataReceiver(testutil.GetAvailablePort(t)),
+		jaegerdatasender.NewJaegerGRPCDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
+		jaegerdatareceiver.NewJaegerDataReceiver(testutil.GetAvailablePort(t)),
 		testbed.ResourceSpec{
 			ExpectedMaxCPU:      40,
 			ExpectedMaxRAM:      90,
@@ -97,14 +73,15 @@ func TestStabilityTracesJaegerGRPC(t *testing.T) {
 		contribPerfResultsSummary,
 		processorsConfig,
 		nil,
+		nil,
 	)
 }
 
 func TestStabilityTracesZipkin(t *testing.T) {
 	scenarios.Scenario10kItemsPerSecond(
 		t,
-		datasenders.NewZipkinDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
-		datareceivers.NewZipkinDataReceiver(testutil.GetAvailablePort(t)),
+		zipkindatasender.NewZipkinDataSender(testbed.DefaultHost, testutil.GetAvailablePort(t)),
+		zipkindatareceiver.NewZipkinDataReceiver(testutil.GetAvailablePort(t)),
 		testbed.ResourceSpec{
 			ExpectedMaxCPU:      80,
 			ExpectedMaxRAM:      110,
@@ -113,14 +90,15 @@ func TestStabilityTracesZipkin(t *testing.T) {
 		contribPerfResultsSummary,
 		processorsConfig,
 		nil,
+		nil,
 	)
 }
 
 func TestStabilityTracesDatadog(t *testing.T) {
 	scenarios.Scenario10kItemsPerSecond(
 		t,
-		datasenders.NewDatadogDataSender(),
-		datareceivers.NewDataDogDataReceiver(),
+		datadogdatasender.NewDatadogDataSender(),
+		datadogdatareceiver.NewDataDogDataReceiver(),
 		testbed.ResourceSpec{
 			ExpectedMaxCPU:      80,
 			ExpectedMaxRAM:      110,
@@ -128,6 +106,7 @@ func TestStabilityTracesDatadog(t *testing.T) {
 		},
 		contribPerfResultsSummary,
 		processorsConfig,
+		nil,
 		nil,
 	)
 }

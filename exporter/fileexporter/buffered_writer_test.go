@@ -24,18 +24,18 @@ const (
 	SizeMegaByte
 )
 
-type NopWriteCloser struct {
+type nopWriteCloser struct {
 	w io.Writer
 }
 
-func (NopWriteCloser) Close() error                    { return nil }
-func (wc *NopWriteCloser) Write(p []byte) (int, error) { return wc.w.Write(p) }
+func (nopWriteCloser) Close() error                    { return nil }
+func (wc *nopWriteCloser) Write(p []byte) (int, error) { return wc.w.Write(p) }
 
 func TestBufferedWrites(t *testing.T) {
 	t.Parallel()
 
 	b := bytes.NewBuffer(nil)
-	w := newBufferedWriteCloser(&NopWriteCloser{b})
+	w := newBufferedWriteCloser(&nopWriteCloser{b})
 
 	_, err := w.Write([]byte(msg))
 	require.NoError(t, err, "Must not error when writing data")
@@ -44,9 +44,7 @@ func TestBufferedWrites(t *testing.T) {
 	assert.Equal(t, msg, b.String(), "Must match the expected string")
 }
 
-var (
-	errBenchmark error
-)
+var errBenchmark error
 
 func BenchmarkWriter(b *testing.B) {
 	tempfile := func(tb testing.TB) io.WriteCloser {
@@ -65,27 +63,25 @@ func BenchmarkWriter(b *testing.B) {
 		10 * SizeMegaByte,
 	} {
 		payload := make([]byte, payloadSize)
-		for i := 0; i < payloadSize; i++ {
+		for i := range payloadSize {
 			payload[i] = 'a'
 		}
 		for name, w := range map[string]io.WriteCloser{
-			"discard":          &NopWriteCloser{io.Discard},
-			"buffered-discard": newBufferedWriteCloser(&NopWriteCloser{io.Discard}),
+			"discard":          &nopWriteCloser{io.Discard},
+			"buffered-discard": newBufferedWriteCloser(&nopWriteCloser{io.Discard}),
 			"raw-file":         tempfile(b),
 			"buffered-file":    newBufferedWriteCloser(tempfile(b)),
 		} {
-			w := w
 			b.Run(fmt.Sprintf("%s_%d_bytes", name, payloadSize), func(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 
 				var err error
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					_, err = w.Write(payload)
 				}
 				errBenchmark = errors.Join(err, w.Close())
 			})
 		}
 	}
-
 }

@@ -8,14 +8,43 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	"go.opentelemetry.io/collector/receiver"
-	conventions "go.opentelemetry.io/collector/semconv/v1.9.0"
+	"go.opentelemetry.io/collector/scraper"
+	conventions "go.opentelemetry.io/otel/semconv/v1.9.0"
 )
 
+const (
+	AggregationStrategySum = "sum"
+	AggregationStrategyAvg = "avg"
+	AggregationStrategyMin = "min"
+	AggregationStrategyMax = "max"
+)
+
+var MetricsInfo = metricsInfo{
+	SystemCPULoadAverage15m: metricInfo{
+		Name: "system.cpu.load_average.15m",
+	},
+	SystemCPULoadAverage1m: metricInfo{
+		Name: "system.cpu.load_average.1m",
+	},
+	SystemCPULoadAverage5m: metricInfo{
+		Name: "system.cpu.load_average.5m",
+	},
+}
+
+type metricsInfo struct {
+	SystemCPULoadAverage15m metricInfo
+	SystemCPULoadAverage1m  metricInfo
+	SystemCPULoadAverage5m  metricInfo
+}
+
+type metricInfo struct {
+	Name string
+}
+
 type metricSystemCPULoadAverage15m struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                      // data buffer for generated metric.
+	config   SystemCPULoadAverage15mMetricConfig // metric config provided by user.
+	capacity int                                 // max observed number of data points added to the metric.
 }
 
 // init fills system.cpu.load_average.15m metric with initial data.
@@ -52,8 +81,9 @@ func (m *metricSystemCPULoadAverage15m) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricSystemCPULoadAverage15m(cfg MetricConfig) metricSystemCPULoadAverage15m {
+func newMetricSystemCPULoadAverage15m(cfg SystemCPULoadAverage15mMetricConfig) metricSystemCPULoadAverage15m {
 	m := metricSystemCPULoadAverage15m{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -62,9 +92,9 @@ func newMetricSystemCPULoadAverage15m(cfg MetricConfig) metricSystemCPULoadAvera
 }
 
 type metricSystemCPULoadAverage1m struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                     // data buffer for generated metric.
+	config   SystemCPULoadAverage1mMetricConfig // metric config provided by user.
+	capacity int                                // max observed number of data points added to the metric.
 }
 
 // init fills system.cpu.load_average.1m metric with initial data.
@@ -101,8 +131,9 @@ func (m *metricSystemCPULoadAverage1m) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricSystemCPULoadAverage1m(cfg MetricConfig) metricSystemCPULoadAverage1m {
+func newMetricSystemCPULoadAverage1m(cfg SystemCPULoadAverage1mMetricConfig) metricSystemCPULoadAverage1m {
 	m := metricSystemCPULoadAverage1m{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -111,9 +142,9 @@ func newMetricSystemCPULoadAverage1m(cfg MetricConfig) metricSystemCPULoadAverag
 }
 
 type metricSystemCPULoadAverage5m struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                     // data buffer for generated metric.
+	config   SystemCPULoadAverage5mMetricConfig // metric config provided by user.
+	capacity int                                // max observed number of data points added to the metric.
 }
 
 // init fills system.cpu.load_average.5m metric with initial data.
@@ -150,8 +181,9 @@ func (m *metricSystemCPULoadAverage5m) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricSystemCPULoadAverage5m(cfg MetricConfig) metricSystemCPULoadAverage5m {
+func newMetricSystemCPULoadAverage5m(cfg SystemCPULoadAverage5mMetricConfig) metricSystemCPULoadAverage5m {
 	m := metricSystemCPULoadAverage5m{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -189,8 +221,7 @@ func WithStartTime(startTime pcommon.Timestamp) MetricBuilderOption {
 		mb.startTime = startTime
 	})
 }
-
-func NewMetricsBuilder(mbc MetricsBuilderConfig, settings receiver.Settings, options ...MetricBuilderOption) *MetricsBuilder {
+func NewMetricsBuilder(mbc MetricsBuilderConfig, settings scraper.Settings, options ...MetricBuilderOption) *MetricsBuilder {
 	mb := &MetricsBuilder{
 		config:                        mbc,
 		startTime:                     pcommon.NewTimestampFromTime(time.Now()),
@@ -262,7 +293,7 @@ func (mb *MetricsBuilder) EmitForResource(options ...ResourceMetricsOption) {
 	rm := pmetric.NewResourceMetrics()
 	rm.SetSchemaUrl(conventions.SchemaURL)
 	ils := rm.ScopeMetrics().AppendEmpty()
-	ils.Scope().SetName("github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver/internal/scraper/loadscraper")
+	ils.Scope().SetName(ScopeName)
 	ils.Scope().SetVersion(mb.buildInfo.Version)
 	ils.Metrics().EnsureCapacity(mb.metricsCapacity)
 	mb.metricSystemCPULoadAverage15m.emit(ils.Metrics())

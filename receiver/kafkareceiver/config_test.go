@@ -11,11 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/kafka"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkareceiver/internal/metadata"
 )
 
@@ -31,77 +32,273 @@ func TestLoadConfig(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			id: component.NewIDWithName(metadata.Type, ""),
+			id: component.NewIDWithName(metadata.Type, "logs"),
 			expected: &Config{
-				Topic:                                "spans",
-				Encoding:                             "otlp_proto",
-				Brokers:                              []string{"foo:123", "bar:456"},
-				ResolveCanonicalBootstrapServersOnly: true,
-				ClientID:                             "otel-collector",
-				GroupID:                              "otel-collector",
-				InitialOffset:                        "latest",
-				SessionTimeout:                       10 * time.Second,
-				HeartbeatInterval:                    3 * time.Second,
-				Authentication: kafka.Authentication{
-					TLS: &configtls.ClientConfig{
+				ClientConfig: func() configkafka.ClientConfig {
+					config := configkafka.NewDefaultClientConfig()
+					config.Brokers = []string{"coffee:123", "foobar:456"}
+					config.Metadata.Retry.Max = 10
+					config.Metadata.Retry.Backoff = 5 * time.Second
+					config.Authentication.SASL = &configkafka.SASLConfig{
+						Mechanism: "PLAIN",
+						Username:  "user",
+						Password:  "password",
+					}
+					config.TLS = &configtls.ClientConfig{
 						Config: configtls.Config{
 							CAFile:   "ca.pem",
 							CertFile: "cert.pem",
 							KeyFile:  "key.pem",
 						},
-					},
+					}
+					return config
+				}(),
+				ConsumerConfig: func() configkafka.ConsumerConfig {
+					config := configkafka.NewDefaultConsumerConfig()
+					config.InitialOffset = configkafka.EarliestOffset
+					config.SessionTimeout = 45 * time.Second
+					config.HeartbeatInterval = 15 * time.Second
+					return config
+				}(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"logs"},
+					Encoding: "direct",
 				},
-				Metadata: kafkaexporter.Metadata{
-					Full: true,
-					Retry: kafkaexporter.MetadataRetry{
-						Max:     10,
-						Backoff: time.Second * 5,
-					},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
 				},
-				AutoCommit: AutoCommit{
-					Enable:   true,
-					Interval: 1 * time.Second,
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
 				},
-				MinFetchSize:     1,
-				DefaultFetchSize: 1048576,
-				MaxFetchSize:     0,
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled:         true,
+					InitialInterval: 1 * time.Second,
+					MaxInterval:     10 * time.Second,
+					MaxElapsedTime:  1 * time.Minute,
+					Multiplier:      1.5,
+				},
 			},
 		},
 		{
-
-			id: component.NewIDWithName(metadata.Type, "logs"),
+			id: component.NewIDWithName(metadata.Type, "rebalance_strategy"),
 			expected: &Config{
-				Topic:             "logs",
-				Encoding:          "direct",
-				Brokers:           []string{"coffee:123", "foobar:456"},
-				ClientID:          "otel-collector",
-				GroupID:           "otel-collector",
-				InitialOffset:     "earliest",
-				SessionTimeout:    45 * time.Second,
-				HeartbeatInterval: 15 * time.Second,
-				Authentication: kafka.Authentication{
-					TLS: &configtls.ClientConfig{
-						Config: configtls.Config{
-							CAFile:   "ca.pem",
-							CertFile: "cert.pem",
-							KeyFile:  "key.pem",
-						},
-					},
+				ClientConfig: configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: func() configkafka.ConsumerConfig {
+					config := configkafka.NewDefaultConsumerConfig()
+					config.GroupRebalanceStrategy = "sticky"
+					config.GroupInstanceID = "test-instance"
+					return config
+				}(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
 				},
-				Metadata: kafkaexporter.Metadata{
-					Full: true,
-					Retry: kafkaexporter.MetadataRetry{
-						Max:     10,
-						Backoff: time.Second * 5,
-					},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
 				},
-				AutoCommit: AutoCommit{
-					Enable:   true,
-					Interval: 1 * time.Second,
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
 				},
-				MinFetchSize:     1,
-				DefaultFetchSize: 1048576,
-				MaxFetchSize:     0,
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "rebalance_strategies"),
+			expected: &Config{
+				ClientConfig: configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: func() configkafka.ConsumerConfig {
+					config := configkafka.NewDefaultConsumerConfig()
+					config.GroupRebalanceStrategies = []configkafka.GroupRebalanceStrategy{
+						configkafka.CooperativeStickyBalanceStrategy,
+						"my_balancer",
+					}
+					return config
+				}(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "message_marking"),
+			expected: &Config{
+				ClientConfig:   configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: configkafka.NewDefaultConsumerConfig(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				MessageMarking: MessageMarking{
+					After:            true,
+					OnError:          true,
+					OnPermanentError: false,
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "message_marking_not_specified"),
+			expected: &Config{
+				ClientConfig:   configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: configkafka.NewDefaultConsumerConfig(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				MessageMarking: MessageMarking{
+					After:            false,
+					OnError:          false,
+					OnPermanentError: false,
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "message_marking_on_permanent_error_inherited"),
+			expected: &Config{
+				ClientConfig:   configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: configkafka.NewDefaultConsumerConfig(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				MessageMarking: MessageMarking{
+					After:            true,
+					OnError:          true,
+					OnPermanentError: true,
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "regex_topic_with_exclusion"),
+			expected: &Config{
+				ClientConfig:   configkafka.NewDefaultClientConfig(),
+				ConsumerConfig: configkafka.NewDefaultConsumerConfig(),
+				Logs: TopicEncodingConfig{
+					Topics:        []string{"^logs-.*"},
+					ExcludeTopics: []string{"^logs-(test|dev)$"},
+					Encoding:      "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:        []string{"^metrics-.*"},
+					ExcludeTopics: []string{"^metrics-internal-.*$"},
+					Encoding:      "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:        []string{"^traces-.*"},
+					ExcludeTopics: []string{"^traces-debug-.*$"},
+					Encoding:      "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "conn_idle_timeout"),
+			expected: &Config{
+				ClientConfig: func() configkafka.ClientConfig {
+					config := configkafka.NewDefaultClientConfig()
+					config.ConnIdleTimeout = 5 * time.Minute
+					return config
+				}(),
+				ConsumerConfig: configkafka.NewDefaultConsumerConfig(),
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"otlp_logs"},
+					Encoding: "otlp_proto",
+				},
+				Metrics: TopicEncodingConfig{
+					Topics:   []string{"otlp_metrics"},
+					Encoding: "otlp_proto",
+				},
+				Traces: TopicEncodingConfig{
+					Topics:   []string{"otlp_spans"},
+					Encoding: "otlp_proto",
+				},
+				Profiles: TopicEncodingConfig{
+					Topics:   []string{"otlp_profiles"},
+					Encoding: "otlp_proto",
+				},
+				ErrorBackOff: configretry.BackOffConfig{
+					Enabled: false,
+				},
 			},
 		},
 	}
@@ -115,8 +312,149 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
+		})
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *Config
+		expectedErr string
+	}{
+		{
+			name: "valid config with regex and exclude_topic",
+			config: &Config{
+				Logs: TopicEncodingConfig{
+					Topics:        []string{"^logs-.*"},
+					ExcludeTopics: []string{"^logs-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "",
+		},
+		{
+			name: "invalid config with non-regex topic and exclude_topic for logs",
+			config: &Config{
+				Logs: TopicEncodingConfig{
+					Topics:        []string{"logs"},
+					ExcludeTopics: []string{"^logs-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "logs.exclude_topics is configured but none of the configured logs.topics use regex pattern (must start with '^')",
+		},
+		{
+			name: "invalid config with non-regex topic and exclude_topic for metrics",
+			config: &Config{
+				Metrics: TopicEncodingConfig{
+					Topics:        []string{"metrics"},
+					ExcludeTopics: []string{"^metrics-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "metrics.exclude_topics is configured but none of the configured metrics.topics use regex pattern (must start with '^')",
+		},
+		{
+			name: "invalid config with non-regex topic and exclude_topic for traces",
+			config: &Config{
+				Traces: TopicEncodingConfig{
+					Topics:        []string{"traces"},
+					ExcludeTopics: []string{"^traces-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "traces.exclude_topics is configured but none of the configured traces.topics use regex pattern (must start with '^')",
+		},
+		{
+			name: "invalid config with non-regex topic and exclude_topic for profiles",
+			config: &Config{
+				Profiles: TopicEncodingConfig{
+					Topics:        []string{"profiles"},
+					ExcludeTopics: []string{"^profiles-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "profiles.exclude_topics is configured but none of the configured profiles.topics use regex pattern (must start with '^')",
+		},
+		{
+			name: "valid config without exclude_topic",
+			config: &Config{
+				Logs: TopicEncodingConfig{
+					Topics:   []string{"logs"},
+					Encoding: "otlp_proto",
+				},
+			},
+			expectedErr: "",
+		},
+		{
+			name: "invalid config with invalid regex in exclude_topic",
+			config: &Config{
+				Logs: TopicEncodingConfig{
+					Topics:        []string{"^logs-.*"},
+					ExcludeTopics: []string{"^logs-[invalid(regex"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "logs.exclude_topic contains invalid regex pattern",
+		},
+		{
+			name: "invalid config with empty string in exclude_topics for logs",
+			config: &Config{
+				Logs: TopicEncodingConfig{
+					Topics:        []string{"^logs-.*"},
+					ExcludeTopics: []string{""},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "logs.exclude_topics contains empty string",
+		},
+		{
+			name: "invalid config with empty string in exclude_topics for metrics",
+			config: &Config{
+				Metrics: TopicEncodingConfig{
+					Topics:        []string{"^metrics-.*"},
+					ExcludeTopics: []string{"", "^metrics-test$"},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "metrics.exclude_topics contains empty string",
+		},
+		{
+			name: "invalid config with empty string in exclude_topics for traces",
+			config: &Config{
+				Traces: TopicEncodingConfig{
+					Topics:        []string{"^traces-.*"},
+					ExcludeTopics: []string{"^traces-test$", ""},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "traces.exclude_topics contains empty string",
+		},
+		{
+			name: "invalid config with empty string in exclude_topics for profiles",
+			config: &Config{
+				Profiles: TopicEncodingConfig{
+					Topics:        []string{"^profiles-.*"},
+					ExcludeTopics: []string{""},
+					Encoding:      "otlp_proto",
+				},
+			},
+			expectedErr: "profiles.exclude_topics contains empty string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectedErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectedErr)
+			}
 		})
 	}
 }

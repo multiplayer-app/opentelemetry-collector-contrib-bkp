@@ -1,8 +1,11 @@
 type: status
 
 status:
+  disable_codecov_badge: true
   class: pkg
   stability:
     development: [extension]
   codeowners:
-    active: [jpkrohling, mwear]
+    active: [evan-bradley]
+    emeritus: [jpkrohling, mwear]
+    seeking_new: true

@@ -21,8 +21,6 @@ func TestLoadConfig(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Processors[metadata.Type] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "config.yaml"), factories)
 
 	require.NoError(t, err)
@@ -41,19 +39,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           false,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -64,19 +62,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         false,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -87,19 +85,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: false,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -110,19 +108,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            true,
 					Separator:          "!",
 					Include:            []string{"blep"},
 					Exclude:            []string{"nghu"},
 					SquashSingleValues: true,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -133,14 +131,14 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{
+				AggregateAttributes: []AggregationPair{
 					{
 						Attribute: "attr1",
 						Prefixes:  []string{"pattern1", "pattern2", "pattern3"},
@@ -150,11 +148,11 @@ func TestLoadConfig(t *testing.T) {
 						Prefixes:  []string{"pattern4"},
 					},
 				},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -165,19 +163,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{true, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{true, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -188,19 +186,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{true, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{true, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -211,19 +209,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{true, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{true, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -234,19 +232,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{true, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{true, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: false,
 			},
@@ -257,19 +255,19 @@ func TestLoadConfig(t *testing.T) {
 				AddCloudNamespace:           true,
 				TranslateAttributes:         true,
 				TranslateTelegrafAttributes: true,
-				NestAttributes: &NestingProcessorConfig{
+				NestAttributes: NestingProcessorConfig{
 					Enabled:            false,
 					Separator:          ".",
 					Include:            []string{},
 					Exclude:            []string{},
 					SquashSingleValues: false,
 				},
-				AggregateAttributes: []aggregationPair{},
-				LogFieldsAttributes: &logFieldAttributesConfig{
-					SeverityNumberAttribute: &logFieldAttribute{false, SeverityNumberAttributeName},
-					SeverityTextAttribute:   &logFieldAttribute{false, SeverityTextAttributeName},
-					SpanIDAttribute:         &logFieldAttribute{false, SpanIDAttributeName},
-					TraceIDAttribute:        &logFieldAttribute{false, TraceIDAttributeName},
+				AggregateAttributes: []AggregationPair{},
+				LogFieldsAttributes: LogFieldAttributesConfig{
+					SeverityNumberAttribute: &LogFieldAttribute{false, SeverityNumberAttributeName},
+					SeverityTextAttribute:   &LogFieldAttribute{false, SeverityTextAttributeName},
+					SpanIDAttribute:         &LogFieldAttribute{false, SpanIDAttributeName},
+					TraceIDAttribute:        &LogFieldAttribute{false, TraceIDAttributeName},
 				},
 				TranslateDockerMetrics: true,
 			},

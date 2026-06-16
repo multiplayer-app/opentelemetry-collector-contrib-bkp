@@ -8,20 +8,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/influxdbexporter/internal/metadata"
 )
 
 func TestLoadConfig(t *testing.T) {
+	clientConfig := confighttp.NewDefaultClientConfig()
+	clientConfig.Endpoint = "http://localhost:8080"
+	clientConfig.Timeout = 500 * time.Millisecond
+	clientConfig.Headers = configopaque.MapList{
+		{Name: "User-Agent", Value: "OpenTelemetry -> Influx"},
+	}
 	t.Parallel()
 
 	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
@@ -38,16 +46,13 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewIDWithName(metadata.Type, "override-config"),
 			expected: &Config{
-				ClientConfig: confighttp.ClientConfig{
-					Endpoint: "http://localhost:8080",
-					Timeout:  500 * time.Millisecond,
-					Headers:  map[string]configopaque.String{"User-Agent": "OpenTelemetry -> Influx"},
-				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 3,
-					QueueSize:    10,
-				},
+				ClientConfig: clientConfig,
+				QueueSettings: configoptional.Some(func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 3
+					queue.QueueSize = 10
+					return queue
+				}()),
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
 					InitialInterval:     1 * time.Second,
@@ -64,6 +69,7 @@ func TestLoadConfig(t *testing.T) {
 				MetricsSchema:       "telegraf-prometheus-v1",
 				PayloadMaxLines:     72,
 				PayloadMaxBytes:     27,
+				Precision:           "ns",
 			},
 		},
 	}
@@ -77,7 +83,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}

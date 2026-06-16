@@ -169,6 +169,7 @@ translation_rules:
     buffered: true
     cached: true
     free: true
+    inactive: true
     used: true
 - action: aggregate_metric
   metric_name: sf_temp.memory.total
@@ -295,7 +296,7 @@ translation_rules:
   without_dimensions:
     - device
 
-## Calculate an extra disk_ops.total metric as number all all read and write operations happened since the last report.
+## Calculate an extra disk_ops.total metric as number of all read and write operations happened since the last report.
 - action: copy_metrics
   mapping:
     system.disk.operations: sf_temp.disk.ops

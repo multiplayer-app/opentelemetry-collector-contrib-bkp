@@ -6,9 +6,7 @@ package metrics
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/aggregateutil"
@@ -486,9 +484,11 @@ func Test_aggregateOnAttributeValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			evaluate, err := AggregateOnAttributeValue(tt.t, tt.attribute, tt.values, tt.newValue)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			_, err = evaluate(nil, ottlmetric.NewTransformContext(tt.input, pmetric.NewMetricSlice(), pcommon.NewInstrumentationScope(), pcommon.NewResource(), pmetric.NewScopeMetrics(), pmetric.NewResourceMetrics()))
+			tCtx := ottlmetric.NewTransformContextPtr(pmetric.NewResourceMetrics(), pmetric.NewScopeMetrics(), tt.input)
+			_, err = evaluate(t.Context(), tCtx)
+			tCtx.Close()
 			require.NoError(t, err)
 
 			actualMetric := pmetric.NewMetricSlice()
@@ -514,17 +514,17 @@ func Test_aggregateOnAttributeValues(t *testing.T) {
 
 func Test_createAggregateOnAttributeValueFunction(t *testing.T) {
 	// invalid input arguments
-	_, e := createAggregateOnAttributeValueFunction(ottl.FunctionContext{}, nil)
-	require.Contains(t, e.Error(), "AggregateOnAttributeValueFactory args must be of type *AggregateOnAttributeValueArguments")
+	_, err := createAggregateOnAttributeValueFunction(ottl.FunctionContext{}, nil)
+	require.ErrorContains(t, err, "AggregateOnAttributeValueFactory args must be of type *AggregateOnAttributeValueArguments")
 
 	// invalid aggregation function
-	_, e = createAggregateOnAttributeValueFunction(ottl.FunctionContext{}, &aggregateOnAttributeValueArguments{
+	_, err = createAggregateOnAttributeValueFunction(ottl.FunctionContext{}, &aggregateOnAttributeValueArguments{
 		AggregationFunction: "invalid",
 		Attribute:           "attr",
 		Values:              []string{"val"},
 		NewValue:            "newVal",
 	})
-	require.Contains(t, e.Error(), "invalid aggregation function")
+	require.ErrorContains(t, err, "invalid aggregation function")
 }
 
 func getTestSumMetricMultipleAggregateOnAttributeValue() pmetric.Metric {

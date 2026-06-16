@@ -53,7 +53,8 @@ func TestLogsToLokiRequestWithGroupingByTenant(t *testing.T) {
 									{
 										Line: `{"attributes":{"http.status":200,"tenant.id":"1"}}`,
 									},
-								}},
+								},
+							},
 						},
 					},
 				},
@@ -105,7 +106,8 @@ func TestLogsToLokiRequestWithGroupingByTenant(t *testing.T) {
 									{
 										Line: `{"attributes":{"http.status":200},"resources":{"tenant.id":"11"}}`,
 									},
-								}},
+								},
+							},
 						},
 					},
 				},
@@ -148,7 +150,8 @@ func TestLogsToLokiRequestWithGroupingByTenant(t *testing.T) {
 									{
 										Line: `{"attributes":{"http.status":200}}`,
 									},
-								}},
+								},
+							},
 						},
 					},
 				},
@@ -191,7 +194,8 @@ func TestLogsToLokiRequestWithGroupingByTenant(t *testing.T) {
 									{
 										Line: `{"attributes":{"http.status":200,"tenant.id":"31"},"resources":{"tenant.id":"21"}}`,
 									},
-								}},
+								},
+							},
 						},
 					},
 				},
@@ -221,7 +225,7 @@ func TestLogsToLokiRequestWithGroupingByTenant(t *testing.T) {
 				assert.True(t, ok)
 
 				streams := request.Streams
-				for s := 0; s < len(streams); s++ {
+				for s := range streams {
 					gotStream := request.Streams[s]
 					wantStream := want.Streams[s]
 
@@ -427,7 +431,7 @@ func TestLogsToLokiRequestWithoutTenant(t *testing.T) {
 			// prepare
 			ld := plog.NewLogs()
 			ld.ResourceLogs().AppendEmpty()
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				ld.ResourceLogs().At(0).ScopeLogs().AppendEmpty()
 				ld.ResourceLogs().At(0).ScopeLogs().At(i).LogRecords().AppendEmpty()
 				ld.ResourceLogs().At(0).ScopeLogs().At(i).LogRecords().At(0).SetTraceID([16]byte{byte(i + 1)})
@@ -454,7 +458,7 @@ func TestLogsToLokiRequestWithoutTenant(t *testing.T) {
 							attrs = tt.attrs
 						}
 
-						if len(tt.levelAttribute) > 0 {
+						if tt.levelAttribute != "" {
 							attrs[levelAttributeName] = tt.levelAttribute
 						}
 						if val, ok := tt.hints[hintAttributes]; ok {
@@ -483,7 +487,7 @@ func TestLogsToLokiRequestWithoutTenant(t *testing.T) {
 			assert.Equal(t, tt.expectedLabel, request.Streams[0].Labels)
 
 			entries := request.Streams[0].Entries
-			for i := 0; i < len(entries); i++ {
+			for i := range entries {
 				assert.Equal(t, tt.expectedLines[i], entries[i].Line)
 			}
 		})
@@ -681,7 +685,7 @@ func TestLogToLokiEntry(t *testing.T) {
 				resource.Attributes().PutStr(k, fmt.Sprintf("%v", v))
 			}
 			lr.SetSeverityNumber(tt.severity)
-			if len(tt.levelAttribute) > 0 {
+			if tt.levelAttribute != "" {
 				lr.Attributes().PutStr(levelAttributeName, tt.levelAttribute)
 			}
 

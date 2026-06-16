@@ -14,16 +14,16 @@ import (
 )
 
 func TestDecode(t *testing.T) {
-
 	testByteSlice := pcommon.NewByteSlice()
 	testByteSlice.FromRaw([]byte("test string"))
 	testByteSliceB64 := pcommon.NewByteSlice()
 	testByteSliceB64.FromRaw([]byte("aGVsbG8gd29ybGQ="))
 
-	testValue := pcommon.NewValueEmpty()
-	_ = testValue.FromRaw("test string")
-	testValueB64 := pcommon.NewValueEmpty()
-	_ = testValueB64.FromRaw("aGVsbG8gd29ybGQ=")
+	testValue := pcommon.NewValueStr("test string")
+	testValueB64 := pcommon.NewValueStr("aGVsbG8gd29ybGQ=")
+
+	testValueBytes := pcommon.NewValueBytes()
+	testValueBytes.Bytes().FromRaw([]byte{116, 0, 101, 0, 115, 0, 116, 0, 32, 0, 115, 0, 116, 0, 114, 0, 105, 0, 110, 0, 103, 0})
 
 	type testCase struct {
 		name          string
@@ -142,11 +142,17 @@ func TestDecode(t *testing.T) {
 			want:     "test string",
 		},
 		{
+			name:     "decode UTF-16 encoded value bytes",
+			value:    testValueBytes,
+			encoding: "UTF16",
+			want:     "test string",
+		},
+		{
 			name:          "decode GB2312 encoded string; no decoder available",
 			value:         "test string",
 			encoding:      "GB2312",
 			want:          nil,
-			expectedError: "no decoder available for encoding: GB2312",
+			expectedError: "no charmap defined for encoding 'GB2312'",
 		},
 		{
 			name:          "non-string",
@@ -172,6 +178,30 @@ func TestDecode(t *testing.T) {
 			encoding:      "base64",
 			expectedError: "illegal base64 data at input byte",
 		},
+		{
+			name:     "base64 with url-safe sensitive characters",
+			value:    "R28/L1p+eA==",
+			encoding: "base64",
+			want:     "Go?/Z~x",
+		},
+		{
+			name:     "base64-raw with url-safe sensitive characters",
+			value:    "R28/L1p+eA",
+			encoding: "base64-raw",
+			want:     "Go?/Z~x",
+		},
+		{
+			name:     "base64-url with url-safe sensitive characters",
+			value:    "R28_L1p-eA==",
+			encoding: "base64-url",
+			want:     "Go?/Z~x",
+		},
+		{
+			name:     "base64-raw-url with url-safe sensitive characters",
+			value:    "R28_L1p-eA",
+			encoding: "base64-raw-url",
+			want:     "Go?/Z~x",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,9 +211,12 @@ func TestDecode(t *testing.T) {
 						return tt.value, nil
 					},
 				},
-				Encoding: tt.encoding,
+				Encoding: ottl.StandardStringGetter[any]{
+					Getter: func(_ context.Context, _ any) (any, error) {
+						return tt.encoding, nil
+					},
+				},
 			})
-
 			require.NoError(t, err)
 
 			result, err := expressionFunc(nil, nil)
@@ -195,5 +228,63 @@ func TestDecode(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tt.want, result)
 		})
+	}
+}
+
+func BenchmarkDecodeBytes(b *testing.B) {
+	val := pcommon.NewValueBytes()
+	val.Bytes().FromRaw([]byte(benchData))
+
+	encGetter, err := ottl.NewTestingLiteralGetter[any, string](true, &ottl.StandardStringGetter[any]{
+		Getter: func(_ context.Context, _ any) (any, error) {
+			return "utf-8", nil
+		},
+	})
+	require.NoError(b, err)
+
+	dec, err := decode(ottl.StandardGetSetter[any]{
+		Getter: func(context.Context, any) (any, error) {
+			return val, nil
+		},
+	}, encGetter)
+	require.NoError(b, err)
+
+	ctx := b.Context()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, err = dec(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkDecodeString(b *testing.B) {
+	val := pcommon.NewValueStr(benchData)
+	encGetter, err := ottl.NewTestingLiteralGetter[any, string](true, &ottl.StandardStringGetter[any]{
+		Getter: func(_ context.Context, _ any) (any, error) {
+			return "utf-8", nil
+		},
+	})
+	require.NoError(b, err)
+
+	dec, err := decode(ottl.StandardGetSetter[any]{
+		Getter: func(context.Context, any) (any, error) {
+			return val, nil
+		},
+	}, encGetter)
+	require.NoError(b, err)
+
+	ctx := b.Context()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, err = dec(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		require.NoError(b, err)
 	}
 }

@@ -24,24 +24,27 @@ func TestResourceAttributesConfig(t *testing.T) {
 		{
 			name: "all_set",
 			want: ResourceAttributesConfig{
-				HostName: ResourceAttributeConfig{Enabled: true},
-				OsType:   ResourceAttributeConfig{Enabled: true},
+				ContainerImageName: ResourceAttributeConfig{Enabled: true},
+				ContainerName:      ResourceAttributeConfig{Enabled: true},
+				HostName:           ResourceAttributeConfig{Enabled: true},
+				OsType:             ResourceAttributeConfig{Enabled: true},
 			},
 		},
 		{
 			name: "none_set",
 			want: ResourceAttributesConfig{
-				HostName: ResourceAttributeConfig{Enabled: false},
-				OsType:   ResourceAttributeConfig{Enabled: false},
+				ContainerImageName: ResourceAttributeConfig{Enabled: false},
+				ContainerName:      ResourceAttributeConfig{Enabled: false},
+				HostName:           ResourceAttributeConfig{Enabled: false},
+				OsType:             ResourceAttributeConfig{Enabled: false},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

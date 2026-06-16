@@ -7,7 +7,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/datadogreceiver/internal/metadata"
 )
 
 func TestGetMetricAttributes(t *testing.T) {
@@ -42,10 +46,10 @@ func TestGetMetricAttributes(t *testing.T) {
 			tags: []string{"env:prod", "service:my-service", "version:1.0"},
 			host: "host",
 			expectedResourceAttrs: newMapFromKV(t, map[string]any{
-				"host.name":              "host",
-				"deployment.environment": "prod",
-				"service.name":           "my-service",
-				"service.version":        "1.0",
+				"host.name":                   "host",
+				"deployment.environment.name": "prod",
+				"service.name":                "my-service",
+				"service.version":             "1.0",
 			}),
 			expectedScopeAttrs: pcommon.NewMap(),
 			expectedDpAttrs:    pcommon.NewMap(),
@@ -55,8 +59,8 @@ func TestGetMetricAttributes(t *testing.T) {
 			tags: []string{"env:prod", "foo"},
 			host: "host",
 			expectedResourceAttrs: newMapFromKV(t, map[string]any{
-				"host.name":              "host",
-				"deployment.environment": "prod",
+				"host.name":                   "host",
+				"deployment.environment.name": "prod",
 			}),
 			expectedScopeAttrs: pcommon.NewMap(),
 			expectedDpAttrs: newMapFromKV(t, map[string]any{
@@ -71,33 +75,29 @@ func TestGetMetricAttributes(t *testing.T) {
 			attrs := tagsToAttributes(c.tags, c.host, pool)
 
 			assert.Equal(t, c.expectedResourceAttrs.Len(), attrs.resource.Len())
-			c.expectedResourceAttrs.Range(func(k string, _ pcommon.Value) bool {
+			for k := range c.expectedResourceAttrs.All() {
 				ev, _ := c.expectedResourceAttrs.Get(k)
 				av, ok := attrs.resource.Get(k)
 				assert.True(t, ok)
 				assert.Equal(t, ev, av)
-				return true
-			})
+			}
 
 			assert.Equal(t, c.expectedScopeAttrs.Len(), attrs.scope.Len())
-			c.expectedScopeAttrs.Range(func(k string, _ pcommon.Value) bool {
+			for k := range c.expectedScopeAttrs.All() {
 				ev, _ := c.expectedScopeAttrs.Get(k)
 				av, ok := attrs.scope.Get(k)
 				assert.True(t, ok)
 				assert.Equal(t, ev, av)
-				return true
-			})
+			}
 
 			assert.Equal(t, c.expectedDpAttrs.Len(), attrs.dp.Len())
-			c.expectedDpAttrs.Range(func(k string, _ pcommon.Value) bool {
+			for k := range c.expectedDpAttrs.All() {
 				ev, _ := c.expectedDpAttrs.Get(k)
 				av, ok := attrs.dp.Get(k)
 				assert.True(t, ok)
 				assert.Equal(t, ev, av)
-				return true
-			})
+			}
 		})
-
 	}
 }
 
@@ -142,7 +142,6 @@ func TestDatadogTagToKeyValuePair(t *testing.T) {
 			assert.Equal(t, c.expectedValue, value, "Expected value %s, got %s", c.expectedValue, value)
 		})
 	}
-
 }
 
 func TestTranslateDataDogKeyToOtel(t *testing.T) {
@@ -152,4 +151,66 @@ func TestTranslateDataDogKeyToOtel(t *testing.T) {
 			assert.Equal(t, v, translateDatadogKeyToOTel(k))
 		})
 	}
+
+	// test dynamic attributes:
+	// * http.request.header.<header_name>
+	// * http.response.header.<header_name>
+	assert.Equal(t, "http.request.header.referer", translateDatadogKeyToOTel("http.request.headers.referer"))
+	assert.Equal(t, "http.response.header.content-type", translateDatadogKeyToOTel("http.response.headers.content-type"))
+}
+
+func TestImageTags(t *testing.T) {
+	// make sure container.image.tags is a string[]
+	expected := "[\"tag1\"]"
+	tags := []string{"env:prod", "foo", "image_tag:tag1"}
+	host := "host"
+	pool := newStringPool()
+
+	attrs := tagsToAttributes(tags, host, pool)
+	imageTags, _ := attrs.resource.Get("container.image.tags")
+	assert.Equal(t, expected, imageTags.AsString())
+}
+
+func TestHTTPHeaders(t *testing.T) {
+	// make sure container.image.tags is a string[]
+	expected := "[\"value\"]"
+	tags := []string{"env:prod", "foo", "http.request.headers.header:value", "http.response.headers.header:value"}
+	host := "host"
+	pool := newStringPool()
+
+	attrs := tagsToAttributes(tags, host, pool)
+	header, found := attrs.resource.Get("http.request.header.header")
+	assert.True(t, found)
+	assert.Equal(t, expected, header.AsString())
+	header, found = attrs.resource.Get("http.response.header.header")
+	assert.True(t, found)
+	assert.Equal(t, expected, header.AsString())
+}
+
+func TestKeyOverlapWithFeatureGate(t *testing.T) {
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ReceiverDatadogreceiverEnableMultiTagParsingFeatureGate.ID(), true))
+
+	expected := "[\"value1\",\"value2\"]"
+	tags := []string{"env:prod", "foo", "kube_service:value1", "kube_service:value2"}
+	host := "host"
+	pool := newStringPool()
+
+	attrs := tagsToAttributes(tags, host, pool)
+	kubeService, found := attrs.dp.Get("kube_service")
+	assert.True(t, found)
+	assert.Equal(t, expected, kubeService.AsString())
+}
+
+func TestKeyOverlapWithoutFeatureGate(t *testing.T) {
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ReceiverDatadogreceiverEnableMultiTagParsingFeatureGate.ID(), false))
+
+	expected := "value2"
+	tags := []string{"env:prod", "foo", "kube_service:value1", "kube_service:value2"}
+	host := "host"
+	pool := newStringPool()
+
+	attrs := tagsToAttributes(tags, host, pool)
+	kubeService, found := attrs.dp.Get("kube_service")
+	assert.True(t, found)
+	assert.Equal(t, expected, kubeService.AsString())
 }

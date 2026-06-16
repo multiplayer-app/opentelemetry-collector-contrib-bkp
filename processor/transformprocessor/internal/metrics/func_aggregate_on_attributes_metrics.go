@@ -5,6 +5,7 @@ package metrics // import "github.com/open-telemetry/opentelemetry-collector-con
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -19,15 +20,15 @@ type aggregateOnAttributesArguments struct {
 	Attributes          ottl.Optional[[]string]
 }
 
-func newAggregateOnAttributesFactory() ottl.Factory[ottlmetric.TransformContext] {
+func newAggregateOnAttributesFactory() ottl.Factory[*ottlmetric.TransformContext] {
 	return ottl.NewFactory("aggregate_on_attributes", &aggregateOnAttributesArguments{}, createAggregateOnAttributesFunction)
 }
 
-func createAggregateOnAttributesFunction(_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[ottlmetric.TransformContext], error) {
+func createAggregateOnAttributesFunction(_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[*ottlmetric.TransformContext], error) {
 	args, ok := oArgs.(*aggregateOnAttributesArguments)
 
 	if !ok {
-		return nil, fmt.Errorf("AggregateOnAttributesFactory args must be of type *AggregateOnAttributesArguments")
+		return nil, errors.New("AggregateOnAttributesFactory args must be of type *AggregateOnAttributesArguments")
 	}
 
 	t, err := aggregateutil.ConvertToAggregationFunction(args.AggregationFunction)
@@ -38,12 +39,12 @@ func createAggregateOnAttributesFunction(_ ottl.FunctionContext, oArgs ottl.Argu
 	return AggregateOnAttributes(t, args.Attributes)
 }
 
-func AggregateOnAttributes(aggregationFunction aggregateutil.AggregationType, attributes ottl.Optional[[]string]) (ottl.ExprFunc[ottlmetric.TransformContext], error) {
-	return func(_ context.Context, tCtx ottlmetric.TransformContext) (any, error) {
+func AggregateOnAttributes(aggregationFunction aggregateutil.AggregationType, attributes ottl.Optional[[]string]) (ottl.ExprFunc[*ottlmetric.TransformContext], error) {
+	return func(_ context.Context, tCtx *ottlmetric.TransformContext) (any, error) {
 		metric := tCtx.GetMetric()
 
 		if metric.Type() == pmetric.MetricTypeSummary {
-			return nil, fmt.Errorf("aggregate_on_attributes does not support aggregating Summary metrics")
+			return nil, errors.New("aggregate_on_attributes does not support aggregating Summary metrics")
 		}
 
 		ag := aggregateutil.AggGroups{}

@@ -4,7 +4,6 @@
 package transformprocessor
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/metadata"
 )
 
 func TestFlattenDataDisabledByDefault(t *testing.T) {
@@ -23,7 +23,7 @@ func TestFlattenDataDisabledByDefault(t *testing.T) {
 	cfg := factory.CreateDefaultConfig()
 	oCfg := cfg.(*Config)
 	assert.False(t, oCfg.FlattenData)
-	assert.NoError(t, oCfg.Validate())
+	require.NoError(t, oCfg.Validate())
 }
 
 func TestFlattenDataRequiresGate(t *testing.T) {
@@ -48,7 +48,7 @@ func TestProcessLogsWithoutFlatten(t *testing.T) {
 		},
 	}
 	sink := new(consumertest.LogsSink)
-	p, err := factory.CreateLogs(context.Background(), processortest.NewNopSettings(), oCfg, sink)
+	p, err := factory.CreateLogs(t.Context(), processortest.NewNopSettings(metadata.Type), oCfg, sink)
 	require.NoError(t, err)
 
 	input, err := golden.ReadLogs(filepath.Join("testdata", "logs", "input.yaml"))
@@ -56,12 +56,12 @@ func TestProcessLogsWithoutFlatten(t *testing.T) {
 	expected, err := golden.ReadLogs(filepath.Join("testdata", "logs", "expected-without-flatten.yaml"))
 	require.NoError(t, err)
 
-	assert.NoError(t, p.ConsumeLogs(context.Background(), input))
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
 
 	actual := sink.AllLogs()
 	require.Len(t, actual, 1)
 
-	assert.NoError(t, plogtest.CompareLogs(expected, actual[0]))
+	require.NoError(t, plogtest.CompareLogs(expected, actual[0]))
 }
 
 func TestProcessLogsWithFlatten(t *testing.T) {
@@ -79,7 +79,7 @@ func TestProcessLogsWithFlatten(t *testing.T) {
 		},
 	}
 	sink := new(consumertest.LogsSink)
-	p, err := factory.CreateLogs(context.Background(), processortest.NewNopSettings(), oCfg, sink)
+	p, err := factory.CreateLogs(t.Context(), processortest.NewNopSettings(metadata.Type), oCfg, sink)
 	require.NoError(t, err)
 
 	input, err := golden.ReadLogs(filepath.Join("testdata", "logs", "input.yaml"))
@@ -87,12 +87,12 @@ func TestProcessLogsWithFlatten(t *testing.T) {
 	expected, err := golden.ReadLogs(filepath.Join("testdata", "logs", "expected-with-flatten.yaml"))
 	require.NoError(t, err)
 
-	assert.NoError(t, p.ConsumeLogs(context.Background(), input))
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
 
 	actual := sink.AllLogs()
 	require.Len(t, actual, 1)
 
-	assert.NoError(t, plogtest.CompareLogs(expected, actual[0]))
+	require.NoError(t, plogtest.CompareLogs(expected, actual[0]))
 }
 
 func BenchmarkLogsWithoutFlatten(b *testing.B) {
@@ -109,14 +109,14 @@ func BenchmarkLogsWithoutFlatten(b *testing.B) {
 		},
 	}
 	sink := new(consumertest.LogsSink)
-	p, err := factory.CreateLogs(context.Background(), processortest.NewNopSettings(), oCfg, sink)
+	p, err := factory.CreateLogs(b.Context(), processortest.NewNopSettings(metadata.Type), oCfg, sink)
 	require.NoError(b, err)
 
 	input, err := golden.ReadLogs(filepath.Join("testdata", "logs", "input.yaml"))
 	require.NoError(b, err)
 
-	for n := 0; n < b.N; n++ {
-		assert.NoError(b, p.ConsumeLogs(context.Background(), input))
+	for b.Loop() {
+		require.NoError(b, p.ConsumeLogs(b.Context(), input))
 	}
 }
 
@@ -135,13 +135,13 @@ func BenchmarkLogsWithFlatten(b *testing.B) {
 		},
 	}
 	sink := new(consumertest.LogsSink)
-	p, err := factory.CreateLogs(context.Background(), processortest.NewNopSettings(), oCfg, sink)
+	p, err := factory.CreateLogs(b.Context(), processortest.NewNopSettings(metadata.Type), oCfg, sink)
 	require.NoError(b, err)
 
 	input, err := golden.ReadLogs(filepath.Join("testdata", "logs", "input.yaml"))
 	require.NoError(b, err)
 
-	for n := 0; n < b.N; n++ {
-		assert.NoError(b, p.ConsumeLogs(context.Background(), input))
+	for b.Loop() {
+		require.NoError(b, p.ConsumeLogs(b.Context(), input))
 	}
 }

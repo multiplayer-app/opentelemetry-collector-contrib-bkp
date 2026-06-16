@@ -1,3 +1,4 @@
+display_name: Logs Transform Processor
 type: logstransform
 
 status:
@@ -6,7 +7,7 @@ status:
     development: [logs]
   distributions: []
   codeowners:
-    active: [djaglowski, dehaansa]
+    active: [dehaansa]
 
 tests:
   config:

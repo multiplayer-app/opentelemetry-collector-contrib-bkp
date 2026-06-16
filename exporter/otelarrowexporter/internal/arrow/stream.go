@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	arrowpb "github.com/open-telemetry/otel-arrow/api/experimental/arrow/v1"
-	arrowRecord "github.com/open-telemetry/otel-arrow/pkg/otel/arrow_record"
+	arrowpb "github.com/open-telemetry/otel-arrow/go/api/experimental/arrow/v1"
+	arrowRecord "github.com/open-telemetry/otel-arrow/go/pkg/otel/arrow_record"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -187,14 +187,12 @@ func (s *Stream) run(ctx context.Context, dc doneCancel, streamClient StreamClie
 	var ww sync.WaitGroup
 
 	var writeErr error
-	ww.Add(1)
-	go func() {
-		defer ww.Done()
+	ww.Go(func() {
 		writeErr = s.write(ctx)
 		if writeErr != nil {
 			dc.cancel()
 		}
-	}()
+	})
 
 	// the result from read() is processed after cancel and wait,
 	// so we can set s.client = nil in case of a delayed Unimplemented.
@@ -328,7 +326,7 @@ func (s *Stream) encodeAndSend(wri writeItem, hdrsBuf *bytes.Buffer, hdrsEnc *hp
 			if err != nil {
 				// This case is like the encode-failure case
 				// above, we will restart the stream but consider
-				// this a permenent error.
+				// this a permanent error.
 				err = status.Errorf(codes.Internal, "hpack: %v", err)
 				wri.errCh <- err
 				return err
@@ -374,13 +372,14 @@ func (s *Stream) read(_ context.Context) error {
 			return err
 		}
 
-		if err = s.processBatchStatus(resp); err != nil {
+		err = s.processBatchStatus(resp)
+		if err != nil {
 			return err
 		}
 	}
 }
 
-// getSenderChannel takes the stream lock and removes the corresonding
+// getSenderChannel takes the stream lock and removes the corresponding
 // sender channel.
 func (sws *streamWorkState) getSenderChannel(bstat *arrowpb.BatchStatus) (chan<- error, error) {
 	sws.lock.Lock()

@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/entry"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/attrs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/testutil"
 )
 
@@ -30,6 +32,7 @@ func TestAddFileResolvedFields(t *testing.T) {
 		cfg.IncludeFilePathResolved = true
 		cfg.IncludeFileOwnerName = runtime.GOOS != "windows"
 		cfg.IncludeFileOwnerGroupName = runtime.GOOS != "windows"
+		cfg.IncludeFilePermissions = runtime.GOOS != "windows"
 	})
 
 	// Create temp dir with log file
@@ -62,13 +65,93 @@ func TestAddFileResolvedFields(t *testing.T) {
 
 	e := waitForOne(t, logReceived)
 	require.Equal(t, filepath.Base(symLinkPath), e.Attributes["log.file.name"])
-	require.Equal(t, symLinkPath, e.Attributes["log.file.path"])
+	require.Equal(t, symLinkPath, e.Attributes[attrs.LogFilePath])
 	require.Equal(t, filepath.Base(resolved), e.Attributes["log.file.name_resolved"])
 	require.Equal(t, resolved, e.Attributes["log.file.path_resolved"])
 	if runtime.GOOS != "windows" {
 		require.NotNil(t, e.Attributes["log.file.owner.name"])
 		require.NotNil(t, e.Attributes["log.file.owner.group.name"])
+		require.NotNil(t, e.Attributes["log.file.permissions"])
 	}
+}
+
+// TestDisableFileRecordOffset tests that the `log.file.record_offset` is not included
+// when IncludeFileRecordOffset is set to `false`
+func TestDisableFileRecordOffset(t *testing.T) {
+	operator, logReceived, tempDir := newTestFileOperator(t, func(cfg *Config) {
+		cfg.IncludeFileRecordOffset = false
+	})
+
+	temp := openTemp(t, tempDir)
+	writeString(t, temp, "123456\n")
+
+	require.NoError(t, operator.Start(testutil.NewUnscopedMockPersister()))
+	defer func() {
+		require.NoError(t, operator.Stop())
+	}()
+
+	e := waitForOne(t, logReceived)
+	require.Nil(t, e.Attributes[attrs.LogFileRecordOffset])
+}
+
+// TestReadExistingLogsFileRecordOffset tests that the `log.file.record_offset` is included
+// when IncludeFileRecordOffset is set to `true` and increments correctly
+func TestReadExistingLogsFileRecordOffset(t *testing.T) {
+	t.Parallel()
+	operator, logReceived, tempDir := newTestFileOperator(t, func(cfg *Config) {
+		cfg.IncludeFileRecordOffset = true
+	})
+
+	// Create a file, then start
+	temp := openTemp(t, tempDir)
+	writeString(t, temp, "   01234567   \n01234567 \n01234567")
+
+	require.NoError(t, operator.Start(testutil.NewUnscopedMockPersister()))
+	defer func() {
+		require.NoError(t, operator.Stop())
+	}()
+
+	e := waitForOne(t, logReceived)
+	require.Equal(t, int64(0), e.Attributes[attrs.LogFileRecordOffset])
+
+	e = waitForOne(t, logReceived)
+	require.Equal(t, int64(15), e.Attributes[attrs.LogFileRecordOffset])
+
+	e = waitForOne(t, logReceived)
+	require.Equal(t, int64(25), e.Attributes[attrs.LogFileRecordOffset])
+}
+
+// TestReadExistingLogsFileRecordOffsetWithMultipleBatches  the `log.file.record_offset` increments correctly
+// when IncludeFileRecordOffset is set to `true` and there are multiple batches
+func TestReadExistingLogsFileRecordOffsetWithMultipleBatches(t *testing.T) {
+	t.Parallel()
+	operator, logReceived, tempDir := newTestFileOperator(t, func(cfg *Config) {
+		cfg.IncludeFileRecordOffset = true
+	})
+
+	var sb strings.Builder
+	for range 100 {
+		sb.WriteString("X\n")
+	}
+	sb.WriteString("X\n")
+
+	// Create a file, then start
+	temp := openTemp(t, tempDir)
+	writeString(t, temp, sb.String())
+
+	require.NoError(t, operator.Start(testutil.NewUnscopedMockPersister()))
+	defer func() {
+		require.NoError(t, operator.Stop())
+	}()
+
+	var e *entry.Entry
+	for i := range 100 {
+		e = waitForOne(t, logReceived)
+		require.Equal(t, int64(i*2), e.Attributes[attrs.LogFileRecordOffset])
+	}
+
+	e = waitForOne(t, logReceived)
+	require.Equal(t, int64(200), e.Attributes[attrs.LogFileRecordOffset])
 }
 
 // AddFileRecordNumber tests that the `log.file.record_number` is correctly included

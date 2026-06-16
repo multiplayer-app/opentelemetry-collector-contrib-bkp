@@ -5,16 +5,19 @@ package fileexporter
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/DeRuina/timberjack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -38,12 +41,17 @@ func (m *testMarshaller) MarshalMetrics(pmetric.Metrics) ([]byte, error) {
 	return m.content, nil
 }
 
+func (m *testMarshaller) MarshalProfiles(pprofile.Profiles) ([]byte, error) {
+	return m.content, nil
+}
+
 type groupingExporterTestCase struct {
-	name              string
-	conf              *Config
-	traceUnmarshaler  ptrace.Unmarshaler
-	logUnmarshaler    plog.Unmarshaler
-	metricUnmarshaler pmetric.Unmarshaler
+	name               string
+	conf               *Config
+	traceUnmarshaler   ptrace.Unmarshaler
+	logUnmarshaler     plog.Unmarshaler
+	metricUnmarshaler  pmetric.Unmarshaler
+	profileUnmarshaler pprofile.Unmarshaler
 }
 
 func groupingExporterTestCases() []groupingExporterTestCase {
@@ -60,9 +68,10 @@ func groupingExporterTestCases() []groupingExporterTestCase {
 					MaxOpenFiles:      defaultMaxOpenFiles,
 				},
 			},
-			traceUnmarshaler:  &ptrace.JSONUnmarshaler{},
-			logUnmarshaler:    &plog.JSONUnmarshaler{},
-			metricUnmarshaler: &pmetric.JSONUnmarshaler{},
+			traceUnmarshaler:   &ptrace.JSONUnmarshaler{},
+			logUnmarshaler:     &plog.JSONUnmarshaler{},
+			metricUnmarshaler:  &pmetric.JSONUnmarshaler{},
+			profileUnmarshaler: &pprofile.JSONUnmarshaler{},
 		},
 		{
 			name: "json: compression configuration",
@@ -77,9 +86,10 @@ func groupingExporterTestCases() []groupingExporterTestCase {
 					MaxOpenFiles:      defaultMaxOpenFiles,
 				},
 			},
-			traceUnmarshaler:  &ptrace.JSONUnmarshaler{},
-			logUnmarshaler:    &plog.JSONUnmarshaler{},
-			metricUnmarshaler: &pmetric.JSONUnmarshaler{},
+			traceUnmarshaler:   &ptrace.JSONUnmarshaler{},
+			logUnmarshaler:     &plog.JSONUnmarshaler{},
+			metricUnmarshaler:  &pmetric.JSONUnmarshaler{},
+			profileUnmarshaler: &pprofile.JSONUnmarshaler{},
 		},
 		{
 			name: "Proto: default configuration",
@@ -92,9 +102,10 @@ func groupingExporterTestCases() []groupingExporterTestCase {
 					MaxOpenFiles:      defaultMaxOpenFiles,
 				},
 			},
-			traceUnmarshaler:  &ptrace.ProtoUnmarshaler{},
-			logUnmarshaler:    &plog.ProtoUnmarshaler{},
-			metricUnmarshaler: &pmetric.ProtoUnmarshaler{},
+			traceUnmarshaler:   &ptrace.ProtoUnmarshaler{},
+			logUnmarshaler:     &plog.ProtoUnmarshaler{},
+			metricUnmarshaler:  &pmetric.ProtoUnmarshaler{},
+			profileUnmarshaler: &pprofile.JSONUnmarshaler{},
 		},
 		{
 			name: "Proto: compression configuration",
@@ -109,9 +120,10 @@ func groupingExporterTestCases() []groupingExporterTestCase {
 					MaxOpenFiles:      defaultMaxOpenFiles,
 				},
 			},
-			traceUnmarshaler:  &ptrace.ProtoUnmarshaler{},
-			logUnmarshaler:    &plog.ProtoUnmarshaler{},
-			metricUnmarshaler: &pmetric.ProtoUnmarshaler{},
+			traceUnmarshaler:   &ptrace.ProtoUnmarshaler{},
+			logUnmarshaler:     &plog.ProtoUnmarshaler{},
+			metricUnmarshaler:  &pmetric.ProtoUnmarshaler{},
+			profileUnmarshaler: &pprofile.JSONUnmarshaler{},
 		},
 		{
 			name: "json: max_open_files=1",
@@ -125,9 +137,10 @@ func groupingExporterTestCases() []groupingExporterTestCase {
 					ResourceAttribute: defaultResourceAttribute,
 				},
 			},
-			traceUnmarshaler:  &ptrace.JSONUnmarshaler{},
-			logUnmarshaler:    &plog.JSONUnmarshaler{},
-			metricUnmarshaler: &pmetric.JSONUnmarshaler{},
+			traceUnmarshaler:   &ptrace.JSONUnmarshaler{},
+			logUnmarshaler:     &plog.JSONUnmarshaler{},
+			metricUnmarshaler:  &pmetric.JSONUnmarshaler{},
+			profileUnmarshaler: &pprofile.JSONUnmarshaler{},
 		},
 	}
 }
@@ -152,11 +165,11 @@ func TestGroupingFileTracesExporter(t *testing.T) {
 			}
 			td := testSpans()
 
-			assert.NoError(t, gfe.Start(context.Background(), componenttest.NewNopHost()))
-			require.NoError(t, gfe.consumeTraces(context.Background(), td))
+			assert.NoError(t, gfe.Start(t.Context(), componenttest.NewNopHost()))
+			require.NoError(t, gfe.consumeTraces(t.Context(), td))
 			assert.LessOrEqual(t, gfe.writers.Len(), conf.GroupBy.MaxOpenFiles)
 
-			assert.NoError(t, gfe.Shutdown(context.Background()))
+			assert.NoError(t, gfe.Shutdown(t.Context()))
 
 			// make sure the exporter did not modify any data
 			assert.Equal(t, testSpans(), td)
@@ -200,7 +213,7 @@ func TestGroupingFileTracesExporter(t *testing.T) {
 						gotResourceSpans = append(gotResourceSpans, got.ResourceSpans().At(i))
 					}
 
-					assert.EqualValues(t, wantResourceSpans, gotResourceSpans)
+					assert.Equal(t, wantResourceSpans, gotResourceSpans)
 				}
 				fi.Close()
 			}
@@ -229,11 +242,11 @@ func TestGroupingFileLogsExporter(t *testing.T) {
 			}
 			td := testLogs()
 
-			assert.NoError(t, gfe.Start(context.Background(), componenttest.NewNopHost()))
-			require.NoError(t, gfe.consumeLogs(context.Background(), td))
+			assert.NoError(t, gfe.Start(t.Context(), componenttest.NewNopHost()))
+			require.NoError(t, gfe.consumeLogs(t.Context(), td))
 			assert.LessOrEqual(t, gfe.writers.Len(), conf.GroupBy.MaxOpenFiles)
 
-			assert.NoError(t, gfe.Shutdown(context.Background()))
+			assert.NoError(t, gfe.Shutdown(t.Context()))
 
 			// make sure the exporter did not modify any data
 			assert.Equal(t, testLogs(), td)
@@ -277,7 +290,7 @@ func TestGroupingFileLogsExporter(t *testing.T) {
 						gotResourceLogs = append(gotResourceLogs, got.ResourceLogs().At(i))
 					}
 
-					assert.EqualValues(t, wantResourceLogs, gotResourceLogs)
+					assert.Equal(t, wantResourceLogs, gotResourceLogs)
 				}
 				fi.Close()
 			}
@@ -307,11 +320,11 @@ func TestGroupingFileMetricsExporter(t *testing.T) {
 			}
 			td := testMetrics()
 
-			assert.NoError(t, gfe.Start(context.Background(), componenttest.NewNopHost()))
-			require.NoError(t, gfe.consumeMetrics(context.Background(), td))
+			assert.NoError(t, gfe.Start(t.Context(), componenttest.NewNopHost()))
+			require.NoError(t, gfe.consumeMetrics(t.Context(), td))
 			assert.LessOrEqual(t, gfe.writers.Len(), conf.GroupBy.MaxOpenFiles)
 
-			assert.NoError(t, gfe.Shutdown(context.Background()))
+			assert.NoError(t, gfe.Shutdown(t.Context()))
 
 			// make sure the exporter did not modify any data
 			assert.Equal(t, testMetrics(), td)
@@ -355,7 +368,7 @@ func TestGroupingFileMetricsExporter(t *testing.T) {
 						gotResourceMetrics = append(gotResourceMetrics, got.ResourceMetrics().At(i))
 					}
 
-					assert.EqualValues(t, wantResourceMetrics, gotResourceMetrics)
+					assert.Equal(t, wantResourceMetrics, gotResourceMetrics)
 				}
 				fi.Close()
 			}
@@ -452,7 +465,7 @@ func BenchmarkExporters(b *testing.B) {
 
 	var traces []ptrace.Traces
 	var logs []plog.Logs
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		td := testdata.GenerateTracesTwoSpansSameResource()
 		td.ResourceSpans().At(0).Resource().Attributes().PutStr("fileexporter.path_segment", fmt.Sprintf("file%d", i))
 		traces = append(traces, td)
@@ -481,19 +494,110 @@ func BenchmarkExporters(b *testing.B) {
 			fExp.marshaller = marshaller
 		}
 
-		require.NoError(b, fe.Start(context.Background(), componenttest.NewNopHost()))
+		require.NoError(b, fe.Start(b.Context(), componenttest.NewNopHost()))
 
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			ctx := context.Background()
-			for i := 0; i < b.N; i++ {
+			ctx := b.Context()
+			for i := 0; b.Loop(); i++ {
 				require.NoError(b, fe.consumeTraces(ctx, traces[i%len(traces)]))
 				require.NoError(b, fe.consumeLogs(ctx, logs[i%len(logs)]))
 			}
 		})
 
-		assert.NoError(b, fe.Shutdown(context.Background()))
+		assert.NoError(b, fe.Shutdown(b.Context()))
 	}
+}
+
+func TestGroupingFileExporterWithRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Use a very small rotation size to trigger rotation quickly
+	const maxMegabytes = 1 // 1MB
+
+	conf := &Config{
+		Path:       tmpDir + "/*.log",
+		FormatType: formatTypeJSON,
+		Rotation: &Rotation{
+			MaxMegabytes: maxMegabytes,
+			MaxBackups:   3,
+			LocalTime:    true,
+		},
+		GroupBy: &GroupBy{
+			Enabled:           true,
+			ResourceAttribute: "service.name",
+			MaxOpenFiles:      100,
+		},
+	}
+
+	zapCore, _ := observer.New(zap.DebugLevel)
+	feI := newFileExporter(conf, zap.New(zapCore))
+	require.IsType(t, &groupingFileExporter{}, feI)
+	gfe := feI.(*groupingFileExporter)
+
+	require.NoError(t, gfe.Start(t.Context(), componenttest.NewNopHost()))
+
+	// Verify the writer uses timberjack (rotation enabled)
+	td := ptrace.NewTraces()
+	rs := td.ResourceSpans().AppendEmpty()
+	rs.Resource().Attributes().PutStr("service.name", "test-service")
+	span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	span.SetName("test-span")
+
+	require.NoError(t, gfe.consumeTraces(t.Context(), td))
+
+	gfe.mutex.Lock()
+	writer, ok := gfe.writers.Get(tmpDir + "/test-service.log")
+	gfe.mutex.Unlock()
+
+	require.True(t, ok, "Writer should exist")
+	_, isTimberJack := writer.file.(*timberjack.Logger)
+	require.True(t, isTimberJack, "Should use timberjack.Logger for rotation support")
+
+	// Write enough data to trigger 4+ rotations (>4MB) to test MaxBackups cleanup
+	// Each trace with padding is roughly 1000+ bytes, so we need ~5000 iterations to exceed 5MB
+	largePayload := strings.Repeat("x", 1000)
+	for i := range 5000 {
+		td := ptrace.NewTraces()
+		rs := td.ResourceSpans().AppendEmpty()
+		rs.Resource().Attributes().PutStr("service.name", "test-service")
+		span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+		span.SetName(fmt.Sprintf("test-span-%d", i))
+		span.Attributes().PutStr("payload", largePayload)
+
+		require.NoError(t, gfe.consumeTraces(t.Context(), td))
+	}
+
+	require.NoError(t, gfe.Shutdown(t.Context()))
+
+	// Verify rotation occurred by checking for backup files
+	// timberjack creates backup files with timestamp pattern like: test-service-2024-01-02T15-04-05.000.log
+	files, err := filepath.Glob(tmpDir + "/test-service*.log*")
+	require.NoError(t, err)
+
+	// Should have the main file plus at least one rotated backup
+	require.Greater(t, len(files), 1, "Rotation should have created backup files, found: %v", files)
+
+	// Verify at least one backup file exists with timestamp pattern
+	backupCount := 0
+	var totalSize int64
+	for _, f := range files {
+		baseName := filepath.Base(f)
+		// Backup files have format: test-service-YYYY-MM-DDTHH-MM-SS.sss.log
+		if strings.HasPrefix(baseName, "test-service-") && baseName != "test-service.log" {
+			backupCount++
+		}
+		info, err := os.Stat(f)
+		require.NoError(t, err)
+		totalSize += info.Size()
+	}
+	require.Positive(t, backupCount, "Should have at least one timestamped backup file, found files: %v", files)
+
+	// Verify MaxBackups retention policy is enforced (old files should be cleaned up)
+	require.LessOrEqual(t, backupCount, 3, "MaxBackups should limit backup files to 3, but found: %d files: %v", backupCount, files)
+
+	// Verify total data written exceeds the rotation threshold
+	require.Greater(t, totalSize, int64(maxMegabytes*1024*1024), "Total data written should exceed rotation threshold")
 }

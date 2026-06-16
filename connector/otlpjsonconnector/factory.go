@@ -5,22 +5,31 @@ package otlpjsonconnector // import "github.com/open-telemetry/opentelemetry-col
 
 import (
 	"context"
+	"regexp"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/connector"
+	"go.opentelemetry.io/collector/connector/xconnector"
 	"go.opentelemetry.io/collector/consumer"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/otlpjsonconnector/internal/metadata"
 )
 
+var (
+	logRegex    = regexp.MustCompile(`^\{\s*"resourceLogs"\s*:\s*\[`)
+	metricRegex = regexp.MustCompile(`^\{\s*"resourceMetrics"\s*:\s*\[`)
+	traceRegex  = regexp.MustCompile(`^\{\s*"resourceSpans"\s*:\s*\[`)
+)
+
 // NewFactory returns a ConnectorFactory.
 func NewFactory() connector.Factory {
-	return connector.NewFactory(
+	return xconnector.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		connector.WithLogsToTraces(createTracesConnector, component.StabilityLevelAlpha),
-		connector.WithLogsToMetrics(createMetricsConnector, component.StabilityLevelAlpha),
-		connector.WithLogsToLogs(createLogsConnector, component.StabilityLevelAlpha),
+		xconnector.WithLogsToTraces(createTracesConnector, component.StabilityLevelAlpha),
+		xconnector.WithLogsToMetrics(createMetricsConnector, component.StabilityLevelAlpha),
+		xconnector.WithLogsToLogs(createLogsConnector, component.StabilityLevelAlpha),
+		xconnector.WithDeprecatedTypeAlias(metadata.DeprecatedType),
 	)
 }
 

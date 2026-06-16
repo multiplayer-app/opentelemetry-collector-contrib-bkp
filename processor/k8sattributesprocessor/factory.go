@@ -5,29 +5,40 @@ package k8sattributesprocessor // import "github.com/open-telemetry/opentelemetr
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processorhelper"
+	"go.opentelemetry.io/collector/processor/processorhelper/xprocessorhelper"
+	"go.opentelemetry.io/collector/processor/xprocessor"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/sharedcomponent"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/kube"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/metadata"
 )
 
-var kubeClientProvider = kube.ClientProvider(nil)
-var consumerCapabilities = consumer.Capabilities{MutatesData: true}
-var defaultExcludes = ExcludeConfig{Pods: []ExcludePodConfig{{Name: "jaeger-agent"}, {Name: "jaeger-collector"}}}
+var (
+	kubeClientProvider   = kube.ClientProvider(nil)
+	consumerCapabilities = consumer.Capabilities{MutatesData: true}
+	defaultExcludes      = ExcludeConfig{Pods: []ExcludePodConfig{{Name: "jaeger-agent"}, {Name: "jaeger-collector"}}}
+	processors           = sharedcomponent.NewSharedComponents()
+)
 
 // NewFactory returns a new factory for the k8s processor.
 func NewFactory() processor.Factory {
-	return processor.NewFactory(
+	return xprocessor.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		processor.WithTraces(createTracesProcessor, metadata.TracesStability),
-		processor.WithMetrics(createMetricsProcessor, metadata.MetricsStability),
-		processor.WithLogs(createLogsProcessor, metadata.LogsStability),
+		xprocessor.WithTraces(createTracesProcessor, metadata.TracesStability),
+		xprocessor.WithMetrics(createMetricsProcessor, metadata.MetricsStability),
+		xprocessor.WithLogs(createLogsProcessor, metadata.LogsStability),
+		xprocessor.WithProfiles(createProfilesProcessor, metadata.ProfilesStability),
+		xprocessor.WithDeprecatedTypeAlias(metadata.DeprecatedType),
 	)
 }
 
@@ -36,8 +47,12 @@ func createDefaultConfig() component.Config {
 		APIConfig: k8sconfig.APIConfig{AuthType: k8sconfig.AuthTypeServiceAccount},
 		Exclude:   defaultExcludes,
 		Extract: ExtractConfig{
-			Metadata: enabledAttributes(),
+			Metadata:                     enabledAttributes(),
+			DeploymentNameFromReplicaSet: true,
 		},
+		WaitForMetadataTimeout: 10 * time.Second,
+		WatchSyncPeriod:        5 * time.Minute,
+		PodDeleteGracePeriod:   120 * time.Second,
 	}
 }
 
@@ -47,7 +62,23 @@ func createTracesProcessor(
 	cfg component.Config,
 	next consumer.Traces,
 ) (processor.Traces, error) {
-	return createTracesProcessorWithOptions(ctx, params, cfg, next)
+	if !metadata.ProcessorK8sattributesShareProcessorBetweenPipelinesFeatureGate.IsEnabled() {
+		return createTracesProcessorWithOptions(ctx, params, cfg, next)
+	}
+	sc := processors.GetOrAdd(cfg, func() component.Component {
+		return createKubernetesProcessor(params, cfg)
+	})
+	kp := sc.Unwrap().(*kubernetesprocessor)
+
+	return processorhelper.NewTraces(
+		ctx,
+		params,
+		cfg,
+		next,
+		kp.processTraces,
+		processorhelper.WithCapabilities(consumerCapabilities),
+		processorhelper.WithStart(sc.Start),
+		processorhelper.WithShutdown(sc.Shutdown))
 }
 
 func createLogsProcessor(
@@ -56,7 +87,23 @@ func createLogsProcessor(
 	cfg component.Config,
 	nextLogsConsumer consumer.Logs,
 ) (processor.Logs, error) {
-	return createLogsProcessorWithOptions(ctx, params, cfg, nextLogsConsumer)
+	if !metadata.ProcessorK8sattributesShareProcessorBetweenPipelinesFeatureGate.IsEnabled() {
+		return createLogsProcessorWithOptions(ctx, params, cfg, nextLogsConsumer)
+	}
+	sc := processors.GetOrAdd(cfg, func() component.Component {
+		return createKubernetesProcessor(params, cfg)
+	})
+	kp := sc.Unwrap().(*kubernetesprocessor)
+
+	return processorhelper.NewLogs(
+		ctx,
+		params,
+		cfg,
+		nextLogsConsumer,
+		kp.processLogs,
+		processorhelper.WithCapabilities(consumerCapabilities),
+		processorhelper.WithStart(sc.Start),
+		processorhelper.WithShutdown(sc.Shutdown))
 }
 
 func createMetricsProcessor(
@@ -65,7 +112,49 @@ func createMetricsProcessor(
 	cfg component.Config,
 	nextMetricsConsumer consumer.Metrics,
 ) (processor.Metrics, error) {
-	return createMetricsProcessorWithOptions(ctx, params, cfg, nextMetricsConsumer)
+	if !metadata.ProcessorK8sattributesShareProcessorBetweenPipelinesFeatureGate.IsEnabled() {
+		return createMetricsProcessorWithOptions(ctx, params, cfg, nextMetricsConsumer)
+	}
+	sc := processors.GetOrAdd(cfg, func() component.Component {
+		return createKubernetesProcessor(params, cfg)
+	})
+	kp := sc.Unwrap().(*kubernetesprocessor)
+
+	return processorhelper.NewMetrics(
+		ctx,
+		params,
+		cfg,
+		nextMetricsConsumer,
+		kp.processMetrics,
+		processorhelper.WithCapabilities(consumerCapabilities),
+		processorhelper.WithStart(sc.Start),
+		processorhelper.WithShutdown(sc.Shutdown))
+}
+
+func createProfilesProcessor(
+	ctx context.Context,
+	params processor.Settings,
+	cfg component.Config,
+	nextProfilesConsumer xconsumer.Profiles,
+) (xprocessor.Profiles, error) {
+	if !metadata.ProcessorK8sattributesShareProcessorBetweenPipelinesFeatureGate.IsEnabled() {
+		return createProfilesProcessorWithOptions(ctx, params, cfg, nextProfilesConsumer)
+	}
+	sc := processors.GetOrAdd(cfg, func() component.Component {
+		return createKubernetesProcessor(params, cfg)
+	})
+	kp := sc.Unwrap().(*kubernetesprocessor)
+
+	return xprocessorhelper.NewProfiles(
+		ctx,
+		params,
+		cfg,
+		nextProfilesConsumer,
+		kp.processProfiles,
+		xprocessorhelper.WithCapabilities(consumerCapabilities),
+		xprocessorhelper.WithStart(sc.Start),
+		xprocessorhelper.WithShutdown(sc.Shutdown),
+	)
 }
 
 func createTracesProcessorWithOptions(
@@ -128,15 +217,43 @@ func createLogsProcessorWithOptions(
 		processorhelper.WithShutdown(kp.Shutdown))
 }
 
+func createProfilesProcessorWithOptions(
+	ctx context.Context,
+	set processor.Settings,
+	cfg component.Config,
+	nextProfilesConsumer xconsumer.Profiles,
+	options ...option,
+) (xprocessor.Profiles, error) {
+	kp := createKubernetesProcessor(set, cfg, options...)
+
+	return xprocessorhelper.NewProfiles(
+		ctx,
+		set,
+		cfg,
+		nextProfilesConsumer,
+		kp.processProfiles,
+		xprocessorhelper.WithCapabilities(consumerCapabilities),
+		xprocessorhelper.WithStart(kp.Start),
+		xprocessorhelper.WithShutdown(kp.Shutdown),
+	)
+}
+
 func createKubernetesProcessor(
 	params processor.Settings,
 	cfg component.Config,
 	options ...option,
 ) *kubernetesprocessor {
-	kp := &kubernetesprocessor{logger: params.Logger,
+	telemetry, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
+	if err != nil {
+		params.Logger.Error("failed to create telemetry builder", zap.Error(err))
+	}
+
+	kp := &kubernetesprocessor{
+		logger:            params.Logger,
 		cfg:               cfg,
 		options:           options,
 		telemetrySettings: params.TelemetrySettings,
+		telemetry:         telemetry,
 	}
 
 	return kp
@@ -150,20 +267,27 @@ func createProcessorOpts(cfg component.Config) []option {
 	}
 
 	// extraction rules
-	opts = append(opts, withExtractMetadata(oCfg.Extract.Metadata...))
-	opts = append(opts, withExtractLabels(oCfg.Extract.Labels...))
-	opts = append(opts, withExtractAnnotations(oCfg.Extract.Annotations...))
+	opts = append(opts,
+		withExtractMetadata(oCfg.Extract.Metadata...),
+		withExtractLabels(oCfg.Extract.Labels...),
+		withExtractAnnotations(oCfg.Extract.Annotations...),
+		withOtelAnnotations(oCfg.Extract.OtelAnnotations),
+		withDeploymentNameFromReplicaSet(oCfg.Extract.DeploymentNameFromReplicaSet),
+		// filters
+		withFilterNode(oCfg.Filter.Node, oCfg.Filter.NodeFromEnvVar),
+		withFilterNamespace(oCfg.Filter.Namespace),
+		withFilterLabels(oCfg.Filter.Labels...),
+		withFilterFields(oCfg.Filter.Fields...),
+		withAPIConfig(oCfg.APIConfig),
+		withExtractPodAssociations(oCfg.Association...),
+		withExcludes(oCfg.Exclude),
+		withWaitForMetadataTimeout(oCfg.WaitForMetadataTimeout),
+		withWatchSyncPeriod(oCfg.WatchSyncPeriod),
+		withPodDeleteGracePeriod(oCfg.PodDeleteGracePeriod))
 
-	// filters
-	opts = append(opts, withFilterNode(oCfg.Filter.Node, oCfg.Filter.NodeFromEnvVar))
-	opts = append(opts, withFilterNamespace(oCfg.Filter.Namespace))
-	opts = append(opts, withFilterLabels(oCfg.Filter.Labels...))
-	opts = append(opts, withFilterFields(oCfg.Filter.Fields...))
-	opts = append(opts, withAPIConfig(oCfg.APIConfig))
-
-	opts = append(opts, withExtractPodAssociations(oCfg.Association...))
-
-	opts = append(opts, withExcludes(oCfg.Exclude))
+	if oCfg.WaitForMetadata {
+		opts = append(opts, withWaitForMetadata(true))
+	}
 
 	return opts
 }

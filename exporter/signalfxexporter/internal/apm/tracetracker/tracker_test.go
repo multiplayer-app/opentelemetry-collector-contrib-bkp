@@ -5,7 +5,6 @@
 package tracetracker
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	conventions "go.opentelemetry.io/collector/semconv/v1.26.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/signalfxexporter/internal/apm/correlations"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/signalfxexporter/internal/apm/log"
@@ -48,13 +46,13 @@ func TestExpiration(t *testing.T) {
 	setTime(a, time.Unix(100, 0))
 
 	fakeTraces := ptrace.NewTraces()
-	newResourceWithAttrs(hostIDDims, map[string]string{conventions.AttributeServiceName: "one", "environment": "environment1"}).
+	newResourceWithAttrs(hostIDDims, map[string]string{"service.name": "one", "environment": "environment1"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	newResourceWithAttrs(hostIDDims, map[string]string{conventions.AttributeServiceName: "two", "environment": "environment2"}).
+	newResourceWithAttrs(hostIDDims, map[string]string{"service.name": "two", "environment": "environment2"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	newResourceWithAttrs(hostIDDims, map[string]string{conventions.AttributeServiceName: "three", "environment": "environment3"}).
+	newResourceWithAttrs(hostIDDims, map[string]string{"service.name": "three", "environment": "environment3"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	a.ProcessTraces(context.Background(), fakeTraces)
+	a.ProcessTraces(t.Context(), fakeTraces)
 
 	assert.Equal(t, int64(3), a.hostServiceCache.ActiveCount, "activeServiceCount is not properly tracked")
 	assert.Equal(t, int64(3), a.hostEnvironmentCache.ActiveCount, "activeEnvironmentCount is not properly tracked")
@@ -62,9 +60,9 @@ func TestExpiration(t *testing.T) {
 	advanceTime(a, 4)
 
 	fakeTraces = ptrace.NewTraces()
-	newResourceWithAttrs(hostIDDims, map[string]string{conventions.AttributeServiceName: "two", "environment": "environment2"}).
+	newResourceWithAttrs(hostIDDims, map[string]string{"service.name": "two", "environment": "environment2"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	a.ProcessTraces(context.Background(), fakeTraces)
+	a.ProcessTraces(t.Context(), fakeTraces)
 
 	advanceTime(a, 2)
 	a.Purge()
@@ -80,15 +78,15 @@ type correlationTestClient struct {
 	cors             []*correlations.Correlation
 	getPayload       map[string]map[string][]string
 	getCallback      func()
-	getCounter       int64
-	deleteCounter    int64
-	correlateCounter int64
+	getCounter       atomic.Int64
+	deleteCounter    atomic.Int64
+	correlateCounter atomic.Int64
 }
 
-func (c *correlationTestClient) Start()    { /*no-op*/ }
-func (c *correlationTestClient) Shutdown() { /*no-op*/ }
-func (c *correlationTestClient) Get(_ string, dimValue string, cb correlations.SuccessfulGetCB) {
-	atomic.AddInt64(&c.getCounter, 1)
+func (*correlationTestClient) Start()    { /*no-op*/ }
+func (*correlationTestClient) Shutdown() { /*no-op*/ }
+func (c *correlationTestClient) Get(_, dimValue string, cb correlations.SuccessfulGetCB) {
+	c.getCounter.Add(1)
 	go func() {
 		cb(c.getPayload[dimValue])
 		if c.getCallback != nil {
@@ -96,20 +94,23 @@ func (c *correlationTestClient) Get(_ string, dimValue string, cb correlations.S
 		}
 	}()
 }
+
 func (c *correlationTestClient) Correlate(cl *correlations.Correlation, cb correlations.CorrelateCB) {
 	c.Lock()
 	defer c.Unlock()
 	c.cors = append(c.cors, cl)
 	cb(cl, nil)
-	atomic.AddInt64(&c.correlateCounter, 1)
+	c.correlateCounter.Add(1)
 }
+
 func (c *correlationTestClient) Delete(cl *correlations.Correlation, cb correlations.SuccessfulDeleteCB) {
 	c.Lock()
 	defer c.Unlock()
 	c.cors = append(c.cors, cl)
 	cb(cl)
-	atomic.AddInt64(&c.deleteCounter, 1)
+	c.deleteCounter.Add(1)
 }
+
 func (c *correlationTestClient) getCorrelations() []*correlations.Correlation {
 	c.Lock()
 	defer c.Unlock()
@@ -117,6 +118,56 @@ func (c *correlationTestClient) getCorrelations() []*correlations.Correlation {
 }
 
 var _ correlations.CorrelationClient = &correlationTestClient{}
+
+func TestEnvironmentAttributePriority(t *testing.T) {
+	hostIDDims := map[string]string{"host": "test"}
+
+	tests := []struct {
+		name    string
+		attrs   map[string]string
+		wantEnv string
+	}{
+		{
+			name:    "deployment.environment.name takes precedence",
+			attrs:   map[string]string{"deployment.environment.name": "new-env", "deployment.environment": "old-env", "environment": "sfx-env"},
+			wantEnv: "new-env",
+		},
+		{
+			name:    "deployment.environment used when name absent",
+			attrs:   map[string]string{"deployment.environment": "old-env", "environment": "sfx-env"},
+			wantEnv: "old-env",
+		},
+		{
+			name:    "environment used when both deployment attrs absent",
+			attrs:   map[string]string{"environment": "sfx-env"},
+			wantEnv: "sfx-env",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			correlationClient := &correlationTestClient{}
+			a := New(log.Nil, 5*time.Minute, correlationClient, hostIDDims, DefaultDimsToSyncSource)
+
+			fakeTraces := ptrace.NewTraces()
+			newResourceWithAttrs(hostIDDims, tt.attrs).
+				CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
+			a.ProcessTraces(t.Context(), fakeTraces)
+
+			cors := correlationClient.getCorrelations()
+			var envCors []*correlations.Correlation
+			for _, c := range cors {
+				if c.Type == correlations.Environment {
+					envCors = append(envCors, c)
+				}
+			}
+			assert.NotEmpty(t, envCors, "expected environment correlations")
+			for _, c := range envCors {
+				assert.Equal(t, tt.wantEnv, c.Value)
+			}
+		})
+	}
+}
 
 func TestCorrelationEmptyEnvironment(t *testing.T) {
 	var wg sync.WaitGroup
@@ -147,7 +198,7 @@ func TestCorrelationEmptyEnvironment(t *testing.T) {
 	fakeResource.CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
 	fakeResource.CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
 	fakeResource.CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	a.ProcessTraces(context.Background(), fakeTraces)
+	a.ProcessTraces(t.Context(), fakeTraces)
 
 	cors := correlationClient.getCorrelations()
 	assert.Len(t, cors, 4, "expected 4 correlations to be made")
@@ -190,13 +241,13 @@ func TestCorrelationUpdates(t *testing.T) {
 	setTime(a, time.Unix(100, 0))
 
 	fakeTraces := ptrace.NewTraces()
-	newResourceWithAttrs(containerLevelIDDims, map[string]string{conventions.AttributeServiceName: "one", "environment": "environment1"}).
+	newResourceWithAttrs(containerLevelIDDims, map[string]string{"service.name": "one", "environment": "environment1"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	newResourceWithAttrs(containerLevelIDDims, map[string]string{conventions.AttributeServiceName: "two", "environment": "environment2"}).
+	newResourceWithAttrs(containerLevelIDDims, map[string]string{"service.name": "two", "environment": "environment2"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	newResourceWithAttrs(containerLevelIDDims, map[string]string{conventions.AttributeServiceName: "three", "environment": "environment3"}).
+	newResourceWithAttrs(containerLevelIDDims, map[string]string{"service.name": "three", "environment": "environment3"}).
 		CopyTo(fakeTraces.ResourceSpans().AppendEmpty().Resource())
-	a.ProcessTraces(context.Background(), fakeTraces)
+	a.ProcessTraces(t.Context(), fakeTraces)
 
 	assert.Equal(t, int64(3), a.hostServiceCache.ActiveCount, "activeServiceCount is not properly tracked")
 	assert.Equal(t, int64(3), a.hostEnvironmentCache.ActiveCount, "activeEnvironmentCount is not properly tracked")

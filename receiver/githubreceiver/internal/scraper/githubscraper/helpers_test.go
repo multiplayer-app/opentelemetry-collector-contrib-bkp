@@ -4,7 +4,6 @@
 package githubscraper
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,14 +14,17 @@ import (
 	"time"
 
 	"github.com/Khan/genqlient/graphql"
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v88/github"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/collector/receiver/receivertest"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubreceiver/internal/metadata"
 )
 
 type responses struct {
 	repoResponse       repoResponse
 	prResponse         prResponse
+	mergedPRResponse   mergedPRResponse
 	branchResponse     branchResponse
 	checkLoginResponse loginResponse
 	contribResponse    contribResponse
@@ -38,6 +40,12 @@ type repoResponse struct {
 
 type prResponse struct {
 	prs          []getPullRequestDataRepositoryPullRequestsPullRequestConnection
+	responseCode int
+	page         int
+}
+
+type mergedPRResponse struct {
+	prs          []getMergedPullRequestDataRepositoryPullRequestsPullRequestConnection
 	responseCode int
 	page         int
 }
@@ -78,9 +86,9 @@ func MockServer(responses *responses) *http.ServeMux {
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			return
 		}
-		switch {
+		switch reqBody.OpName {
 		// These OpNames need to be name of the GraphQL query as defined in genqlient.graphql
-		case reqBody.OpName == "checkLogin":
+		case "checkLogin":
 			loginResp := &responses.checkLoginResponse
 			w.WriteHeader(loginResp.responseCode)
 			if loginResp.responseCode == http.StatusOK {
@@ -90,7 +98,7 @@ func MockServer(responses *responses) *http.ServeMux {
 					return
 				}
 			}
-		case reqBody.OpName == "getRepoDataBySearch":
+		case "getRepoDataBySearch":
 			repoResp := &responses.repoResponse
 			w.WriteHeader(repoResp.responseCode)
 			if repoResp.responseCode == http.StatusOK {
@@ -103,7 +111,7 @@ func MockServer(responses *responses) *http.ServeMux {
 				}
 				repoResp.page++
 			}
-		case reqBody.OpName == "getBranchData":
+		case "getBranchData":
 			branchResp := &responses.branchResponse
 			w.WriteHeader(branchResp.responseCode)
 			if branchResp.responseCode == http.StatusOK {
@@ -118,7 +126,7 @@ func MockServer(responses *responses) *http.ServeMux {
 				}
 				branchResp.page++
 			}
-		case reqBody.OpName == "getPullRequestData":
+		case "getPullRequestData":
 			prResp := &responses.prResponse
 			w.WriteHeader(prResp.responseCode)
 			if prResp.responseCode == http.StatusOK {
@@ -133,7 +141,40 @@ func MockServer(responses *responses) *http.ServeMux {
 				}
 				prResp.page++
 			}
-		case reqBody.OpName == "getCommitData":
+		case "getMergedPullRequestData":
+			mergedPRResp := &responses.mergedPRResponse
+			// Default to 200 if not set
+			responseCode := mergedPRResp.responseCode
+			if responseCode == 0 {
+				responseCode = http.StatusOK
+			}
+			w.WriteHeader(responseCode)
+			if responseCode == http.StatusOK {
+				// Handle case where no merged PR data is provided
+				var pullRequests getMergedPullRequestDataRepositoryPullRequestsPullRequestConnection
+				if len(mergedPRResp.prs) > 0 && mergedPRResp.page < len(mergedPRResp.prs) {
+					pullRequests = mergedPRResp.prs[mergedPRResp.page]
+					mergedPRResp.page++
+				} else {
+					// Return empty result
+					pullRequests = getMergedPullRequestDataRepositoryPullRequestsPullRequestConnection{
+						Nodes: []MergedPullRequestNode{},
+						PageInfo: getMergedPullRequestDataRepositoryPullRequestsPullRequestConnectionPageInfo{
+							HasPreviousPage: false,
+						},
+					}
+				}
+				resp := getMergedPullRequestDataResponse{
+					Repository: getMergedPullRequestDataRepository{
+						PullRequests: pullRequests,
+					},
+				}
+				graphqlResponse := graphql.Response{Data: &resp}
+				if err := json.NewEncoder(w).Encode(graphqlResponse); err != nil {
+					return
+				}
+			}
+		case "getCommitData":
 			commitResp := &responses.commitResponse
 			w.WriteHeader(commitResp.responseCode)
 			if commitResp.responseCode == http.StatusOK {
@@ -262,10 +303,10 @@ func TestGetAge(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			min := time.Now()
-			max := min.Add(tc.hrsAdd).Add(tc.minsAdd)
+			start := time.Now()
+			end := start.Add(tc.hrsAdd).Add(tc.minsAdd)
 
-			actual := getAge(min, max)
+			actual := getAge(start, end)
 
 			assert.Equal(t, int64(tc.expected), actual)
 		})
@@ -331,13 +372,13 @@ func TestCheckOwnerExists(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			server := httptest.NewServer(tc.server)
 			defer server.Close()
 
 			client := graphql.NewClient(server.URL, ghs.client)
-			loginType, err := ghs.login(context.Background(), client, tc.login)
+			loginType, err := ghs.login(t.Context(), client, tc.login)
 
 			assert.Equal(t, tc.expectedOwnerType, loginType)
 			if !tc.expectedError {
@@ -436,7 +477,7 @@ func TestGetPullRequests(t *testing.T) {
 					responseCode: http.StatusNotFound,
 				},
 			}),
-			expectedErr:     errors.New("returned error 404 Not Found: "),
+			expectedErr:     errors.New("returned error 404"),
 			expectedPrCount: 0,
 		},
 	}
@@ -445,19 +486,19 @@ func TestGetPullRequests(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			server := httptest.NewServer(tc.server)
 			defer server.Close()
 			client := graphql.NewClient(server.URL, ghs.client)
 
-			prs, err := ghs.getPullRequests(context.Background(), client, "repo name")
+			openPRs, _, err := ghs.getPullRequests(t.Context(), client, "repo name")
 
-			assert.Len(t, prs, tc.expectedPrCount)
+			assert.Len(t, openPRs, tc.expectedPrCount)
 			if tc.expectedErr == nil {
 				assert.NoError(t, err)
 			} else {
-				assert.EqualError(t, err, tc.expectedErr.Error())
+				assert.ErrorContains(t, err, tc.expectedErr.Error())
 			}
 		})
 	}
@@ -540,7 +581,7 @@ func TestGetRepos(t *testing.T) {
 					responseCode: http.StatusNotFound,
 				},
 			}),
-			expectedErr: errors.New("returned error 404 Not Found: "),
+			expectedErr: errors.New("returned error 404"),
 			expected:    0,
 		},
 	}
@@ -548,19 +589,19 @@ func TestGetRepos(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			server := httptest.NewServer(tc.server)
 			defer server.Close()
 			client := graphql.NewClient(server.URL, ghs.client)
 
-			_, count, err := ghs.getRepos(context.Background(), client, "fake query")
+			_, count, err := ghs.getRepos(t.Context(), client, "fake query")
 
 			assert.Equal(t, tc.expected, count)
 			if tc.expectedErr == nil {
 				assert.NoError(t, err)
 			} else {
-				assert.EqualError(t, err, tc.expectedErr.Error())
+				assert.ErrorContains(t, err, tc.expectedErr.Error())
 			}
 		})
 	}
@@ -643,7 +684,7 @@ func TestGetBranches(t *testing.T) {
 					responseCode: http.StatusNotFound,
 				},
 			}),
-			expectedErr: errors.New("returned error 404 Not Found: "),
+			expectedErr: errors.New("returned error 404"),
 			expected:    0,
 		},
 	}
@@ -652,19 +693,19 @@ func TestGetBranches(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			server := httptest.NewServer(tc.server)
 			defer server.Close()
 			client := graphql.NewClient(server.URL, ghs.client)
 
-			_, count, err := ghs.getBranches(context.Background(), client, "deathstarrepo", "main")
+			_, count, err := ghs.getBranches(t.Context(), client, "deathstarrepo", "main")
 
 			assert.Equal(t, tc.expected, count)
 			if tc.expectedErr == nil {
 				assert.NoError(t, err)
 			} else {
-				assert.EqualError(t, err, tc.expectedErr.Error())
+				assert.ErrorContains(t, err, tc.expectedErr.Error())
 			}
 		})
 	}
@@ -685,10 +726,10 @@ func TestGetContributors(t *testing.T) {
 				contribResponse: contribResponse{
 					contribs: [][]*github.Contributor{{
 						{
-							ID: github.Int64(1),
+							ID: github.Ptr(int64(1)),
 						},
 						{
-							ID: github.Int64(2),
+							ID: github.Ptr(int64(2)),
 						},
 					}},
 					responseCode: http.StatusOK,
@@ -704,19 +745,19 @@ func TestGetContributors(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			ghs.cfg.GitHubOrg = tc.org
 
 			server := httptest.NewServer(tc.server)
 			defer func() { server.Close() }()
 
-			client := github.NewClient(nil)
 			url, _ := url.Parse(server.URL + "/api-v3" + "/")
-			client.BaseURL = url
-			client.UploadURL = url
+			urlString := url.String()
+			client, err := github.NewClient(github.WithURLs(&urlString, &urlString))
+			assert.NoError(t, err)
 
-			contribs, err := ghs.getContributorCount(context.Background(), client, tc.repo)
+			contribs, err := ghs.getContributorCount(t.Context(), client, tc.repo)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.expectedCount, contribs)
 		})
@@ -797,7 +838,6 @@ func TestEvalCommits(t *testing.T) {
 							History: BranchHistoryTargetCommitHistoryCommitHistoryConnection{
 								Nodes: []CommitNode{
 									{
-
 										CommittedDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 										Additions:     10,
 										Deletions:     9,
@@ -831,7 +871,6 @@ func TestEvalCommits(t *testing.T) {
 							History: BranchHistoryTargetCommitHistoryCommitHistoryConnection{
 								Nodes: []CommitNode{
 									{
-
 										CommittedDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 										Additions:     10,
 										Deletions:     9,
@@ -843,7 +882,6 @@ func TestEvalCommits(t *testing.T) {
 							History: BranchHistoryTargetCommitHistoryCommitHistoryConnection{
 								Nodes: []CommitNode{
 									{
-
 										CommittedDate: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 										Additions:     1,
 										Deletions:     1,
@@ -885,28 +923,32 @@ func TestEvalCommits(t *testing.T) {
 			expectedAge:       0,
 			expectedAdditions: 0,
 			expectedDeletions: 0,
-			expectedErr:       errors.New("returned error 404 Not Found: "),
+			expectedErr:       errors.New("returned error 404"),
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			factory := Factory{}
 			defaultConfig := factory.CreateDefaultConfig()
-			settings := receivertest.NewNopSettings()
-			ghs := newGitHubScraper(context.Background(), settings, defaultConfig.(*Config))
+			settings := receivertest.NewNopSettings(metadata.Type)
+			ghs := newGitHubScraper(settings, defaultConfig.(*Config))
 			server := httptest.NewServer(tc.server)
 			defer server.Close()
 			client := graphql.NewClient(server.URL, ghs.client)
-			adds, dels, age, err := ghs.evalCommits(context.Background(), client, "repo1", tc.branch)
+			adds, dels, age, err := ghs.evalCommits(t.Context(), client, "repo1", tc.branch)
 
-			assert.Equal(t, tc.expectedAge, age)
 			assert.Equal(t, tc.expectedDeletions, dels)
 			assert.Equal(t, tc.expectedAdditions, adds)
+			if tc.expectedAge != 0 {
+				assert.WithinDuration(t, time.UnixMilli(tc.expectedAge), time.UnixMilli(age), 10*time.Second)
+			} else {
+				assert.Equal(t, tc.expectedAge, age)
+			}
 
 			if tc.expectedErr == nil {
 				assert.NoError(t, err)
 			} else {
-				assert.EqualError(t, err, tc.expectedErr.Error())
+				assert.ErrorContains(t, err, tc.expectedErr.Error())
 			}
 		})
 	}

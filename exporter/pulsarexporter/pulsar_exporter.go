@@ -1,11 +1,13 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build !aix
+
 package pulsarexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/pulsarexporter"
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"go.opentelemetry.io/collector/component"
@@ -18,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var errUnrecognizedEncoding = fmt.Errorf("unrecognized encoding")
+var errUnrecognizedEncoding = errors.New("unrecognized encoding")
 
 type PulsarTracesProducer struct {
 	cfg       Config
@@ -37,13 +39,11 @@ func (e *PulsarTracesProducer) tracesPusher(ctx context.Context, td ptrace.Trace
 
 	var errs error
 	for _, message := range messages {
-
 		e.producer.SendAsync(ctx, message, func(_ pulsar.MessageID, _ *pulsar.ProducerMessage, err error) {
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		})
-
 	}
 
 	return errs
@@ -85,13 +85,11 @@ func (e *PulsarMetricsProducer) metricsDataPusher(ctx context.Context, md pmetri
 
 	var errs error
 	for _, message := range messages {
-
 		e.producer.SendAsync(ctx, message, func(_ pulsar.MessageID, _ *pulsar.ProducerMessage, err error) {
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		})
-
 	}
 
 	return errs
@@ -133,13 +131,11 @@ func (e *PulsarLogsProducer) logsDataPusher(ctx context.Context, ld plog.Logs) e
 
 	var errs error
 	for _, message := range messages {
-
 		e.producer.SendAsync(ctx, message, func(_ pulsar.MessageID, _ *pulsar.ProducerMessage, err error) {
 			if err != nil {
 				errs = multierr.Append(errs, err)
 			}
 		})
-
 	}
 
 	return errs
@@ -168,7 +164,6 @@ func newPulsarProducer(config Config) (pulsar.Client, pulsar.Producer, error) {
 	options := config.clientOptions()
 
 	client, err := pulsar.NewClient(options)
-
 	if err != nil {
 		return nil, nil, err
 	}
@@ -176,7 +171,6 @@ func newPulsarProducer(config Config) (pulsar.Client, pulsar.Producer, error) {
 	producerOptions := config.getProducerOptions()
 
 	producer, err := client.CreateProducer(producerOptions)
-
 	if err != nil {
 		return nil, nil, err
 	}
@@ -196,7 +190,6 @@ func newMetricsExporter(config Config, set exporter.Settings, marshalers map[str
 		marshaler: marshaler,
 		logger:    set.Logger,
 	}, nil
-
 }
 
 func newTracesExporter(config Config, set exporter.Settings, marshalers map[string]TracesMarshaler) (*PulsarTracesProducer, error) {
@@ -224,5 +217,4 @@ func newLogsExporter(config Config, set exporter.Settings, marshalers map[string
 		marshaler: marshaler,
 		logger:    set.Logger,
 	}, nil
-
 }

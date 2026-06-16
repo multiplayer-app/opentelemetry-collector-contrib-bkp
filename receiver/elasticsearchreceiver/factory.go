@@ -12,7 +12,8 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/elasticsearchreceiver/internal/metadata"
 )
@@ -42,7 +43,7 @@ func createDefaultConfig() component.Config {
 	return &Config{
 		ControllerConfig:     cfg,
 		ClientConfig:         clientConfig,
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 		Nodes:                []string{"_all"},
 		Indices:              []string{"_all"},
 	}
@@ -63,15 +64,15 @@ func createMetricsReceiver(
 	}
 	es := newElasticSearchScraper(params, c)
 
-	scraper, err := scraperhelper.NewScraper(metadata.Type, es.scrape, scraperhelper.WithStart(es.start))
+	s, err := scraper.NewMetrics(es.scrape, scraper.WithStart(es.start))
 	if err != nil {
 		return nil, err
 	}
 
-	return scraperhelper.NewScraperControllerReceiver(
+	return scraperhelper.NewMetricsController(
 		&c.ControllerConfig,
 		params,
 		consumer,
-		scraperhelper.AddScraper(scraper),
+		scraperhelper.AddMetricsScraper(metadata.Type, s),
 	)
 }

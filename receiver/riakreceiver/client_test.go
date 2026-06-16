@@ -4,7 +4,6 @@
 package riakreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/riakreceiver"
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,6 +27,17 @@ const (
 )
 
 func TestNewClient(t *testing.T) {
+	clientConfigNonexistentCA := confighttp.NewDefaultClientConfig()
+	clientConfigNonexistentCA.Endpoint = defaultEndpoint
+	clientConfigNonexistentCA.TLS = configtls.ClientConfig{
+		Config: configtls.Config{
+			CAFile: "/non/existent",
+		},
+	}
+
+	clientConfig := confighttp.NewDefaultClientConfig()
+	clientConfig.Endpoint = defaultEndpoint
+
 	testCase := []struct {
 		desc        string
 		cfg         *Config
@@ -36,24 +46,14 @@ func TestNewClient(t *testing.T) {
 		{
 			desc: "Invalid HTTP config",
 			cfg: &Config{
-				ClientConfig: confighttp.ClientConfig{
-					Endpoint: defaultEndpoint,
-					TLSSetting: configtls.ClientConfig{
-						Config: configtls.Config{
-							CAFile: "/non/existent",
-						},
-					},
-				},
+				ClientConfig: clientConfigNonexistentCA,
 			},
 			expectError: errors.New("failed to create HTTP Client"),
 		},
 		{
 			desc: "Valid Configuration",
 			cfg: &Config{
-				ClientConfig: confighttp.ClientConfig{
-					TLSSetting: configtls.ClientConfig{},
-					Endpoint:   defaultEndpoint,
-				},
+				ClientConfig: clientConfig,
 			},
 			expectError: nil,
 		},
@@ -61,7 +61,7 @@ func TestNewClient(t *testing.T) {
 
 	for _, tc := range testCase {
 		t.Run(tc.desc, func(t *testing.T) {
-			ac, err := newClient(context.Background(), tc.cfg, componenttest.NewNopHost(), componenttest.NewNopTelemetrySettings(), zap.NewNop())
+			ac, err := newClient(t.Context(), tc.cfg, componenttest.NewNopHost(), componenttest.NewNopTelemetrySettings(), zap.NewNop())
 			if tc.expectError != nil {
 				require.Nil(t, ac)
 				require.ErrorContains(t, err, tc.expectError.Error())
@@ -91,7 +91,7 @@ func TestGetStatsDetails(t *testing.T) {
 
 		tc := createTestClient(t, ts.URL)
 
-		clusters, err := tc.GetStats(context.Background())
+		clusters, err := tc.GetStats(t.Context())
 		require.Nil(t, clusters)
 		require.EqualError(t, err, "non 200 code returned 401")
 	})
@@ -113,7 +113,7 @@ func TestGetStatsDetails(t *testing.T) {
 		err := json.Unmarshal(data, &expected)
 		require.NoError(t, err)
 
-		clusters, err := tc.GetStats(context.Background())
+		clusters, err := tc.GetStats(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, expected, clusters)
 	})
@@ -124,7 +124,7 @@ func createTestClient(t *testing.T, baseEndpoint string) client {
 	cfg := createDefaultConfig().(*Config)
 	cfg.Endpoint = baseEndpoint
 
-	testClient, err := newClient(context.Background(), cfg, componenttest.NewNopHost(), componenttest.NewNopTelemetrySettings(), zap.NewNop())
+	testClient, err := newClient(t.Context(), cfg, componenttest.NewNopHost(), componenttest.NewNopTelemetrySettings(), zap.NewNop())
 	require.NoError(t, err)
 	return testClient
 }

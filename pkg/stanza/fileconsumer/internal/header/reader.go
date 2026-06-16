@@ -7,9 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/extension/experimental/storage"
+	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/entry"
@@ -44,15 +45,15 @@ func NewReader(set component.TelemetrySettings, cfg Config) (*Reader, error) {
 
 // Process checks if the given token is a line of the header, and consumes it if it is.
 // An EndOfHeaderError is returned if the given line was not a header line.
-func (r *Reader) Process(ctx context.Context, token []byte, fileAttributes map[string]any) error {
-	if !r.cfg.regex.Match(token) {
+func (r *Reader) Process(ctx context.Context, token string, fileAttributes map[string]any) error {
+	if !r.cfg.regex.MatchString(token) {
 		return ErrEndOfHeader
 	}
 
 	firstOperator := r.pipeline.Operators()[0]
 
 	newEntry := entry.New()
-	newEntry.Body = string(token)
+	newEntry.Body = token
 
 	if err := firstOperator.Process(ctx, newEntry); err != nil {
 		r.set.Logger.Error("process header entry", zap.Error(err))
@@ -65,10 +66,8 @@ func (r *Reader) Process(ctx context.Context, token []byte, fileAttributes map[s
 	}
 
 	// Copy resultant attributes over current set of attributes (upsert)
-	for k, v := range ent.Attributes {
-		// fileAttributes is an output parameter
-		fileAttributes[k] = v
-	}
+	// fileAttributes is an output parameter
+	maps.Copy(fileAttributes, ent.Attributes)
 	return nil
 }
 

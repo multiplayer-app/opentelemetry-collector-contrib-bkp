@@ -4,7 +4,6 @@
 package retain
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -58,12 +57,53 @@ func TestBuildAndProcess(t *testing.T) {
 			},
 		},
 		{
-			"retain_multi",
+			"retain_unrelated_fields",
 			false,
 			func() *Config {
 				cfg := NewConfig()
 				cfg.Fields = append(cfg.Fields, entry.NewBodyField("key"))
-				cfg.Fields = append(cfg.Fields, entry.NewBodyField("nested2"))
+				return cfg
+			}(),
+			func() *entry.Entry {
+				e := newTestEntry()
+
+				e.Severity = entry.Debug3
+				e.SeverityText = "debug"
+				e.Timestamp = time.Unix(1000, 1000)
+				e.ObservedTimestamp = time.Unix(2000, 2000)
+				e.TraceID = []byte{0x01}
+				e.SpanID = []byte{0x01}
+				e.TraceFlags = []byte{0x01}
+				e.ScopeName = "scope"
+
+				return e
+			},
+			func() *entry.Entry {
+				e := newTestEntry()
+
+				e.Severity = entry.Debug3
+				e.SeverityText = "debug"
+				e.Timestamp = time.Unix(1000, 1000)
+				e.ObservedTimestamp = time.Unix(2000, 2000)
+				e.TraceID = []byte{0x01}
+				e.SpanID = []byte{0x01}
+				e.TraceFlags = []byte{0x01}
+				e.ScopeName = "scope"
+
+				e.Body = map[string]any{
+					"key": "val",
+				}
+				return e
+			},
+		},
+		{
+			"retain_multi",
+			false,
+			func() *Config {
+				cfg := NewConfig()
+				cfg.Fields = append(cfg.Fields,
+					entry.NewBodyField("key"),
+					entry.NewBodyField("nested2"))
 				return cfg
 			}(),
 			func() *entry.Entry {
@@ -95,12 +135,13 @@ func TestBuildAndProcess(t *testing.T) {
 			false,
 			func() *Config {
 				cfg := NewConfig()
-				cfg.Fields = append(cfg.Fields, entry.NewBodyField("foo"))
-				cfg.Fields = append(cfg.Fields, entry.NewBodyField("one", "two"))
-				cfg.Fields = append(cfg.Fields, entry.NewAttributeField("foo"))
-				cfg.Fields = append(cfg.Fields, entry.NewAttributeField("one", "two"))
-				cfg.Fields = append(cfg.Fields, entry.NewResourceField("foo"))
-				cfg.Fields = append(cfg.Fields, entry.NewResourceField("one", "two"))
+				cfg.Fields = append(cfg.Fields,
+					entry.NewBodyField("foo"),
+					entry.NewBodyField("one", "two"),
+					entry.NewAttributeField("foo"),
+					entry.NewAttributeField("one", "two"),
+					entry.NewResourceField("foo"),
+					entry.NewResourceField("one", "two"))
 				return cfg
 			}(),
 			func() *entry.Entry {
@@ -256,8 +297,9 @@ func TestBuildAndProcess(t *testing.T) {
 			false,
 			func() *Config {
 				cfg := NewConfig()
-				cfg.Fields = append(cfg.Fields, entry.NewAttributeField("key1"))
-				cfg.Fields = append(cfg.Fields, entry.NewAttributeField("key2"))
+				cfg.Fields = append(cfg.Fields,
+					entry.NewAttributeField("key1"),
+					entry.NewAttributeField("key2"))
 				return cfg
 			}(),
 			func() *entry.Entry {
@@ -306,8 +348,9 @@ func TestBuildAndProcess(t *testing.T) {
 			false,
 			func() *Config {
 				cfg := NewConfig()
-				cfg.Fields = append(cfg.Fields, entry.NewResourceField("key1"))
-				cfg.Fields = append(cfg.Fields, entry.NewResourceField("key2"))
+				cfg.Fields = append(cfg.Fields,
+					entry.NewResourceField("key1"),
+					entry.NewResourceField("key2"))
 				return cfg
 			}(),
 			func() *entry.Entry {
@@ -333,9 +376,10 @@ func TestBuildAndProcess(t *testing.T) {
 			false,
 			func() *Config {
 				cfg := NewConfig()
-				cfg.Fields = append(cfg.Fields, entry.NewResourceField("key1"))
-				cfg.Fields = append(cfg.Fields, entry.NewAttributeField("key3"))
-				cfg.Fields = append(cfg.Fields, entry.NewBodyField("key"))
+				cfg.Fields = append(cfg.Fields,
+					entry.NewResourceField("key1"),
+					entry.NewAttributeField("key3"),
+					entry.NewBodyField("key"))
 				return cfg
 			}(),
 			func() *entry.Entry {
@@ -389,11 +433,10 @@ func TestBuildAndProcess(t *testing.T) {
 			op, err := cfg.Build(set)
 			require.NoError(t, err)
 
-			retain := op.(*Transformer)
 			fake := testutil.NewFakeOutput(t)
-			require.NoError(t, retain.SetOutputs([]operator.Operator{fake}))
+			require.NoError(t, op.SetOutputs([]operator.Operator{fake}))
 			val := tc.input()
-			err = retain.Process(context.Background(), val)
+			err = op.ProcessBatch(t.Context(), []*entry.Entry{val})
 			if tc.expectErr {
 				require.Error(t, err)
 			} else {

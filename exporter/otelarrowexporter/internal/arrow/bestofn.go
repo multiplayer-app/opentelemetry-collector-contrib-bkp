@@ -5,7 +5,7 @@ package arrow // import "github.com/open-telemetry/opentelemetry-collector-contr
 
 import (
 	"context"
-	"math/rand"
+	"math/rand/v2"
 	"runtime"
 	"sort"
 	"time"
@@ -30,7 +30,7 @@ type bestOfNPrioritizer struct {
 	// state tracks the work being handled by all streams.
 	state []*streamWorkState
 
-	// numChoices is the number of streams to consder in each decision.
+	// numChoices is the number of streams to consider in each decision.
 	numChoices int
 
 	// loadFunc is the load function.
@@ -52,7 +52,7 @@ func newBestOfNPrioritizer(dc doneCancel, numChoices, numStreams int, lf loadFun
 	// Limit numChoices to the number of streams.
 	numChoices = min(numStreams, numChoices)
 
-	for i := 0; i < numStreams; i++ {
+	for range numStreams {
 		ws := &streamWorkState{
 			maxStreamLifetime: addJitter(maxLifetime),
 			waiters:           map[int64]chan<- error{},
@@ -70,8 +70,8 @@ func newBestOfNPrioritizer(dc doneCancel, numChoices, numStreams int, lf loadFun
 		loadFunc:   lf,
 	}
 
-	for i := 0; i < numStreams; i++ {
-		// TODO It's not clear if/when the the prioritizer can
+	for range numStreams {
+		// TODO It's not clear if/when the prioritizer can
 		// become a bottleneck.
 		go lp.run()
 	}
@@ -100,7 +100,7 @@ func (lp *bestOfNPrioritizer) sendOne(item writeItem, rnd *rand.Rand, tmp []stre
 
 func (lp *bestOfNPrioritizer) run() {
 	tmp := make([]streamSorter, len(lp.state))
-	rnd := rand.New(rand.NewSource(rand.Int63()))
+	rnd := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	for {
 		select {
 		case <-lp.done:
@@ -143,7 +143,7 @@ func (lp *bestOfNPrioritizer) streamFor(_ writeItem, rnd *rand.Rand, tmp []strea
 	// Select numChoices at random by shifting the selection into the start
 	// of the temporary slice.
 	for i := 0; i < lp.numChoices; i++ {
-		pick := rnd.Intn(lp.numChoices - i)
+		pick := rnd.IntN(lp.numChoices - i)
 		tmp[i], tmp[i+pick] = tmp[i+pick], tmp[i]
 	}
 	for i := 0; i < lp.numChoices; i++ {

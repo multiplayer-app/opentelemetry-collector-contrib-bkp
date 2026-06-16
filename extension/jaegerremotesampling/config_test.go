@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/jaegerremotesampling/internal/metadata"
 )
@@ -29,7 +30,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewID(metadata.Type),
 			expected: &Config{
-				HTTPServerConfig: &confighttp.ServerConfig{Endpoint: "localhost:5778"},
+				HTTPServerConfig: &confighttp.ServerConfig{NetAddr: confignet.AddrConfig{
+					Endpoint:  "localhost:5778",
+					Transport: confignet.TransportTypeTCP,
+				}},
 				GRPCServerConfig: &configgrpc.ServerConfig{NetAddr: confignet.AddrConfig{
 					Endpoint:  "localhost:14250",
 					Transport: confignet.TransportTypeTCP,
@@ -44,7 +48,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewIDWithName(metadata.Type, "1"),
 			expected: &Config{
-				HTTPServerConfig: &confighttp.ServerConfig{Endpoint: "localhost:5778"},
+				HTTPServerConfig: &confighttp.ServerConfig{NetAddr: confignet.AddrConfig{
+					Endpoint:  "localhost:5778",
+					Transport: confignet.TransportTypeTCP,
+				}},
 				GRPCServerConfig: &configgrpc.ServerConfig{NetAddr: confignet.AddrConfig{
 					Endpoint:  "localhost:14250",
 					Transport: confignet.TransportTypeTCP,
@@ -65,14 +72,13 @@ func TestLoadConfig(t *testing.T) {
 			sub, err := cm.Sub(tt.id.String())
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
 }
 
 func TestValidate(t *testing.T) {
-
 	testCases := []struct {
 		desc     string
 		cfg      Config

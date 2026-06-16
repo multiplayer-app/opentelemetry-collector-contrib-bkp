@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 )
 
@@ -19,24 +20,60 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	}{
 		{
 			name: "default",
-			want: DefaultMetricsBuilderConfig(),
+			want: NewDefaultMetricsBuilderConfig(),
 		},
 		{
 			name: "all_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					IisConnectionActive:       MetricConfig{Enabled: true},
-					IisConnectionAnonymous:    MetricConfig{Enabled: true},
-					IisConnectionAttemptCount: MetricConfig{Enabled: true},
-					IisNetworkBlocked:         MetricConfig{Enabled: true},
-					IisNetworkFileCount:       MetricConfig{Enabled: true},
-					IisNetworkIo:              MetricConfig{Enabled: true},
-					IisRequestCount:           MetricConfig{Enabled: true},
-					IisRequestQueueAgeMax:     MetricConfig{Enabled: true},
-					IisRequestQueueCount:      MetricConfig{Enabled: true},
-					IisRequestRejected:        MetricConfig{Enabled: true},
-					IisThreadActive:           MetricConfig{Enabled: true},
-					IisUptime:                 MetricConfig{Enabled: true},
+					IisApplicationPoolState: IisApplicationPoolStateMetricConfig{
+						Enabled: true,
+					},
+					IisApplicationPoolUptime: IisApplicationPoolUptimeMetricConfig{
+						Enabled: true,
+					},
+					IisConnectionActive: IisConnectionActiveMetricConfig{
+						Enabled: true,
+					},
+					IisConnectionAnonymous: IisConnectionAnonymousMetricConfig{
+						Enabled: true,
+					},
+					IisConnectionAttemptCount: IisConnectionAttemptCountMetricConfig{
+						Enabled: true,
+					},
+					IisNetworkBlocked: IisNetworkBlockedMetricConfig{
+						Enabled: true,
+					},
+					IisNetworkFileCount: IisNetworkFileCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisNetworkFileCountMetricAttributeKey{IisNetworkFileCountMetricAttributeKeyDirection},
+					},
+					IisNetworkIo: IisNetworkIoMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisNetworkIoMetricAttributeKey{IisNetworkIoMetricAttributeKeyDirection},
+					},
+					IisRequestCount: IisRequestCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisRequestCountMetricAttributeKey{IisRequestCountMetricAttributeKeyRequest},
+					},
+					IisRequestQueueAgeMax: IisRequestQueueAgeMaxMetricConfig{
+						Enabled: true,
+					},
+					IisRequestQueueCount: IisRequestQueueCountMetricConfig{
+						Enabled: true,
+					},
+					IisRequestRejected: IisRequestRejectedMetricConfig{
+						Enabled: true,
+					},
+					IisThreadActive: IisThreadActiveMetricConfig{
+						Enabled: true,
+					},
+					IisUptime: IisUptimeMetricConfig{
+						Enabled: true,
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
 					IisApplicationPool: ResourceAttributeConfig{Enabled: true},
@@ -48,18 +85,54 @@ func TestMetricsBuilderConfig(t *testing.T) {
 			name: "none_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					IisConnectionActive:       MetricConfig{Enabled: false},
-					IisConnectionAnonymous:    MetricConfig{Enabled: false},
-					IisConnectionAttemptCount: MetricConfig{Enabled: false},
-					IisNetworkBlocked:         MetricConfig{Enabled: false},
-					IisNetworkFileCount:       MetricConfig{Enabled: false},
-					IisNetworkIo:              MetricConfig{Enabled: false},
-					IisRequestCount:           MetricConfig{Enabled: false},
-					IisRequestQueueAgeMax:     MetricConfig{Enabled: false},
-					IisRequestQueueCount:      MetricConfig{Enabled: false},
-					IisRequestRejected:        MetricConfig{Enabled: false},
-					IisThreadActive:           MetricConfig{Enabled: false},
-					IisUptime:                 MetricConfig{Enabled: false},
+					IisApplicationPoolState: IisApplicationPoolStateMetricConfig{
+						Enabled: false,
+					},
+					IisApplicationPoolUptime: IisApplicationPoolUptimeMetricConfig{
+						Enabled: false,
+					},
+					IisConnectionActive: IisConnectionActiveMetricConfig{
+						Enabled: false,
+					},
+					IisConnectionAnonymous: IisConnectionAnonymousMetricConfig{
+						Enabled: false,
+					},
+					IisConnectionAttemptCount: IisConnectionAttemptCountMetricConfig{
+						Enabled: false,
+					},
+					IisNetworkBlocked: IisNetworkBlockedMetricConfig{
+						Enabled: false,
+					},
+					IisNetworkFileCount: IisNetworkFileCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisNetworkFileCountMetricAttributeKey{IisNetworkFileCountMetricAttributeKeyDirection},
+					},
+					IisNetworkIo: IisNetworkIoMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisNetworkIoMetricAttributeKey{IisNetworkIoMetricAttributeKeyDirection},
+					},
+					IisRequestCount: IisRequestCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []IisRequestCountMetricAttributeKey{IisRequestCountMetricAttributeKeyRequest},
+					},
+					IisRequestQueueAgeMax: IisRequestQueueAgeMaxMetricConfig{
+						Enabled: false,
+					},
+					IisRequestQueueCount: IisRequestQueueCountMetricConfig{
+						Enabled: false,
+					},
+					IisRequestRejected: IisRequestRejectedMetricConfig{
+						Enabled: false,
+					},
+					IisThreadActive: IisThreadActiveMetricConfig{
+						Enabled: false,
+					},
+					IisUptime: IisUptimeMetricConfig{
+						Enabled: false,
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
 					IisApplicationPool: ResourceAttributeConfig{Enabled: false},
@@ -71,9 +144,8 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMetricsBuilderConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(MetricConfig{}, ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(IisApplicationPoolStateMetricConfig{}, IisApplicationPoolUptimeMetricConfig{}, IisConnectionActiveMetricConfig{}, IisConnectionAnonymousMetricConfig{}, IisConnectionAttemptCountMetricConfig{}, IisNetworkBlockedMetricConfig{}, IisNetworkFileCountMetricConfig{}, IisNetworkIoMetricConfig{}, IisRequestCountMetricConfig{}, IisRequestQueueAgeMaxMetricConfig{}, IisRequestQueueCountMetricConfig{}, IisRequestRejectedMetricConfig{}, IisThreadActiveMetricConfig{}, IisUptimeMetricConfig{}, ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }
@@ -83,8 +155,8 @@ func loadMetricsBuilderConfig(t *testing.T, name string) MetricsBuilderConfig {
 	require.NoError(t, err)
 	sub, err := cm.Sub(name)
 	require.NoError(t, err)
-	cfg := DefaultMetricsBuilderConfig()
-	require.NoError(t, sub.Unmarshal(&cfg))
+	cfg := NewDefaultMetricsBuilderConfig()
+	require.NoError(t, sub.Unmarshal(&cfg, confmap.WithIgnoreUnused()))
 	return cfg
 }
 
@@ -115,9 +187,8 @@ func TestResourceAttributesConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

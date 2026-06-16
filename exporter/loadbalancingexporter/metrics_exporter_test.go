@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,22 +16,19 @@ import (
 	"testing"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
+	json "github.com/goccy/go-json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/exporter/otlpexporter"
-	"go.opentelemetry.io/collector/otelcol/otelcoltest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 )
@@ -53,8 +50,8 @@ const (
 	signal1Attr3Value = true
 	signal1Attr4Key   = "sigattr4k"
 	signal1Attr4Value = 3.3
-	serviceName1      = "service-name-1"
-	serviceName2      = "service-name-2"
+	serviceName1      = "service-name-01"
+	serviceName2      = "service-name-02"
 )
 
 func TestNewMetricsExporter(t *testing.T) {
@@ -113,6 +110,7 @@ func TestMetricsExporterStart(t *testing.T) {
 			"ok",
 			func() *metricExporterImp {
 				p, _ := newMetricsExporter(ts, serviceBasedRoutingConfig())
+				p.loadBalancer.res = &mockResolver{}
 				return p
 			}(),
 			nil,
@@ -141,9 +139,9 @@ func TestMetricsExporterStart(t *testing.T) {
 			p := tt.te
 
 			// test
-			res := p.Start(context.Background(), componenttest.NewNopHost())
+			res := p.Start(t.Context(), componenttest.NewNopHost())
 			defer func() {
-				require.NoError(t, p.Shutdown(context.Background()))
+				require.NoError(t, p.Shutdown(t.Context()))
 			}()
 
 			// verify
@@ -159,7 +157,7 @@ func TestMetricsExporterShutdown(t *testing.T) {
 	require.NoError(t, err)
 
 	// test
-	res := p.Shutdown(context.Background())
+	res := p.Shutdown(t.Context())
 
 	// verify
 	assert.NoError(t, res)
@@ -176,7 +174,7 @@ func loadMetricsMap(t *testing.T, path string) map[string]pmetric.Metrics {
 
 	expectedOutput := map[string]pmetric.Metrics{}
 	for key, data := range expectedOutputRaw {
-		b, err = jsoniter.Marshal(data)
+		b, err = json.Marshal(data)
 		require.NoError(t, err)
 
 		unmarshaller := &pmetric.JSONUnmarshaler{}
@@ -189,7 +187,7 @@ func loadMetricsMap(t *testing.T, path string) map[string]pmetric.Metrics {
 	return expectedOutput
 }
 
-func compareMetricsMaps(t *testing.T, expected map[string]pmetric.Metrics, actual map[string]pmetric.Metrics) {
+func compareMetricsMaps(t *testing.T, expected, actual map[string]pmetric.Metrics) {
 	expectedKeys := make([]string, 0, len(expected))
 	for key := range expected {
 		expectedKeys = append(expectedKeys, key)
@@ -239,8 +237,8 @@ func TestSplitMetricsByResourceServiceName(t *testing.T) {
 
 			expectedOutput := loadMetricsMap(t, filepath.Join(dir, "output.yaml"))
 
-			output, err := splitMetricsByResourceServiceName(input)
-			require.NoError(t, err)
+			output, errs := splitMetricsByResourceServiceName(input)
+			require.Nil(t, errs)
 			compareMetricsMaps(t, expectedOutput, output)
 		})
 	}
@@ -252,8 +250,8 @@ func TestSplitMetricsByResourceServiceNameFailsIfMissingServiceNameAttribute(t *
 	input, err := golden.ReadMetrics(filepath.Join("testdata", "metrics", "split_metrics", "missing_service_name", "input.yaml"))
 	require.NoError(t, err)
 
-	_, err = splitMetricsByResourceServiceName(input)
-	require.Error(t, err)
+	_, errs := splitMetricsByResourceServiceName(input)
+	require.NotNil(t, errs)
 }
 
 func TestSplitMetrics(t *testing.T) {
@@ -287,12 +285,33 @@ func TestSplitMetrics(t *testing.T) {
 			name:      "duplicate_stream_id",
 			splitFunc: splitMetricsByStreamID,
 		},
+		{
+			name: "basic_attributes",
+			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
+				return splitMetricsByAttributes(md, []string{"resource_key", "scope_key", "aaa"})
+			},
+		},
+		{
+			name: "attributes_resource_only",
+			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
+				return splitMetricsByAttributes(md, []string{"resource_key"})
+			},
+		},
+		{
+			name: "attributes_scope_only",
+			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
+				return splitMetricsByAttributes(md, []string{"scope_key"})
+			},
+		},
+		{
+			name: "attributes_datapoint_only",
+			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
+				return splitMetricsByAttributes(md, []string{"aaa"})
+			},
+		},
 	}
 
 	for _, tc := range testCases {
-		// Purposely make a copy since we're running in a goroutine due to t.Parallel()
-		tc := tc
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -310,13 +329,94 @@ func TestSplitMetrics(t *testing.T) {
 	}
 }
 
+func TestSplitMetricsByAttributes_StableEncodingAvoidsConcatenationCollisions(t *testing.T) {
+	md := pmetric.NewMetrics()
+
+	buildResourceMetric := func(aValue, bValue string) {
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("a", aValue)
+		rm.Resource().Attributes().PutStr("b", bValue)
+
+		sm := rm.ScopeMetrics().AppendEmpty()
+		metric := sm.Metrics().AppendEmpty()
+		metric.SetName("test.metric")
+
+		sum := metric.SetEmptySum()
+		sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+		sum.SetIsMonotonic(false)
+
+		dp := sum.DataPoints().AppendEmpty()
+		dp.SetIntValue(1)
+	}
+
+	buildResourceMetric("foo", "bar")
+	buildResourceMetric("foob", "ar")
+
+	out := splitMetricsByAttributes(md, []string{"a", "b"})
+	require.Len(t, out, 2)
+	assert.Contains(t, out, "a=foo|b=bar|")
+	assert.Contains(t, out, "a=foob|b=ar|")
+}
+
+func TestSplitMetricsByAttributes_StableEncodingIncludesMissingAttributes(t *testing.T) {
+	md := pmetric.NewMetrics()
+
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("resource_key", "res1")
+
+	sm := rm.ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("test.metric")
+
+	sum := metric.SetEmptySum()
+	sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	sum.SetIsMonotonic(false)
+
+	dp := sum.DataPoints().AppendEmpty()
+	dp.SetIntValue(1)
+	dp.Attributes().PutStr("aaa", "dp1")
+
+	out := splitMetricsByAttributes(md, []string{"resource_key", "missing", "aaa"})
+	require.Len(t, out, 1)
+	assert.Contains(t, out, "resource_key=res1|missing=|aaa=dp1|")
+}
+
+func TestSplitMetricsByAttributes_NonStringValues(t *testing.T) {
+	md := pmetric.NewMetrics()
+
+	buildResourceMetric := func(shard int64) {
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutInt("shard", shard)
+
+		sm := rm.ScopeMetrics().AppendEmpty()
+		metric := sm.Metrics().AppendEmpty()
+		metric.SetName("test.metric")
+
+		sum := metric.SetEmptySum()
+		sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+		sum.SetIsMonotonic(false)
+
+		dp := sum.DataPoints().AppendEmpty()
+		dp.SetIntValue(1)
+	}
+
+	buildResourceMetric(1)
+	buildResourceMetric(2)
+
+	out := splitMetricsByAttributes(md, []string{"shard"})
+	require.Len(t, out, 2)
+	assert.Contains(t, out, "shard=1|")
+	assert.Contains(t, out, "shard=2|")
+}
+
 func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	t.Parallel()
 
 	testCases := []struct {
-		name       string
-		routingKey string
+		name              string
+		routingKey        string
+		routingAttributes []string
 	}{
 		{
 			name:       "resource_service_name",
@@ -334,23 +434,25 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 			name:       "stream_id",
 			routingKey: streamIDRoutingStr,
 		},
+		{
+			name:              "attributes",
+			routingKey:        attrRoutingStr,
+			routingAttributes: []string{"resource_key", "scope_key", "aaa"},
+		},
 	}
 
 	for _, tc := range testCases {
-		// Purposely make a copy since we're running in a goroutine due to t.Parallel()
-		tc := tc
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			createSettings := ts
 			config := &Config{
 				Resolver: ResolverSettings{
-					Static: &StaticResolver{Hostnames: []string{"endpoint-1"}},
+					Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
 				},
-				RoutingKey: tc.routingKey,
+				RoutingKey:        tc.routingKey,
+				RoutingAttributes: tc.routingAttributes,
 			}
-
 			p, err := newMetricsExporter(createSettings, config)
 			require.NoError(t, err)
 			require.NotNil(t, p)
@@ -367,7 +469,7 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, lb)
 
-			lb.addMissingExporters(context.Background(), []string{"endpoint-1"})
+			lb.addMissingExporters(t.Context(), []string{"endpoint-1"})
 			lb.res = &mockResolver{
 				triggerCallbacks: true,
 				onResolve: func(_ context.Context) ([]string, error) {
@@ -377,10 +479,10 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 			p.loadBalancer = lb
 
 			// Start everything up
-			err = p.Start(context.Background(), componenttest.NewNopHost())
+			err = p.Start(t.Context(), componenttest.NewNopHost())
 			require.NoError(t, err)
 			defer func() {
-				require.NoError(t, p.Shutdown(context.Background()))
+				require.NoError(t, p.Shutdown(t.Context()))
 			}()
 
 			// Test
@@ -389,7 +491,7 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 			input, err := golden.ReadMetrics(filepath.Join(dir, "input.yaml"))
 			require.NoError(t, err)
 
-			err = p.ConsumeMetrics(context.Background(), input)
+			err = p.ConsumeMetrics(t.Context(), input)
 			require.NoError(t, err)
 
 			expectedOutput, err := golden.ReadMetrics(filepath.Join(dir, "output.yaml"))
@@ -413,6 +515,77 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 	}
 }
 
+func TestConsumeMetrics_SingleEndpointNoServiceName(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	createSettings := ts
+	config := &Config{
+		Resolver: ResolverSettings{
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
+		},
+		RoutingKey: svcRoutingStr,
+	}
+
+	p, err := newMetricsExporter(createSettings, config)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	// newMetricsExporter will internally create a loadBalancer instance which is
+	// hardcoded to use OTLP exporters
+	// We manually override that to use our testing sink
+	sink := consumertest.MetricsSink{}
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return newMockMetricsExporter(sink.ConsumeMetrics), nil
+	}
+
+	lb, err := newLoadBalancer(ts.Logger, config, componentFactory, tb)
+	require.NoError(t, err)
+	require.NotNil(t, lb)
+
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1"})
+	lb.res = &mockResolver{
+		triggerCallbacks: true,
+		onResolve: func(_ context.Context) ([]string, error) {
+			return []string{"endpoint-1"}, nil
+		},
+	}
+	p.loadBalancer = lb
+
+	// Start everything up
+	err = p.Start(t.Context(), componenttest.NewNopHost())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	// Test
+	dir := filepath.Join("testdata", "metrics", "consume_metrics", "single_endpoint", "resource_no_service_name")
+
+	input, err := golden.ReadMetrics(filepath.Join(dir, "input.yaml"))
+	require.NoError(t, err)
+
+	err = p.ConsumeMetrics(t.Context(), input)
+	require.NoError(t, err)
+
+	expectedOutput, err := golden.ReadMetrics(filepath.Join(dir, "output.yaml"))
+	require.NoError(t, err)
+
+	allOutputs := sink.AllMetrics()
+	require.Len(t, allOutputs, 1)
+
+	actualOutput := allOutputs[0]
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expectedOutput, actualOutput,
+		// We have to ignore ordering, because we do MergeMetrics() inside a map
+		// iteration. And golang map iteration order is random. This means the
+		// order of the merges is random
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
 func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	// I'm not fully satisfied with the design of this test.
@@ -424,8 +597,9 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		name       string
-		routingKey string
+		name              string
+		routingKey        string
+		routingAttributes []string
 	}{
 		{
 			name:       "resource_service_name",
@@ -443,21 +617,24 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 			name:       "stream_id",
 			routingKey: streamIDRoutingStr,
 		},
+		{
+			name:              "attributes",
+			routingKey:        attrRoutingStr,
+			routingAttributes: []string{"resource_key", "scope_key", "aaa"},
+		},
 	}
 
 	for _, tc := range testCases {
-		// Purposely make a copy since we're running in a goroutine due to t.Parallel()
-		tc := tc
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			createSettings := ts
 			config := &Config{
 				Resolver: ResolverSettings{
-					Static: &StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2", "endpoint-3"}},
+					Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2", "endpoint-3"}}),
 				},
-				RoutingKey: tc.routingKey,
+				RoutingKey:        tc.routingKey,
+				RoutingAttributes: tc.routingAttributes,
 			}
 
 			p, err := newMetricsExporter(createSettings, config)
@@ -489,7 +666,7 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, lb)
 
-			lb.addMissingExporters(context.Background(), []string{"endpoint-1", "endpoint-2", "endpoint-3"})
+			lb.addMissingExporters(t.Context(), []string{"endpoint-1", "endpoint-2", "endpoint-3"})
 			lb.res = &mockResolver{
 				triggerCallbacks: true,
 				onResolve: func(_ context.Context) ([]string, error) {
@@ -499,10 +676,10 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 			p.loadBalancer = lb
 
 			// Start everything up
-			err = p.Start(context.Background(), componenttest.NewNopHost())
+			err = p.Start(t.Context(), componenttest.NewNopHost())
 			require.NoError(t, err)
 			defer func() {
-				require.NoError(t, p.Shutdown(context.Background()))
+				require.NoError(t, p.Shutdown(t.Context()))
 			}()
 
 			// Test
@@ -511,7 +688,7 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 			input, err := golden.ReadMetrics(filepath.Join(dir, "input.yaml"))
 			require.NoError(t, err)
 
-			err = p.ConsumeMetrics(context.Background(), input)
+			err = p.ConsumeMetrics(t.Context(), input)
 			require.NoError(t, err)
 
 			expectedOutput := loadMetricsMap(t, filepath.Join(dir, "output.yaml"))
@@ -553,14 +730,14 @@ func TestConsumeMetrics_ConcurrentResolverChange(t *testing.T) {
 	consumeStarted := make(chan struct{})
 	consumeDone := make(chan struct{})
 
-	// imitate a slow exporter
-	te := &mockMetricsExporter{Component: mockComponent{}}
-	te.ConsumeMetricsFn = func(_ context.Context, _ pmetric.Metrics) error {
-		close(consumeStarted)
-		time.Sleep(50 * time.Millisecond)
-		return te.consumeErr
-	}
 	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		// imitate a slow exporter
+		te := &mockMetricsExporter{Component: mockComponent{}}
+		te.ConsumeMetricsFn = func(_ context.Context, _ pmetric.Metrics) error {
+			close(consumeStarted)
+			time.Sleep(50 * time.Millisecond)
+			return te.consumeErr
+		}
 		return te, nil
 	}
 	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), componentFactory, tb)
@@ -580,21 +757,21 @@ func TestConsumeMetrics_ConcurrentResolverChange(t *testing.T) {
 	}
 	p.loadBalancer = lb
 
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoError(t, p.Shutdown(t.Context()))
 	}()
 
 	go func() {
-		assert.NoError(t, p.ConsumeMetrics(context.Background(), simpleMetricsWithResource()))
+		assert.NoError(t, p.ConsumeMetrics(t.Context(), simpleMetricsWithResource()))
 		close(consumeDone)
 	}()
 
 	// update endpoint while consuming logs
 	<-consumeStarted
 	endpoints = []string{"endpoint-2"}
-	endpoint, err := lb.res.resolve(context.Background())
+	endpoint, err := lb.res.resolve(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, endpoints, endpoint)
 	<-consumeDone
@@ -621,14 +798,14 @@ func TestConsumeMetricsExporterNoEndpoint(t *testing.T) {
 	}
 	p.loadBalancer = lb
 
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoError(t, p.Shutdown(t.Context()))
 	}()
 
 	// test
-	res := p.ConsumeMetrics(context.Background(), simpleMetricsWithServiceName())
+	res := p.ConsumeMetrics(t.Context(), simpleMetricsWithServiceName())
 
 	// verify
 	assert.Error(t, res)
@@ -649,8 +826,8 @@ func TestConsumeMetricsUnexpectedExporterType(t *testing.T) {
 	require.NoError(t, err)
 
 	// pre-load an exporter here, so that we don't use the actual OTLP exporter
-	lb.addMissingExporters(context.Background(), []string{"endpoint-1"})
-	lb.addMissingExporters(context.Background(), []string{"endpoint-2"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-2"})
 	lb.res = &mockResolver{
 		triggerCallbacks: true,
 		onResolve: func(_ context.Context) ([]string, error) {
@@ -659,47 +836,18 @@ func TestConsumeMetricsUnexpectedExporterType(t *testing.T) {
 	}
 	p.loadBalancer = lb
 
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoError(t, p.Shutdown(t.Context()))
 	}()
 
 	// test
-	res := p.ConsumeMetrics(context.Background(), simpleMetricsWithServiceName())
+	res := p.ConsumeMetrics(t.Context(), simpleMetricsWithServiceName())
 
 	// verify
 	assert.Error(t, res)
 	assert.EqualError(t, res, fmt.Sprintf("unable to export metrics, unexpected exporter type: expected exporter.Metrics but got %T", newNopMockExporter()))
-}
-
-func TestBuildExporterConfigUnknown(t *testing.T) {
-	// prepare
-	factories, err := otelcoltest.NopFactories()
-	require.NoError(t, err)
-
-	factories.Exporters[metadata.Type] = NewFactory()
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
-	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "test-build-exporter-config.yaml"), factories)
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-
-	c := cfg.Exporters[component.NewID(metadata.Type)]
-	require.NotNil(t, c)
-
-	// test
-	defaultCfg := otlpexporter.NewFactory().CreateDefaultConfig().(*otlpexporter.Config)
-	exporterCfg := buildExporterConfig(c.(*Config), "the-endpoint")
-
-	// verify
-	grpcSettings := defaultCfg.ClientConfig
-	grpcSettings.Endpoint = "the-endpoint"
-	assert.Equal(t, grpcSettings, exporterCfg.ClientConfig)
-
-	assert.Equal(t, defaultCfg.TimeoutConfig, exporterCfg.TimeoutConfig)
-	assert.Equal(t, defaultCfg.QueueConfig, exporterCfg.QueueConfig)
-	assert.Equal(t, defaultCfg.RetryConfig, exporterCfg.RetryConfig)
 }
 
 func TestBatchWithTwoMetrics(t *testing.T) {
@@ -717,15 +865,15 @@ func TestBatchWithTwoMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	p.loadBalancer = lb
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 
-	lb.addMissingExporters(context.Background(), []string{"endpoint-1"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1"})
 
 	td := twoServicesWithSameMetricName()
 
 	// test
-	err = p.ConsumeMetrics(context.Background(), td)
+	err = p.ConsumeMetrics(t.Context(), td)
 
 	// verify
 	assert.NoError(t, err)
@@ -787,7 +935,7 @@ func TestRollingUpdatesWhenConsumeMetrics(t *testing.T) {
 
 	cfg := &Config{
 		Resolver: ResolverSettings{
-			DNS: &DNSResolver{Hostname: "service-1", Port: ""},
+			DNS: configoptional.Some(DNSResolver{Hostname: "service-1", Port: ""}),
 		},
 	}
 	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
@@ -820,10 +968,10 @@ func TestRollingUpdatesWhenConsumeMetrics(t *testing.T) {
 	}
 
 	// test
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoError(t, p.Shutdown(t.Context()))
 	}()
 	// ensure using default exporters
 	lb.updateLock.Lock()
@@ -835,7 +983,7 @@ func TestRollingUpdatesWhenConsumeMetrics(t *testing.T) {
 		lb.updateLock.Unlock()
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	// keep consuming metrics every 2ms
 	consumeCh := make(chan struct{})
 	go func(ctx context.Context) {
@@ -873,38 +1021,38 @@ func TestRollingUpdatesWhenConsumeMetrics(t *testing.T) {
 	require.Positive(t, counter2.Load())
 }
 
-func randomMetrics(t require.TestingT, rmCount int, smCount int, mCount int, dpCount int) pmetric.Metrics {
+func randomMetrics(t require.TestingT, rmCount, smCount, mCount, dpCount int) pmetric.Metrics {
 	md := pmetric.NewMetrics()
 
-	timeStamp := pcommon.Timestamp(rand.Intn(256))
-	value := int64(rand.Intn(256))
+	timeStamp := pcommon.Timestamp(rand.IntN(256))
+	value := rand.Int64N(256)
 
-	for i := 0; i < rmCount; i++ {
+	for range rmCount {
 		rm := md.ResourceMetrics().AppendEmpty()
 		err := rm.Resource().Attributes().FromRaw(map[string]any{
-			conventions.AttributeServiceName: fmt.Sprintf("service-%d", rand.Intn(512)),
+			"service.name": fmt.Sprintf("service-%d", rand.IntN(512)),
 		})
 		require.NoError(t, err)
 
-		for j := 0; j < smCount; j++ {
+		for range smCount {
 			sm := rm.ScopeMetrics().AppendEmpty()
 			scope := sm.Scope()
 			scope.SetName("MyTestInstrument")
 			scope.SetVersion("1.2.3")
 			err = scope.Attributes().FromRaw(map[string]any{
-				"scope.key": fmt.Sprintf("scope-%d", rand.Intn(512)),
+				"scope.key": fmt.Sprintf("scope-%d", rand.IntN(512)),
 			})
 			require.NoError(t, err)
 
-			for k := 0; k < mCount; k++ {
+			for range mCount {
 				m := sm.Metrics().AppendEmpty()
-				m.SetName(fmt.Sprintf("metric.%d.test", rand.Intn(512)))
+				m.SetName(fmt.Sprintf("metric.%d.test", rand.IntN(512)))
 
 				sum := m.SetEmptySum()
 				sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 				sum.SetIsMonotonic(true)
 
-				for l := 0; l < dpCount; l++ {
+				for range dpCount {
 					dp := sum.DataPoints().AppendEmpty()
 
 					dp.SetTimestamp(timeStamp)
@@ -914,7 +1062,7 @@ func randomMetrics(t require.TestingT, rmCount int, smCount int, mCount int, dpC
 					value += 15
 
 					err = dp.Attributes().FromRaw(map[string]any{
-						"datapoint.key": fmt.Sprintf("dp-%d", rand.Intn(512)),
+						"datapoint.key": fmt.Sprintf("dp-%d", rand.IntN(512)),
 					})
 					require.NoError(t, err)
 				}
@@ -925,7 +1073,7 @@ func randomMetrics(t require.TestingT, rmCount int, smCount int, mCount int, dpC
 	return md
 }
 
-func benchConsumeMetrics(b *testing.B, routingKey string, endpointsCount int, rmCount int, smCount int, mCount int, dpCount int) {
+func benchConsumeMetrics(b *testing.B, routingKey string, endpointsCount, rmCount, smCount, mCount, dpCount int) {
 	ts, tb := getTelemetryAssets(b)
 
 	sink := new(consumertest.MetricsSink)
@@ -934,13 +1082,13 @@ func benchConsumeMetrics(b *testing.B, routingKey string, endpointsCount int, rm
 	}
 
 	endpoints := []string{}
-	for i := 0; i < endpointsCount; i++ {
+	for i := range endpointsCount {
 		endpoints = append(endpoints, fmt.Sprintf("endpoint-%d", i))
 	}
 
 	config := &Config{
 		Resolver: ResolverSettings{
-			Static: &StaticResolver{Hostnames: endpoints},
+			Static: configoptional.Some(StaticResolver{Hostnames: endpoints}),
 		},
 		RoutingKey: routingKey,
 	}
@@ -955,20 +1103,18 @@ func benchConsumeMetrics(b *testing.B, routingKey string, endpointsCount int, rm
 
 	p.loadBalancer = lb
 
-	err = p.Start(context.Background(), componenttest.NewNopHost())
+	err = p.Start(b.Context(), componenttest.NewNopHost())
 	require.NoError(b, err)
 
 	md := randomMetrics(b, rmCount, smCount, mCount, dpCount)
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		err = p.ConsumeMetrics(context.Background(), md)
+	for b.Loop() {
+		err = p.ConsumeMetrics(b.Context(), md)
 		require.NoError(b, err)
 	}
 
 	b.StopTimer()
-	err = p.Shutdown(context.Background())
+	err = p.Shutdown(b.Context())
 	require.NoError(b, err)
 }
 
@@ -1013,7 +1159,7 @@ func BenchmarkConsumeMetrics(b *testing.B) {
 func endpoint2Config() *Config {
 	return &Config{
 		Resolver: ResolverSettings{
-			Static: &StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}},
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}}),
 		},
 		RoutingKey: "service",
 	}
@@ -1022,7 +1168,7 @@ func endpoint2Config() *Config {
 func resourceBasedRoutingConfig() *Config {
 	return &Config{
 		Resolver: ResolverSettings{
-			Static: &StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}},
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}}),
 		},
 		RoutingKey: resourceRoutingStr,
 	}
@@ -1031,7 +1177,7 @@ func resourceBasedRoutingConfig() *Config {
 func metricNameBasedRoutingConfig() *Config {
 	return &Config{
 		Resolver: ResolverSettings{
-			Static: &StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}},
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}}),
 		},
 		RoutingKey: metricNameRoutingStr,
 	}
@@ -1041,7 +1187,7 @@ func simpleMetricsWithServiceName() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(1)
 	rmetrics := metrics.ResourceMetrics().AppendEmpty()
-	rmetrics.Resource().Attributes().PutStr(conventions.AttributeServiceName, serviceName1)
+	rmetrics.Resource().Attributes().PutStr("service.name", serviceName1)
 	rmetrics.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(signal1Name)
 	return metrics
 }
@@ -1050,7 +1196,7 @@ func simpleMetricsWithResource() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(1)
 	rmetrics := metrics.ResourceMetrics().AppendEmpty()
-	rmetrics.Resource().Attributes().PutStr(conventions.AttributeServiceName, serviceName1)
+	rmetrics.Resource().Attributes().PutStr("service.name", serviceName1)
 	rmetrics.Resource().Attributes().PutStr(keyAttr1, valueAttr1)
 	rmetrics.Resource().Attributes().PutInt(keyAttr2, valueAttr2)
 	rmetrics.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(signal1Name)
@@ -1061,10 +1207,10 @@ func twoServicesWithSameMetricName() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(2)
 	rs1 := metrics.ResourceMetrics().AppendEmpty()
-	rs1.Resource().Attributes().PutStr(conventions.AttributeServiceName, serviceName1)
+	rs1.Resource().Attributes().PutStr("service.name", serviceName1)
 	appendSimpleMetricWithID(rs1, signal1Name)
 	rs2 := metrics.ResourceMetrics().AppendEmpty()
-	rs2.Resource().Attributes().PutStr(conventions.AttributeServiceName, serviceName2)
+	rs2.Resource().Attributes().PutStr("service.name", serviceName2)
 	appendSimpleMetricWithID(rs2, signal1Name)
 	return metrics
 }
@@ -1090,7 +1236,7 @@ func newNopMockMetricsExporter() exporter.Metrics {
 	return &mockMetricsExporter{Component: mockComponent{}}
 }
 
-func (e *mockMetricsExporter) Capabilities() consumer.Capabilities {
+func (*mockMetricsExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 

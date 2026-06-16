@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
@@ -107,6 +108,13 @@ func Test_InsertXML(t *testing.T) {
 			want:      `<a>foo</a>`,
 			expectErr: `InsertXML XPath selected non-element: "foo"`,
 		},
+		{
+			name:     "insert missing elements",
+			document: `<a><b>has b</b></a><a></a><a><b>also has b</b></a>`,
+			xPath:    "//a[not(b)]", // elements of a which do not have a b
+			subdoc:   `<b></b>`,
+			want:     `<a><b>has b</b></a><a><b></b></a><a><b>also has b</b></a>`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,22 +123,22 @@ func Test_InsertXML(t *testing.T) {
 				ottl.FunctionContext{},
 				&InsertXMLArguments[any]{
 					Target: ottl.StandardStringGetter[any]{
-						Getter: func(_ context.Context, _ any) (any, error) {
+						Getter: func(context.Context, any) (any, error) {
 							return tt.document, nil
 						},
 					},
 					XPath: tt.xPath,
 					SubDocument: ottl.StandardStringGetter[any]{
-						Getter: func(_ context.Context, _ any) (any, error) {
+						Getter: func(context.Context, any) (any, error) {
 							return tt.subdoc, nil
 						},
 					},
 				})
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			result, err := exprFunc(context.Background(), nil)
+			result, err := exprFunc(t.Context(), nil)
 			if tt.expectErr == "" {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			} else {
 				assert.EqualError(t, err, tt.expectErr)
 			}
@@ -162,24 +170,24 @@ func TestCreateInsertXMLFunc(t *testing.T) {
 			Target: invalidXMLGetter(),
 			XPath:  "/",
 		})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, exprFunc)
-	_, err = exprFunc(context.Background(), nil)
+	_, err = exprFunc(t.Context(), nil)
 	assert.Error(t, err)
 
 	// Invalid XML subdoc should error on function execution
 	exprFunc, err = factory.CreateFunction(
 		fCtx, &InsertXMLArguments[any]{
 			Target: ottl.StandardStringGetter[any]{
-				Getter: func(_ context.Context, _ any) (any, error) {
+				Getter: func(context.Context, any) (any, error) {
 					return "<a/>", nil
 				},
 			},
 			XPath:       "/",
 			SubDocument: invalidXMLGetter(),
 		})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, exprFunc)
-	_, err = exprFunc(context.Background(), nil)
+	_, err = exprFunc(t.Context(), nil)
 	assert.Error(t, err)
 }

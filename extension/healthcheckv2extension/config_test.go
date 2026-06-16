@@ -14,14 +14,14 @@ import (
 	"go.opentelemetry.io/collector/config/configgrpc"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension/internal/common"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension/internal/grpc"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension/internal/http"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/healthcheck"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -35,9 +35,13 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewID(metadata.Type),
 			expected: &Config{
-				LegacyConfig: http.LegacyConfig{
+				LegacyConfig: healthcheck.HTTPLegacyConfig{
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultHTTPPort),
+						},
+						KeepAlivesEnabled: true,
 					},
 					Path: "/",
 				},
@@ -46,18 +50,22 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewIDWithName(metadata.Type, "legacyconfig"),
 			expected: &Config{
-				LegacyConfig: http.LegacyConfig{
+				LegacyConfig: healthcheck.HTTPLegacyConfig{
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: "localhost:13",
-						TLSSetting: &configtls.ServerConfig{
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  "localhost:13",
+						},
+						TLS: configoptional.Some(configtls.ServerConfig{
 							Config: configtls.Config{
 								CAFile:   "/path/to/ca",
 								CertFile: "/path/to/cert",
 								KeyFile:  "/path/to/key",
 							},
-						},
+						}),
+						KeepAlivesEnabled: true,
 					},
-					CheckCollectorPipeline: &http.CheckCollectorPipelineConfig{
+					CheckCollectorPipeline: &healthcheck.CheckCollectorPipelineConfig{
 						Enabled:                  false,
 						Interval:                 "5m",
 						ExporterFailureThreshold: 5,
@@ -69,44 +77,53 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			id:          component.NewIDWithName(metadata.Type, "missingendpoint"),
-			expectedErr: errHTTPEndpointRequired,
+			expectedErr: healthcheck.ErrHTTPEndpointRequired,
 		},
 		{
 			id:          component.NewIDWithName(metadata.Type, "invalidpath"),
-			expectedErr: errInvalidPath,
+			expectedErr: healthcheck.ErrInvalidPath,
 		},
 		{
 			id: component.NewIDWithName(metadata.Type, "v2all"),
 			expected: &Config{
-				LegacyConfig: http.LegacyConfig{
+				LegacyConfig: healthcheck.HTTPLegacyConfig{
 					UseV2: true,
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultHTTPPort),
+						},
+						KeepAlivesEnabled: true,
 					},
 					Path: "/",
 				},
-				HTTPConfig: &http.Config{
+				HTTPConfig: &healthcheck.HTTPConfig{
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultHTTPPort),
+						},
+						KeepAlivesEnabled: true,
 					},
-					Status: http.PathConfig{
+					Status: healthcheck.PathConfig{
 						Enabled: true,
 						Path:    "/status",
 					},
-					Config: http.PathConfig{
+					Config: healthcheck.PathConfig{
 						Enabled: false,
 						Path:    "/config",
 					},
 				},
-				GRPCConfig: &grpc.Config{
+				GRPCConfig: &healthcheck.GRPCConfig{
 					ServerConfig: configgrpc.ServerConfig{
 						NetAddr: confignet.AddrConfig{
-							Endpoint:  testutil.EndpointForPort(defaultGRPCPort),
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultGRPCPort),
 							Transport: "tcp",
 						},
+						Keepalive: configoptional.Some(configgrpc.NewDefaultKeepaliveServerConfig()),
 					},
 				},
-				ComponentHealthConfig: &common.ComponentHealthConfig{
+				ComponentHealthConfig: &healthcheck.ComponentHealthConfig{
 					IncludePermanent:   true,
 					IncludeRecoverable: true,
 					RecoveryDuration:   5 * time.Minute,
@@ -116,22 +133,30 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewIDWithName(metadata.Type, "v2httpcustomized"),
 			expected: &Config{
-				LegacyConfig: http.LegacyConfig{
+				LegacyConfig: healthcheck.HTTPLegacyConfig{
 					UseV2: true,
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultHTTPPort),
+						},
+						KeepAlivesEnabled: true,
 					},
 					Path: "/",
 				},
-				HTTPConfig: &http.Config{
+				HTTPConfig: &healthcheck.HTTPConfig{
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: "localhost:13",
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  "localhost:13",
+						},
+						KeepAlivesEnabled: true,
 					},
-					Status: http.PathConfig{
+					Status: healthcheck.PathConfig{
 						Enabled: true,
 						Path:    "/health",
 					},
-					Config: http.PathConfig{
+					Config: healthcheck.PathConfig{
 						Enabled: true,
 						Path:    "/conf",
 					},
@@ -140,41 +165,46 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			id:          component.NewIDWithName(metadata.Type, "v2httpmissingendpoint"),
-			expectedErr: errHTTPEndpointRequired,
+			expectedErr: healthcheck.ErrHTTPEndpointRequired,
 		},
 		{
 			id: component.NewIDWithName(metadata.Type, "v2grpccustomized"),
 			expected: &Config{
-				LegacyConfig: http.LegacyConfig{
+				LegacyConfig: healthcheck.HTTPLegacyConfig{
 					UseV2: true,
 					ServerConfig: confighttp.ServerConfig{
-						Endpoint: testutil.EndpointForPort(defaultHTTPPort),
+						NetAddr: confignet.AddrConfig{
+							Transport: "tcp",
+							Endpoint:  testutil.EndpointForPort(healthcheck.DefaultHTTPPort),
+						},
+						KeepAlivesEnabled: true,
 					},
 					Path: "/",
 				},
-				GRPCConfig: &grpc.Config{
+				GRPCConfig: &healthcheck.GRPCConfig{
 					ServerConfig: configgrpc.ServerConfig{
 						NetAddr: confignet.AddrConfig{
 							Endpoint:  "localhost:13",
 							Transport: "tcp",
 						},
+						Keepalive: configoptional.Some(configgrpc.NewDefaultKeepaliveServerConfig()),
 					},
 				},
 			},
 		},
 		{
 			id:          component.NewIDWithName(metadata.Type, "v2grpcmissingendpoint"),
-			expectedErr: errGRPCEndpointRequired,
+			expectedErr: healthcheck.ErrGRPCEndpointRequired,
 		},
 		{
 			id:          component.NewIDWithName(metadata.Type, "v2noprotocols"),
-			expectedErr: errMissingProtocol,
+			expectedErr: healthcheck.ErrMissingProtocol,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.id.String(), func(t *testing.T) {
-			cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
+			cm, err := confmaptest.LoadConf(filepath.Join("../../internal/healthcheck/testdata", "config.yaml"))
 			require.NoError(t, err)
 			factory := NewFactory()
 			cfg := factory.CreateDefaultConfig()
@@ -182,10 +212,10 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 			if tt.expectedErr != nil {
-				assert.ErrorIs(t, component.ValidateConfig(cfg), tt.expectedErr)
+				assert.ErrorIs(t, xconfmap.Validate(cfg), tt.expectedErr)
 				return
 			}
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}

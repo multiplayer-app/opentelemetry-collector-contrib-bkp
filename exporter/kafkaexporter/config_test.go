@@ -4,22 +4,23 @@
 package kafkaexporter
 
 import (
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
-	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter/internal/kafkaclient"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/kafka"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -30,313 +31,378 @@ func TestLoadConfig(t *testing.T) {
 
 	tests := []struct {
 		id       component.ID
-		option   func(conf *Config)
 		expected component.Config
 	}{
 		{
 			id: component.NewIDWithName(metadata.Type, ""),
-			option: func(_ *Config) {
-				// intentionally left blank so we use default config
-			},
 			expected: &Config{
 				TimeoutSettings: exporterhelper.TimeoutConfig{
 					Timeout: 10 * time.Second,
 				},
-				BackOffConfig: configretry.BackOffConfig{
-					Enabled:             true,
-					InitialInterval:     10 * time.Second,
-					MaxInterval:         1 * time.Minute,
-					MaxElapsedTime:      10 * time.Minute,
-					RandomizationFactor: backoff.DefaultRandomizationFactor,
-					Multiplier:          backoff.DefaultMultiplier,
+				BackOffConfig: func() configretry.BackOffConfig {
+					config := configretry.NewDefaultBackOffConfig()
+					config.InitialInterval = 10 * time.Second
+					config.MaxInterval = 60 * time.Second
+					config.MaxElapsedTime = 10 * time.Minute
+					return config
+				}(),
+				QueueBatchConfig: configoptional.Some(func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 2
+					queue.QueueSize = 10
+					return queue
+				}()),
+				ClientConfig: func() configkafka.ClientConfig {
+					config := configkafka.NewDefaultClientConfig()
+					config.Brokers = []string{"foo:123", "bar:456"}
+					return config
+				}(),
+				Producer: func() configkafka.ProducerConfig {
+					config := configkafka.NewDefaultProducerConfig()
+					config.MaxMessageBytes = 10000000
+					config.RequiredAcks = configkafka.WaitForAll
+					return config
+				}(),
+				Logs: SignalConfig{
+					Topic:    "spans",
+					Encoding: "otlp_proto",
 				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
+				Metrics: SignalConfig{
+					Topic:    "spans",
+					Encoding: "otlp_proto",
 				},
-				Topic:                                "spans",
-				Encoding:                             "otlp_proto",
+				Traces: SignalConfig{
+					Topic:    "spans",
+					Encoding: "otlp_proto",
+				},
+				Profiles: SignalConfig{
+					Topic:    "spans",
+					Encoding: "otlp_proto",
+				},
 				PartitionTracesByID:                  true,
 				PartitionMetricsByResourceAttributes: true,
 				PartitionLogsByResourceAttributes:    true,
-				Brokers:                              []string{"foo:123", "bar:456"},
-				ClientID:                             "test_client_id",
-				Authentication: kafka.Authentication{
-					PlainText: &kafka.PlainTextConfig{
-						Username: "jdoe",
-						Password: "pass",
+				PartitionLogsByTraceID:               false,
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
 					},
-				},
-				Metadata: Metadata{
-					Full: false,
-					Retry: MetadataRetry{
-						Max:     15,
-						Backoff: defaultMetadataRetryBackoff,
-					},
-				},
-				Producer: Producer{
-					MaxMessageBytes: 10000000,
-					RequiredAcks:    sarama.WaitForAll,
-					Compression:     "none",
-				},
+				}),
 			},
 		},
 		{
-			id: component.NewIDWithName(metadata.Type, ""),
-			option: func(conf *Config) {
-				conf.Authentication = kafka.Authentication{
-					SASL: &kafka.SASLConfig{
-						Username:  "jdoe",
-						Password:  "pass",
-						Mechanism: "PLAIN",
-						Version:   0,
-					},
-				}
-			},
+			id: component.NewIDWithName(metadata.Type, "round_robin_partitioner"),
 			expected: &Config{
-				TimeoutSettings: exporterhelper.TimeoutConfig{
-					Timeout: 10 * time.Second,
-				},
-				BackOffConfig: configretry.BackOffConfig{
-					Enabled:             true,
-					InitialInterval:     10 * time.Second,
-					MaxInterval:         1 * time.Minute,
-					MaxElapsedTime:      10 * time.Minute,
-					RandomizationFactor: backoff.DefaultRandomizationFactor,
-					Multiplier:          backoff.DefaultMultiplier,
-				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
-				},
-				Topic:                                "spans",
-				Encoding:                             "otlp_proto",
-				PartitionTracesByID:                  true,
-				PartitionMetricsByResourceAttributes: true,
-				PartitionLogsByResourceAttributes:    true,
-				Brokers:                              []string{"foo:123", "bar:456"},
-				ClientID:                             "test_client_id",
-				Authentication: kafka.Authentication{
-					PlainText: &kafka.PlainTextConfig{
-						Username: "jdoe",
-						Password: "pass",
-					},
-					SASL: &kafka.SASLConfig{
-						Username:  "jdoe",
-						Password:  "pass",
-						Mechanism: "PLAIN",
-						Version:   0,
-					},
-				},
-				Metadata: Metadata{
-					Full: false,
-					Retry: MetadataRetry{
-						Max:     15,
-						Backoff: defaultMetadataRetryBackoff,
-					},
-				},
-				Producer: Producer{
-					MaxMessageBytes: 10000000,
-					RequiredAcks:    sarama.WaitForAll,
-					Compression:     "none",
-				},
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs:             SignalConfig{Topic: defaultLogsTopic, Encoding: defaultLogsEncoding},
+				Metrics:          SignalConfig{Topic: defaultMetricsTopic, Encoding: defaultMetricsEncoding},
+				Traces:           SignalConfig{Topic: defaultTracesTopic, Encoding: defaultTracesEncoding},
+				Profiles:         SignalConfig{Topic: defaultProfilesTopic, Encoding: defaultProfilesEncoding},
+				RecordPartitioner: (RecordPartitionerConfig{
+					RoundRobin: &struct{}{},
+				}),
 			},
 		},
 		{
-			id: component.NewIDWithName(metadata.Type, ""),
-			option: func(conf *Config) {
-				conf.ResolveCanonicalBootstrapServersOnly = true
-			},
+			id: component.NewIDWithName(metadata.Type, "least_backup_partitioner"),
 			expected: &Config{
-				TimeoutSettings: exporterhelper.TimeoutConfig{
-					Timeout: 10 * time.Second,
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs:             SignalConfig{Topic: defaultLogsTopic, Encoding: defaultLogsEncoding},
+				Metrics:          SignalConfig{Topic: defaultMetricsTopic, Encoding: defaultMetricsEncoding},
+				Traces:           SignalConfig{Topic: defaultTracesTopic, Encoding: defaultTracesEncoding},
+				Profiles:         SignalConfig{Topic: defaultProfilesTopic, Encoding: defaultProfilesEncoding},
+				RecordPartitioner: (RecordPartitionerConfig{
+					LeastBackup: &struct{}{},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "sticky_key_partitioner"),
+			expected: &Config{
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs:             SignalConfig{Topic: defaultLogsTopic, Encoding: defaultLogsEncoding},
+				Metrics:          SignalConfig{Topic: defaultMetricsTopic, Encoding: defaultMetricsEncoding},
+				Traces:           SignalConfig{Topic: defaultTracesTopic, Encoding: defaultTracesEncoding},
+				Profiles:         SignalConfig{Topic: defaultProfilesTopic, Encoding: defaultProfilesEncoding},
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
+					},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "sticky_key_partitioner_murmur2"),
+			expected: &Config{
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs:             SignalConfig{Topic: defaultLogsTopic, Encoding: defaultLogsEncoding},
+				Metrics:          SignalConfig{Topic: defaultMetricsTopic, Encoding: defaultMetricsEncoding},
+				Traces:           SignalConfig{Topic: defaultTracesTopic, Encoding: defaultTracesEncoding},
+				Profiles:         SignalConfig{Topic: defaultProfilesTopic, Encoding: defaultProfilesEncoding},
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "murmur2",
+					},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "per_signal_topic"),
+			expected: &Config{
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs: SignalConfig{
+					Topic:                "per_signal_topic",
+					Encoding:             "otlp_proto",
+					TopicFromMetadataKey: "metadata_key",
 				},
-				BackOffConfig: configretry.BackOffConfig{
-					Enabled:             true,
-					InitialInterval:     10 * time.Second,
-					MaxInterval:         1 * time.Minute,
-					MaxElapsedTime:      10 * time.Minute,
-					RandomizationFactor: backoff.DefaultRandomizationFactor,
-					Multiplier:          backoff.DefaultMultiplier,
+				Metrics: SignalConfig{
+					Topic:    "metrics_topic",
+					Encoding: "otlp_proto",
 				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
+				Traces: SignalConfig{
+					Topic:    "per_signal_topic",
+					Encoding: "otlp_proto",
 				},
-				Topic:                                "spans",
-				Encoding:                             "otlp_proto",
-				PartitionTracesByID:                  true,
-				PartitionMetricsByResourceAttributes: true,
-				PartitionLogsByResourceAttributes:    true,
-				Brokers:                              []string{"foo:123", "bar:456"},
-				ClientID:                             "test_client_id",
-				ResolveCanonicalBootstrapServersOnly: true,
-				Authentication: kafka.Authentication{
-					PlainText: &kafka.PlainTextConfig{
-						Username: "jdoe",
-						Password: "pass",
+				Profiles: SignalConfig{
+					Topic:    "per_signal_topic",
+					Encoding: "otlp_proto",
+				},
+				IncludeMetadataKeys: []string{
+					"metadata_key",
+				},
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
+					},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "per_signal_encoding"),
+			expected: &Config{
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs: SignalConfig{
+					Topic:    "otlp_logs",
+					Encoding: "per_signal_encoding",
+				},
+				Metrics: SignalConfig{
+					Topic:    "otlp_metrics",
+					Encoding: "metrics_encoding",
+				},
+				Traces: SignalConfig{
+					Topic:    "otlp_spans",
+					Encoding: "per_signal_encoding",
+				},
+				Profiles: SignalConfig{
+					Topic:    "otlp_profiles",
+					Encoding: "per_signal_encoding",
+				},
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
+					},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "metadata_batch_valid"),
+			expected: &Config{
+				TimeoutSettings: exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:   configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.Batch = configoptional.Some(func() exporterhelper.BatchConfig {
+						batch := exporterhelper.BatchConfig{
+							Sizer: exporterhelper.RequestSizerTypeBytes,
+						}
+						batch.FlushTimeout = 200 * time.Millisecond
+						batch.MinSize = 8192
+						batch.Partition.MetadataKeys = []string{"metadata_key", "another_key", "kafka_topic"}
+						return batch
+					}())
+					return queue
+				}()),
+				ClientConfig: configkafka.NewDefaultClientConfig(),
+				Producer:     configkafka.NewDefaultProducerConfig(),
+				Logs: SignalConfig{
+					Topic:                "otlp_logs",
+					TopicFromMetadataKey: "kafka_topic",
+					Encoding:             "otlp_proto",
+				},
+				Metrics: SignalConfig{
+					Topic:                "otlp_metrics",
+					TopicFromMetadataKey: "kafka_topic",
+					Encoding:             "otlp_proto",
+				},
+				Traces: SignalConfig{
+					Topic:                "otlp_spans",
+					TopicFromMetadataKey: "kafka_topic",
+					Encoding:             "otlp_proto",
+				},
+				Profiles: SignalConfig{
+					Topic:                "otlp_profiles",
+					TopicFromMetadataKey: "kafka_topic",
+					Encoding:             "otlp_proto",
+				},
+				IncludeMetadataKeys: []string{"metadata_key"},
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
+					},
+				}),
+			},
+		},
+		{
+			id: component.NewIDWithName(metadata.Type, "message_record_headers"),
+			expected: &Config{
+				TimeoutSettings:  exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig:    configretry.NewDefaultBackOffConfig(),
+				QueueBatchConfig: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				ClientConfig:     configkafka.NewDefaultClientConfig(),
+				Producer:         configkafka.NewDefaultProducerConfig(),
+				Logs:             SignalConfig{Topic: defaultLogsTopic, Encoding: defaultLogsEncoding},
+				Metrics:          SignalConfig{Topic: defaultMetricsTopic, Encoding: defaultMetricsEncoding},
+				Traces:           SignalConfig{Topic: defaultTracesTopic, Encoding: defaultTracesEncoding},
+				Profiles:         SignalConfig{Topic: defaultProfilesTopic, Encoding: defaultProfilesEncoding},
+				RecordHeaders: []kafkaclient.RecordHeader{
+					{
+						Name:  "some-key",
+						Value: configopaque.String("some-value"),
+					},
+					{
+						Name:  "some-key",
+						Value: configopaque.String("another-value"),
+					},
+					{
+						Name:  "new-key",
+						Value: configopaque.String("new-value"),
 					},
 				},
-				Metadata: Metadata{
-					Full: false,
-					Retry: MetadataRetry{
-						Max:     15,
-						Backoff: defaultMetadataRetryBackoff,
+				RecordPartitioner: (RecordPartitionerConfig{
+					StickyKey: &StickyKeyPartitionerConfig{
+						Hasher: "sarama_compat",
 					},
-				},
-				Producer: Producer{
-					MaxMessageBytes: 10000000,
-					RequiredAcks:    sarama.WaitForAll,
-					Compression:     "none",
-				},
+				}),
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.id.String(), func(t *testing.T) {
-			cfg := applyConfigOption(tt.option)
+			cfg := createDefaultConfig().(*Config)
 
 			sub, err := cm.Sub(tt.id.String())
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
 }
 
-func TestValidate_err_compression(t *testing.T) {
-	config := &Config{
-		Producer: Producer{
-			Compression: "idk",
-		},
-	}
+func TestLoadConfigFailed(t *testing.T) {
+	t.Parallel()
 
-	err := config.Validate()
-	assert.EqualError(t, err, "producer.compression should be one of 'none', 'gzip', 'snappy', 'lz4', or 'zstd'. configured value idk")
-}
-
-func TestValidate_sasl_username(t *testing.T) {
-	config := &Config{
-		Producer: Producer{
-			Compression: "none",
-		},
-		Authentication: kafka.Authentication{
-			SASL: &kafka.SASLConfig{
-				Username:  "",
-				Password:  "pass",
-				Mechanism: "PLAIN",
-			},
-		},
-	}
-
-	err := config.Validate()
-	assert.EqualError(t, err, "auth.sasl.username is required")
-}
-
-func TestValidate_sasl_password(t *testing.T) {
-	config := &Config{
-		Producer: Producer{
-			Compression: "none",
-		},
-		Authentication: kafka.Authentication{
-			SASL: &kafka.SASLConfig{
-				Username:  "jdoe",
-				Password:  "",
-				Mechanism: "PLAIN",
-			},
-		},
-	}
-
-	err := config.Validate()
-	assert.EqualError(t, err, "auth.sasl.password is required")
-}
-
-func TestValidate_sasl_mechanism(t *testing.T) {
-	config := &Config{
-		Producer: Producer{
-			Compression: "none",
-		},
-		Authentication: kafka.Authentication{
-			SASL: &kafka.SASLConfig{
-				Username:  "jdoe",
-				Password:  "pass",
-				Mechanism: "FAKE",
-			},
-		},
-	}
-
-	err := config.Validate()
-	assert.EqualError(t, err, "auth.sasl.mechanism should be one of 'PLAIN', 'AWS_MSK_IAM', 'SCRAM-SHA-256' or 'SCRAM-SHA-512'. configured value FAKE")
-}
-
-func TestValidate_sasl_version(t *testing.T) {
-	config := &Config{
-		Producer: Producer{
-			Compression: "none",
-		},
-		Authentication: kafka.Authentication{
-			SASL: &kafka.SASLConfig{
-				Username:  "jdoe",
-				Password:  "pass",
-				Mechanism: "PLAIN",
-				Version:   42,
-			},
-		},
-	}
-
-	err := config.Validate()
-	assert.EqualError(t, err, "auth.sasl.version has to be either 0 or 1. configured value 42")
-}
-
-func Test_saramaProducerCompressionCodec(t *testing.T) {
-	tests := map[string]struct {
-		compression         string
-		expectedCompression sarama.CompressionCodec
-		expectedError       error
+	tests := []struct {
+		id            component.ID
+		errorContains string
+		configFile    string
 	}{
-		"none": {
-			compression:         "none",
-			expectedCompression: sarama.CompressionNone,
-			expectedError:       nil,
+		{
+			id:            component.NewIDWithName(metadata.Type, ""),
+			errorContains: errLogsPartitionExclusive.Error(),
+			configFile:    "config-partitioning-failed.yaml",
 		},
-		"gzip": {
-			compression:         "gzip",
-			expectedCompression: sarama.CompressionGZIP,
-			expectedError:       nil,
+		{
+			id:            component.NewIDWithName(metadata.Type, ""),
+			errorContains: `logs::topic_from_metadata_key: topic_from_metadata_key must be present in sending_queue::batch::partition::metadata_keys`,
+			configFile:    "config-topic-from-metadata-failed.yaml",
 		},
-		"snappy": {
-			compression:         "snappy",
-			expectedCompression: sarama.CompressionSnappy,
-			expectedError:       nil,
+		{
+			id:            component.NewIDWithName(metadata.Type, "missing_batch_partitioner_keys"),
+			errorContains: errBatchPartitionMetadataKeysRequired.Error(),
+			configFile:    "config-batch-partition-validation-failed.yaml",
 		},
-		"lz4": {
-			compression:         "lz4",
-			expectedCompression: sarama.CompressionLZ4,
-			expectedError:       nil,
+		{
+			id:            component.NewIDWithName(metadata.Type, "not_superset_batch_partitioner_keys"),
+			errorContains: `sending_queue::batch::partition::metadata_keys must include all include_metadata_keys values: missing "required_key" from sending_queue::batch::partition::metadata_keys=[metadata_key]`,
+			configFile:    "config-batch-partition-validation-failed.yaml",
 		},
-		"zstd": {
-			compression:         "zstd",
-			expectedCompression: sarama.CompressionZSTD,
-			expectedError:       nil,
+		{
+			id:            component.NewIDWithName(metadata.Type, "multiple_partitioner"),
+			errorContains: errRecordPartitionerMultipleSet.Error(),
+			configFile:    "config-partitioning-failed.yaml",
 		},
-		"unknown": {
-			compression:         "unknown",
-			expectedCompression: sarama.CompressionNone,
-			expectedError:       fmt.Errorf("producer.compression should be one of 'none', 'gzip', 'snappy', 'lz4', or 'zstd'. configured value unknown"),
+		{
+			id:            component.NewIDWithName(metadata.Type, "invalid_sticky_key_hasher"),
+			errorContains: `sticky_key: unknown hasher "invalid_hasher", valid values are "sarama_compat", "murmur2"`,
+			configFile:    "config-partitioning-failed.yaml",
+		},
+		{
+			id:            component.NewIDWithName(metadata.Type, "traces_message_key_exclusive"),
+			errorContains: errTracesMessageKeyExclusive.Error(),
+			configFile:    "config-partitioning-failed.yaml",
+		},
+		{
+			id:            component.NewIDWithName(metadata.Type, "metrics_message_key_exclusive"),
+			errorContains: errMetricsMessageKeyExclusive.Error(),
+			configFile:    "config-partitioning-failed.yaml",
+		},
+		{
+			id:            component.NewIDWithName(metadata.Type, "logs_message_key_exclusive_resource"),
+			errorContains: errLogsMessageKeyExclusive.Error(),
+			configFile:    "config-partitioning-failed.yaml",
+		},
+		{
+			id:            component.NewIDWithName(metadata.Type, "logs_message_key_exclusive_traceid"),
+			errorContains: errLogsMessageKeyExclusive.Error(),
+			configFile:    "config-partitioning-failed.yaml",
+		},
+		{
+			id:            component.NewIDWithName(metadata.Type, "missing_message_key_batch_partition"),
+			errorContains: `logs::message_key_from_metadata_key: message_key_from_metadata_key must be present in sending_queue::batch::partition::metadata_keys`,
+			configFile:    "config-topic-from-metadata-failed.yaml",
 		},
 	}
 
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			c, err := saramaProducerCompressionCodec(test.compression)
-			assert.Equal(t, test.expectedCompression, c)
-			assert.Equal(t, test.expectedError, err)
+	for _, tt := range tests {
+		t.Run(tt.id.String(), func(t *testing.T) {
+			cm, err := confmaptest.LoadConf(filepath.Join("testdata", tt.configFile))
+			require.NoError(t, err)
+
+			cfg := createDefaultConfig().(*Config)
+
+			sub, err := cm.Sub(tt.id.String())
+			require.NoError(t, err)
+			require.NoError(t, sub.Unmarshal(cfg))
+
+			err = xconfmap.Validate(cfg)
+			assert.ErrorContains(t, err, tt.errorContains)
 		})
 	}
 }

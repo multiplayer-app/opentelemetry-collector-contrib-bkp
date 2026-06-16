@@ -5,11 +5,12 @@ package metrics // import "github.com/open-telemetry/opentelemetry-collector-con
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	"golang.org/x/exp/rand"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
@@ -28,33 +29,31 @@ var distributionFnMap = map[string]distAlgorithm{
 	"uniform":  uniformAlgorithm,
 }
 
-func newconvertExponentialHistToExplicitHistFactory() ottl.Factory[ottlmetric.TransformContext] {
+func newconvertExponentialHistToExplicitHistFactory() ottl.Factory[*ottlmetric.TransformContext] {
 	return ottl.NewFactory("convert_exponential_histogram_to_histogram",
 		&convertExponentialHistToExplicitHistArguments{}, createconvertExponentialHistToExplicitHistFunction)
 }
 
-func createconvertExponentialHistToExplicitHistFunction(_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[ottlmetric.TransformContext], error) {
+func createconvertExponentialHistToExplicitHistFunction(_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[*ottlmetric.TransformContext], error) {
 	args, ok := oArgs.(*convertExponentialHistToExplicitHistArguments)
 
 	if !ok {
-		return nil, fmt.Errorf("convertExponentialHistToExplicitHistFactory args must be of type *convertExponentialHistToExplicitHistArguments")
+		return nil, errors.New("convertExponentialHistToExplicitHistFactory args must be of type *convertExponentialHistToExplicitHistArguments")
 	}
 
-	if len(args.DistributionFn) == 0 {
+	if args.DistributionFn == "" {
 		args.DistributionFn = "random"
 	}
 
 	if _, ok := distributionFnMap[args.DistributionFn]; !ok {
 		return nil, fmt.Errorf("invalid conversion function: %s, must be one of [upper, midpoint, random, uniform]", args.DistributionFn)
-
 	}
 
 	return convertExponentialHistToExplicitHist(args.DistributionFn, args.ExplicitBounds)
 }
 
 // convertExponentialHistToExplicitHist converts an exponential histogram to a bucketed histogram
-func convertExponentialHistToExplicitHist(distributionFn string, explicitBounds []float64) (ottl.ExprFunc[ottlmetric.TransformContext], error) {
-
+func convertExponentialHistToExplicitHist(distributionFn string, explicitBounds []float64) (ottl.ExprFunc[*ottlmetric.TransformContext], error) {
 	if len(explicitBounds) == 0 {
 		return nil, fmt.Errorf("explicit bounds cannot be empty: %v", explicitBounds)
 	}
@@ -64,7 +63,7 @@ func convertExponentialHistToExplicitHist(distributionFn string, explicitBounds 
 		return nil, fmt.Errorf("invalid distribution algorithm: %s, must be one of [upper, midpoint, random, uniform]", distributionFn)
 	}
 
-	return func(_ context.Context, tCtx ottlmetric.TransformContext) (any, error) {
+	return func(_ context.Context, tCtx *ottlmetric.TransformContext) (any, error) {
 		metric := tCtx.GetMetric()
 
 		// only execute on exponential histograms
@@ -162,7 +161,8 @@ func calculateBucketCounts(dp pmetric.ExponentialHistogramDataPoint, boundaries 
 //     upper = math.Exp((index+1) * factor)
 var upperAlgorithm distAlgorithm = func(count uint64,
 	upper, _ float64, boundaries []float64,
-	bucketCountsDst *[]uint64) {
+	bucketCountsDst *[]uint64,
+) {
 	// count := bucketCountsSrc.At(index)
 
 	// At this point we know that the upper bound represents the highest value that can be in this bucket, so we take the
@@ -183,7 +183,8 @@ var upperAlgorithm distAlgorithm = func(count uint64,
 // The midpoint is calculated as (upper + lower) / 2.
 var midpointAlgorithm distAlgorithm = func(count uint64,
 	upper, lower float64, boundaries []float64,
-	bucketCountsDst *[]uint64) {
+	bucketCountsDst *[]uint64,
+) {
 	midpoint := (upper + lower) / 2
 
 	for j, boundary := range boundaries {
@@ -199,11 +200,11 @@ var midpointAlgorithm distAlgorithm = func(count uint64,
 	(*bucketCountsDst)[len(boundaries)-1] += count // Overflow bucket
 }
 
-// uniformAlgorithm distributes counts from a given set of bucket sounrces into a set of linear boundaries using uniform distribution
+// uniformAlgorithm distributes counts from a given set of bucket sources into a set of linear boundaries using uniform distribution
 var uniformAlgorithm distAlgorithm = func(count uint64,
 	upper, lower float64, boundaries []float64,
-	bucketCountsDst *[]uint64) {
-
+	bucketCountsDst *[]uint64,
+) {
 	// Find the boundaries that intersect with the bucket range
 	var start, end int
 	for start = 0; start < len(boundaries); start++ {
@@ -244,7 +245,8 @@ var uniformAlgorithm distAlgorithm = func(count uint64,
 // randomAlgorithm distributes counts from a given set of bucket sources into a set of linear boundaries using random distribution
 var randomAlgorithm distAlgorithm = func(count uint64,
 	upper, lower float64, boundaries []float64,
-	bucketCountsDst *[]uint64) {
+	bucketCountsDst *[]uint64,
+) {
 	// Find the boundaries that intersect with the bucket range
 	start := 0
 	for start < len(boundaries) && boundaries[start] < lower {
@@ -296,7 +298,7 @@ var randomAlgorithm distAlgorithm = func(count uint64,
 		// Distribute any remaining count
 		remainingCount := count - totalAllocated
 		for remainingCount > 0 {
-			randomBoundary := rand.Intn(end-start+1) + start
+			randomBoundary := rand.IntN(end-start+1) + start
 			(*bucketCountsDst)[randomBoundary]++
 			remainingCount--
 		}

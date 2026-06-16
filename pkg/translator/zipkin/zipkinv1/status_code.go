@@ -4,13 +4,14 @@
 package zipkinv1 // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/zipkin/zipkinv1"
 
 import (
-	"fmt"
+	"errors"
 	"math"
 	"strconv"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	conventions "go.opentelemetry.io/collector/semconv/v1.6.1"
+	conventionsv125 "go.opentelemetry.io/otel/semconv/v1.25.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/tracetranslator"
 )
@@ -93,7 +94,7 @@ func (m *statusMapper) fromAttribute(key string, attrib pcommon.Value) bool {
 		m.fromCensus.message = attrib.Str()
 		return true
 
-	case conventions.OtelStatusCode:
+	case string(conventions.OTelStatusCodeKey):
 		// Keep the code as is, even if unknown. Since we are allowed to receive unknown values for enums.
 		code, err := attribToStatusCode(attrib)
 		if err == nil {
@@ -101,11 +102,11 @@ func (m *statusMapper) fromAttribute(key string, attrib pcommon.Value) bool {
 		}
 		return true
 
-	case conventions.OtelStatusDescription:
+	case string(conventions.OTelStatusDescriptionKey):
 		m.fromStatus.message = attrib.Str()
 		return true
 
-	case conventions.AttributeHTTPStatusCode:
+	case string(conventionsv125.HTTPStatusCodeKey), string(conventions.HTTPResponseStatusCodeKey):
 		httpCode, err := attribToStatusCode(attrib)
 		if err == nil {
 			code := statusCodeFromHTTP(httpCode)
@@ -130,7 +131,7 @@ func (m *statusMapper) fromAttribute(key string, attrib pcommon.Value) bool {
 func attribToStatusCode(attr pcommon.Value) (int32, error) {
 	switch attr.Type() {
 	case pcommon.ValueTypeEmpty:
-		return 0, fmt.Errorf("nil attribute")
+		return 0, errors.New("nil attribute")
 	case pcommon.ValueTypeInt:
 		return toInt32(attr.Int())
 	case pcommon.ValueTypeStr:
@@ -140,14 +141,14 @@ func attribToStatusCode(attr pcommon.Value) (int32, error) {
 		}
 		return toInt32(i)
 	}
-	return 0, fmt.Errorf("invalid attribute type")
+	return 0, errors.New("invalid attribute type")
 }
 
 func toInt32(i int64) (int32, error) {
 	if i <= math.MaxInt32 && i >= math.MinInt32 {
 		return int32(i), nil
 	}
-	return 0, fmt.Errorf("outside of the int32 range")
+	return 0, errors.New("outside of the int32 range")
 }
 
 // statusCodeFromHTTP takes an HTTP status code and return the appropriate OpenTelemetry status code

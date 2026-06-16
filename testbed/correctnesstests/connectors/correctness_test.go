@@ -21,26 +21,28 @@ func TestMain(m *testing.M) {
 }
 
 func TestGoldenData(t *testing.T) {
-	processors := map[string]string{
-		"batch": `
+	processors := []correctnesstests.ProcessorNameAndConfigBody{
+		{
+			Name: "batch",
+			Body: `
   batch:
     send_batch_size: 1024
 `,
+		},
 	}
 	sampleTest := correctnesstests.PipelineDef{
 		TestName:  "test routing",
 		Receiver:  "otlp",
-		Exporter:  "otlp",
+		Exporter:  "otlp_grpc",
 		Connector: "routing",
 	}
 
-	sampleTest.DataSender = correctnesstests.ConstructTraceSender(t, sampleTest.Receiver)
-	sampleTest.DataReceiver = correctnesstests.ConstructReceiver(t, sampleTest.Exporter)
-	sampleTest.DataConnector = correctnesstests.ConstructConnector(t, sampleTest.Connector, "traces")
+	sampleTest.DataSender = constructTraceSender(t, sampleTest.Receiver)
+	sampleTest.DataReceiver = constructReceiver(t, sampleTest.Exporter)
+	sampleTest.DataConnector = constructConnector(t, sampleTest.Connector, "traces")
 	t.Run(sampleTest.TestName, func(t *testing.T) {
 		testWithGoldenDataset(t, sampleTest.DataSender, sampleTest.DataReceiver, sampleTest.ResourceSpec, sampleTest.DataConnector, processors)
 	})
-
 }
 
 func testWithGoldenDataset(
@@ -49,21 +51,16 @@ func testWithGoldenDataset(
 	receiver testbed.DataReceiver,
 	resourceSpec testbed.ResourceSpec,
 	connector testbed.DataConnector,
-	processors map[string]string,
+	processors []correctnesstests.ProcessorNameAndConfigBody,
 ) {
 	dataProvider := testbed.NewGoldenDataProvider(
 		"../../../internal/coreinternal/goldendataset/testdata/generated_pict_pairs_traces.txt",
 		"../../../internal/coreinternal/goldendataset/testdata/generated_pict_pairs_spans.txt",
 		"")
-	factories, err := testbed.Components()
+	f, err := factories()
 	require.NoError(t, err, "default components resulted in: %v", err)
-	runner := testbed.NewInProcessCollector(factories)
+	runner := testbed.NewInProcessCollector(f)
 	validator := testbed.NewCorrectTestValidator(sender.ProtocolName(), receiver.ProtocolName(), dataProvider)
-	config := correctnesstests.CreateConfigYaml(t, sender, receiver, connector, processors)
-	log.Println(config)
-	configCleanup, cfgErr := runner.PrepareConfig(config)
-	require.NoError(t, cfgErr, "collector configuration resulted in: %v", cfgErr)
-	defer configCleanup()
 	tc := testbed.NewTestCase(
 		t,
 		dataProvider,
@@ -76,8 +73,17 @@ func testWithGoldenDataset(
 	)
 	defer tc.Stop()
 
-	tc.EnableRecording()
 	tc.StartBackend()
+
+	// CreateConfigYaml must be called after StartBackend to ensure the receiver port is bound.
+	// This prevents CreateConfigYaml from picking the same port for Prometheus telemetry.
+	config := correctnesstests.CreateConfigYaml(t, sender, receiver, connector, processors)
+	log.Println(config)
+	configCleanup, cfgErr := runner.PrepareConfig(t, config)
+	require.NoError(t, cfgErr, "collector configuration resulted in: %v", cfgErr)
+	defer configCleanup()
+
+	tc.EnableRecording()
 	tc.StartAgent()
 
 	tc.StartLoad(testbed.LoadOptions{
@@ -93,5 +99,4 @@ func testWithGoldenDataset(
 		3*time.Second, "all data items received")
 
 	tc.StopAgent()
-
 }

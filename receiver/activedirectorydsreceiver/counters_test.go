@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 )
 
 func TestGetWatchers(t *testing.T) {
-	c := &mockCounterCreater{
+	c := &mockCounterCreator{
 		availableCounterNames: getAvailableCounters(t),
 	}
 
@@ -46,22 +47,20 @@ func getAvailableCounters(t *testing.T) []string {
 	return linesOut
 }
 
-type mockCounterCreater struct {
+type mockCounterCreator struct {
 	created               int
 	availableCounterNames []string
 }
 
-func (m *mockCounterCreater) Create(counterName string) (winperfcounters.PerfCounterWatcher, error) {
-	for _, availableCounter := range m.availableCounterNames {
-		if counterName == availableCounter {
-			watcher := &mockPerfCounterWatcher{
-				val: float64(m.created),
-			}
-
-			m.created++
-
-			return watcher, nil
+func (m *mockCounterCreator) Create(counterName string) (winperfcounters.PerfCounterWatcher, error) {
+	if slices.Contains(m.availableCounterNames, counterName) {
+		watcher := &mockPerfCounterWatcher{
+			val: float64(m.created),
 		}
+
+		m.created++
+
+		return watcher, nil
 	}
 
 	return nil, fmt.Errorf("counter %s is not available\navailable counters:\n\t%s", counterName, strings.Join(m.availableCounterNames, "\n\t"))

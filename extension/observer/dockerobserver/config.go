@@ -4,7 +4,7 @@
 package dockerobserver // import "github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/dockerobserver"
 
 import (
-	"fmt"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/collector/confmap"
@@ -33,6 +33,12 @@ type Config struct {
 	// to an instance of the agent running outside of the docker network stack.
 	IgnoreNonHostBindings bool `mapstructure:"ignore_non_host_bindings"`
 
+	// If true, the observer will emit a port-less endpoint for every running container,
+	// alongside any per-port endpoints. This makes every container, including those
+	// without exposed ports, discoverable by receiver_creator rules matching
+	// `type == "container"`.
+	IncludeAllContainers bool `mapstructure:"include_all_containers"`
+
 	// The time to wait before resyncing the list of containers the observer maintains
 	// through the docker event listener example: cache_sync_interval: "20m"
 	// Default: "60m"
@@ -40,14 +46,16 @@ type Config struct {
 }
 
 func (config Config) Validate() error {
-	if err := docker.VersionIsValidAndGTE(config.DockerAPIVersion, minimumRequiredDockerAPIVersion); err != nil {
-		return err
+	if config.DockerAPIVersion != "" {
+		if err := docker.VersionIsValidAndGTE(config.DockerAPIVersion, minimumRequiredDockerAPIVersion); err != nil {
+			return err
+		}
 	}
 	if config.Timeout == 0 {
-		return fmt.Errorf("timeout must be specified")
+		return errors.New("timeout must be specified")
 	}
 	if config.CacheSyncInterval == 0 {
-		return fmt.Errorf("cache_sync_interval must be specified")
+		return errors.New("cache_sync_interval must be specified")
 	}
 	return nil
 }

@@ -13,9 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configauth"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/expvarreceiver/internal/metadata"
 )
@@ -24,7 +27,7 @@ func TestLoadConfig(t *testing.T) {
 	t.Parallel()
 
 	factory := NewFactory()
-	metricCfg := metadata.DefaultMetricsBuilderConfig()
+	metricCfg := metadata.NewDefaultMetricsBuilderConfig()
 	metricCfg.Metrics.ProcessRuntimeMemstatsTotalAlloc.Enabled = true
 	metricCfg.Metrics.ProcessRuntimeMemstatsMallocs.Enabled = false
 	clientConfig := confighttp.NewDefaultClientConfig()
@@ -78,11 +81,42 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, sub.Unmarshal(cfg))
 
 			if tt.expected == nil {
-				assert.EqualError(t, component.ValidateConfig(cfg), tt.errorMessage)
+				assert.EqualError(t, xconfmap.Validate(cfg), tt.errorMessage)
 				return
 			}
-			assert.NoError(t, component.ValidateConfig(cfg))
-			if diff := cmp.Diff(tt.expected, cfg, cmpopts.IgnoreUnexported(metadata.MetricConfig{})); diff != "" {
+			assert.NoError(t, xconfmap.Validate(cfg))
+			if diff := cmp.Diff(tt.expected, cfg,
+				cmpopts.IgnoreUnexported(
+					metadata.ProcessRuntimeMemstatsBuckHashSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsFreesMetricConfig{},
+					metadata.ProcessRuntimeMemstatsGcCPUFractionMetricConfig{},
+					metadata.ProcessRuntimeMemstatsGcSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapAllocMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapIdleMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapInuseMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapObjectsMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapReleasedMetricConfig{},
+					metadata.ProcessRuntimeMemstatsHeapSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsLastPauseMetricConfig{},
+					metadata.ProcessRuntimeMemstatsLookupsMetricConfig{},
+					metadata.ProcessRuntimeMemstatsMallocsMetricConfig{},
+					metadata.ProcessRuntimeMemstatsMcacheInuseMetricConfig{},
+					metadata.ProcessRuntimeMemstatsMcacheSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsMspanInuseMetricConfig{},
+					metadata.ProcessRuntimeMemstatsMspanSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsNextGcMetricConfig{},
+					metadata.ProcessRuntimeMemstatsNumForcedGcMetricConfig{},
+					metadata.ProcessRuntimeMemstatsNumGcMetricConfig{},
+					metadata.ProcessRuntimeMemstatsOtherSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsPauseTotalMetricConfig{},
+					metadata.ProcessRuntimeMemstatsStackInuseMetricConfig{},
+					metadata.ProcessRuntimeMemstatsStackSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsSysMetricConfig{},
+					metadata.ProcessRuntimeMemstatsTotalAllocMetricConfig{},
+				),
+				cmpopts.IgnoreUnexported(configoptional.Optional[configauth.Config]{}),
+				cmpopts.IgnoreUnexported(configoptional.Optional[confighttp.CookiesConfig]{}),
+			); diff != "" {
 				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
 			}
 		})

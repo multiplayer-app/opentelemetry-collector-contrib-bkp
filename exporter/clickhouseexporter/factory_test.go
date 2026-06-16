@@ -4,13 +4,14 @@
 package clickhouseexporter
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/exporter/exportertest"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/clickhouseexporter/internal/metadata"
 )
 
 func TestCreateDefaultConfig(t *testing.T) {
@@ -20,41 +21,69 @@ func TestCreateDefaultConfig(t *testing.T) {
 	assert.NoError(t, componenttest.CheckConfigStruct(cfg))
 }
 
-func TestFactory_CreateLogsExporter(t *testing.T) {
+func TestFactory_CreateLogs(t *testing.T) {
 	factory := NewFactory()
 	cfg := withDefaultConfig(func(cfg *Config) {
 		cfg.Endpoint = defaultEndpoint
 	})
-	params := exportertest.NewNopSettings()
-	exporter, err := factory.CreateLogsExporter(context.Background(), params, cfg)
+	params := exportertest.NewNopSettings(metadata.Type)
+	exporter, err := factory.CreateLogs(t.Context(), params, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, exporter)
 
-	require.NoError(t, exporter.Shutdown(context.TODO()))
+	require.NoError(t, exporter.Shutdown(t.Context()))
 }
 
-func TestFactory_CreateTracesExporter(t *testing.T) {
+func TestFactory_CreateTraces(t *testing.T) {
 	factory := NewFactory()
 	cfg := withDefaultConfig(func(cfg *Config) {
 		cfg.Endpoint = defaultEndpoint
 	})
-	params := exportertest.NewNopSettings()
-	exporter, err := factory.CreateTracesExporter(context.Background(), params, cfg)
+	params := exportertest.NewNopSettings(metadata.Type)
+	exporter, err := factory.CreateTraces(t.Context(), params, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, exporter)
 
-	require.NoError(t, exporter.Shutdown(context.TODO()))
+	require.NoError(t, exporter.Shutdown(t.Context()))
 }
 
-func TestFactory_CreateMetricsExporter(t *testing.T) {
+func TestFactory_CreateLogsJSONConfig(t *testing.T) {
+	factory := NewFactory()
+	cfg := withDefaultConfig(func(cfg *Config) {
+		cfg.Endpoint = defaultEndpoint
+		cfg.JSON = true
+	})
+	params := exportertest.NewNopSettings(metadata.Type)
+	exporter, err := factory.CreateLogs(t.Context(), params, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, exporter)
+
+	require.NoError(t, exporter.Shutdown(t.Context()))
+}
+
+func TestFactory_CreateTracesJSONConfig(t *testing.T) {
+	factory := NewFactory()
+	cfg := withDefaultConfig(func(cfg *Config) {
+		cfg.Endpoint = defaultEndpoint
+		cfg.JSON = true
+	})
+	params := exportertest.NewNopSettings(metadata.Type)
+	exporter, err := factory.CreateTraces(t.Context(), params, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, exporter)
+
+	require.NoError(t, exporter.Shutdown(t.Context()))
+}
+
+func TestFactory_CreateMetrics(t *testing.T) {
 	factory := NewFactory()
 	cfg := withDefaultConfig(func(cfg *Config) {
 		cfg.Endpoint = defaultEndpoint
 	})
-	params := exportertest.NewNopSettings()
-	exporter, err := factory.CreateMetricsExporter(context.Background(), params, cfg)
+	params := exportertest.NewNopSettings(metadata.Type)
+	exporter, err := factory.CreateMetrics(t.Context(), params, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, exporter)
 
-	require.NoError(t, exporter.Shutdown(context.TODO()))
+	require.NoError(t, exporter.Shutdown(t.Context()))
 }

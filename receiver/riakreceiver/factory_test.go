@@ -4,7 +4,6 @@
 package riakreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/riakreceiver"
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,12 +12,16 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver/receivertest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/riakreceiver/internal/metadata"
 )
 
 func TestNewFactory(t *testing.T) {
+	clientConfig := confighttp.NewDefaultClientConfig()
+	clientConfig.Endpoint = defaultEndpoint
+	clientConfig.Timeout = 10 * time.Second
+
 	testCases := []struct {
 		desc     string
 		testFunc func(*testing.T)
@@ -27,7 +30,7 @@ func TestNewFactory(t *testing.T) {
 			desc: "creates a new factory with correct type",
 			testFunc: func(t *testing.T) {
 				factory := NewFactory()
-				require.EqualValues(t, metadata.Type, factory.Type())
+				require.Equal(t, metadata.Type, factory.Type())
 			},
 		},
 		{
@@ -40,11 +43,8 @@ func TestNewFactory(t *testing.T) {
 						CollectionInterval: 10 * time.Second,
 						InitialDelay:       time.Second,
 					},
-					ClientConfig: confighttp.ClientConfig{
-						Endpoint: defaultEndpoint,
-						Timeout:  10 * time.Second,
-					},
-					MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+					ClientConfig:         clientConfig,
+					MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 				}
 
 				require.Equal(t, expectedCfg, factory.CreateDefaultConfig())
@@ -56,8 +56,8 @@ func TestNewFactory(t *testing.T) {
 				factory := NewFactory()
 				cfg := factory.CreateDefaultConfig()
 				_, err := factory.CreateMetrics(
-					context.Background(),
-					receivertest.NewNopSettings(),
+					t.Context(),
+					receivertest.NewNopSettings(metadata.Type),
 					cfg,
 					consumertest.NewNop(),
 				)
@@ -69,8 +69,8 @@ func TestNewFactory(t *testing.T) {
 			testFunc: func(t *testing.T) {
 				factory := NewFactory()
 				_, err := factory.CreateMetrics(
-					context.Background(),
-					receivertest.NewNopSettings(),
+					t.Context(),
+					receivertest.NewNopSettings(metadata.Type),
 					nil,
 					consumertest.NewNop(),
 				)

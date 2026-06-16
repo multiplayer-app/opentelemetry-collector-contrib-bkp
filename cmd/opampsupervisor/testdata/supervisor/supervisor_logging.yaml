@@ -4,6 +4,8 @@ server:
 capabilities:
   reports_effective_config: true
   reports_own_metrics: true
+  reports_own_logs: true
+  reports_own_traces: true
   reports_health: true
   accepts_remote_config: true
   reports_remote_config: true
@@ -19,4 +21,7 @@ agent:
 telemetry:
   logs:
     level: {{.log_level}} # info level logs
-    output_paths: ['{{.log_file}}']
+    # keep stdout so we can see logs in test output
+    output_paths: 
+      - '{{.log_file}}'
+      - 'stdout'

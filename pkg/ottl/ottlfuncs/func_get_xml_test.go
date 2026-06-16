@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
@@ -74,22 +75,22 @@ func Test_GetXML(t *testing.T) {
 			want:     `<a></a>`,
 		},
 		{
-			name:     "ignore attribute selection",
+			name:     "get attribute selection",
 			document: `<a foo="bar"></a>`,
-			xPath:    "/@foo",
-			want:     ``,
+			xPath:    "/a/@foo",
+			want:     `bar`,
 		},
 		{
-			name:     "ignore text selection",
+			name:     "get text selection",
 			document: `<a>hello</a>`,
 			xPath:    "/a/text()",
-			want:     ``,
+			want:     `hello`,
 		},
 		{
-			name:     "ignore chardata selection",
+			name:     "get chardata selection",
 			document: `<a><![CDATA[hello]]></a>`,
 			xPath:    "/a/text()",
-			want:     ``,
+			want:     `hello`,
 		},
 	}
 	for _, tt := range tests {
@@ -99,16 +100,16 @@ func Test_GetXML(t *testing.T) {
 				ottl.FunctionContext{},
 				&GetXMLArguments[any]{
 					Target: ottl.StandardStringGetter[any]{
-						Getter: func(_ context.Context, _ any) (any, error) {
+						Getter: func(context.Context, any) (any, error) {
 							return tt.document, nil
 						},
 					},
 					XPath: tt.xPath,
 				})
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			result, err := exprFunc(context.Background(), nil)
-			assert.NoError(t, err)
+			result, err := exprFunc(t.Context(), nil)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, result)
 		})
 	}
@@ -137,8 +138,8 @@ func TestCreateGetXMLFunc(t *testing.T) {
 			Target: invalidXMLGetter(),
 			XPath:  "/",
 		})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, exprFunc)
-	_, err = exprFunc(context.Background(), nil)
+	_, err = exprFunc(t.Context(), nil)
 	assert.Error(t, err)
 }

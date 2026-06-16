@@ -22,7 +22,14 @@ func NewFactory() processor.Factory {
 }
 
 func createDefaultConfig() component.Config {
-	return &Config{}
+	return &Config{
+		TransactionsConfig: TransactionsConfig{
+			Enabled: false,
+		},
+		CriticalPathConfig: CriticalPathConfig{
+			Enabled: false,
+		},
+	}
 }
 
 func createTracesProcessor(

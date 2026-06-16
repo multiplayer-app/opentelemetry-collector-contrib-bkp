@@ -6,7 +6,6 @@
 package windowseventlogreceiver
 
 import (
-	"context"
 	"encoding/xml"
 	"path/filepath"
 	"reflect"
@@ -34,7 +33,7 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
-	factory := newFactoryAdapter()
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	require.NotNil(t, cfg, "failed to create default config")
 	require.NoError(t, componenttest.CheckConfigStruct(cfg))
@@ -43,7 +42,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestLoadConfig(t *testing.T) {
 	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
 	require.NoError(t, err)
-	factory := newFactoryAdapter()
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 
 	sub, err := cm.Sub(component.NewIDWithName(metadata.Type, "").String())
@@ -62,9 +61,9 @@ func TestCreateWithInvalidInputConfig(t *testing.T) {
 		}(),
 	}
 
-	_, err := newFactoryAdapter().CreateLogs(
-		context.Background(),
-		receivertest.NewNopSettings(),
+	_, err := NewFactory().CreateLogs(
+		t.Context(),
+		receivertest.NewNopSettings(metadata.Type),
 		cfg,
 		new(consumertest.LogsSink),
 	)
@@ -98,9 +97,9 @@ func BenchmarkReadWindowsEventLogger(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				// Set up the receiver and sink.
-				ctx := context.Background()
-				factory := newFactoryAdapter()
-				createSettings := receivertest.NewNopSettings()
+				ctx := b.Context()
+				factory := NewFactory()
+				createSettings := receivertest.NewNopSettings(metadata.Type)
 				cfg := createTestConfig()
 				cfg.InputConfig.StartAt = "beginning"
 				cfg.InputConfig.MaxReads = tt.count
@@ -128,9 +127,9 @@ func TestReadWindowsEventLogger(t *testing.T) {
 	defer uninstallEventSource()
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	factory := newFactoryAdapter()
-	createSettings := receivertest.NewNopSettings()
+	ctx := t.Context()
+	factory := NewFactory()
+	createSettings := receivertest.NewNopSettings(metadata.Type)
 	cfg := createTestConfig()
 	sink := new(consumertest.LogsSink)
 
@@ -163,7 +162,103 @@ func TestReadWindowsEventLogger(t *testing.T) {
 	eventDataMap, ok := eventData.(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, map[string]any{
-		"data": []any{map[string]any{"": "Test log"}},
+		"param1": "Test log",
+	}, eventDataMap)
+
+	eventID := body["event_id"]
+	require.NotNil(t, eventID)
+
+	eventIDMap, ok := eventID.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, int64(10), eventIDMap["id"])
+}
+
+func TestReadWindowsEventLoggerWithQuery(t *testing.T) {
+	logMessage := "Test log"
+	src := "otel-windowseventlogreceiver-test"
+	uninstallEventSource, err := assertEventSourceInstallation(t, src)
+	defer uninstallEventSource()
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	factory := NewFactory()
+	createSettings := receivertest.NewNopSettings(metadata.Type)
+	cfg := createTestConfigWithQuery()
+	sink := new(consumertest.LogsSink)
+
+	receiver, err := factory.CreateLogs(ctx, createSettings, cfg, sink)
+	require.NoError(t, err)
+
+	err = receiver.Start(ctx, componenttest.NewNopHost())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, receiver.Shutdown(ctx))
+	}()
+	// Start launches nested goroutines, give them a chance to run before logging the test event(s).
+	time.Sleep(3 * time.Second)
+
+	logger, err := eventlog.Open(src)
+	require.NoError(t, err)
+	defer logger.Close()
+
+	err = logger.Info(10, logMessage)
+	require.NoError(t, err)
+
+	records := assertExpectedLogRecords(t, sink, src, 1)
+	require.Len(t, records, 1)
+	record := records[0]
+	body := record.Body().Map().AsRaw()
+
+	require.Equal(t, logMessage, body["message"])
+
+	eventData := body["event_data"]
+	eventDataMap, ok := eventData.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{
+		"param1": "Test log",
+	}, eventDataMap)
+
+	eventID := body["event_id"]
+	require.NotNil(t, eventID)
+
+	eventIDMap, ok := eventID.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, int64(10), eventIDMap["id"])
+}
+
+func TestReadWindowsEventLoggerWithEvtxFile(t *testing.T) {
+	src := "otel-windowseventlogreceiver-test"
+	uninstallEventSource, err := assertEventSourceInstallation(t, src)
+	defer uninstallEventSource()
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	factory := NewFactory()
+	createSettings := receivertest.NewNopSettings(metadata.Type)
+	cfg := createTestConfigWithEvtxFile(filepath.Join("testdata", "test-evtx.evtx"))
+	sink := new(consumertest.LogsSink)
+
+	receiver, err := factory.CreateLogs(ctx, createSettings, cfg, sink)
+	require.NoError(t, err)
+
+	err = receiver.Start(ctx, componenttest.NewNopHost())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, receiver.Shutdown(ctx))
+	}()
+
+	records := assertExpectedLogRecords(t, sink, src, 1)
+	require.Len(t, records, 1)
+	record := records[0]
+	body := record.Body().Map().AsRaw()
+
+	require.Equal(t, "Test log", body["message"])
+
+	eventData := body["event_data"]
+	eventDataMap, ok := eventData.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{
+		"param1": "Test log",
 	}, eventDataMap)
 
 	eventID := body["event_id"]
@@ -181,9 +276,9 @@ func TestReadWindowsEventLoggerRaw(t *testing.T) {
 	defer uninstallEventSource()
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	factory := newFactoryAdapter()
-	createSettings := receivertest.NewNopSettings()
+	ctx := t.Context()
+	factory := NewFactory()
+	createSettings := receivertest.NewNopSettings(metadata.Type)
 	cfg := createTestConfig()
 	cfg.InputConfig.Raw = true
 	sink := new(consumertest.LogsSink)
@@ -246,9 +341,9 @@ func TestExcludeProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			factory := newFactoryAdapter()
-			createSettings := receivertest.NewNopSettings()
+			ctx := t.Context()
+			factory := NewFactory()
+			createSettings := receivertest.NewNopSettings(metadata.Type)
 			cfg := createTestConfig()
 			cfg.InputConfig.Raw = tt.raw
 			cfg.InputConfig.ExcludeProviders = []string{excludedSrc}
@@ -298,37 +393,80 @@ func createTestConfig() *WindowsLogConfig {
 	}
 }
 
+func createTestConfigWithQuery() *WindowsLogConfig {
+	queryXML := `
+    <QueryList>
+      <Query Id="0">
+        <Select Path="Application">*</Select>
+      </Query>
+    </QueryList>
+  `
+	return &WindowsLogConfig{
+		BaseConfig: adapter.BaseConfig{
+			Operators:      []operator.Config{},
+			RetryOnFailure: consumerretry.NewDefaultConfig(),
+		},
+		InputConfig: func() windows.Config {
+			c := windows.NewConfig()
+			c.Query = &queryXML
+			c.StartAt = "end"
+			return *c
+		}(),
+	}
+}
+
+func createTestConfigWithEvtxFile(filePath string) *WindowsLogConfig {
+	return &WindowsLogConfig{
+		BaseConfig: adapter.BaseConfig{
+			Operators:      []operator.Config{},
+			RetryOnFailure: consumerretry.NewDefaultConfig(),
+		},
+		InputConfig: func() windows.Config {
+			c := windows.NewConfig()
+			c.Path = &filePath
+			return *c
+		}(),
+	}
+}
+
 // assertEventSourceInstallation installs an event source and verifies that the registry key was created.
 // It returns a function that can be used to uninstall the event source, that function is never nil
-func assertEventSourceInstallation(t *testing.T, src string) (uninstallEventSource func(), err error) {
-	err = eventlog.InstallAsEventCreate(src, eventlog.Info|eventlog.Warning|eventlog.Error)
+func assertEventSourceInstallation(t *testing.T, src string) (func(), error) {
+	err := eventlog.InstallAsEventCreate(src, eventlog.Info|eventlog.Warning|eventlog.Error)
 	if err != nil && strings.HasSuffix(err.Error(), " registry key already exists") {
 		// If the event source already exists ignore the error
 		err = nil
 	}
-	uninstallEventSource = func() {
+	uninstallEventSource := func() {
 		assert.NoError(t, eventlog.Remove(src))
 	}
 	assert.NoError(t, err)
 	assert.EventuallyWithT(t, func(c *assert.CollectT) {
-		rk, err := registry.OpenKey(registry.LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\"+src, registry.QUERY_VALUE)
-		assert.NoError(c, err)
+		rk, inErr := registry.OpenKey(registry.LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\"+src, registry.QUERY_VALUE)
+		assert.NoError(c, inErr)
 		defer rk.Close()
 		_, _, err = rk.GetIntegerValue("TypesSupported")
 		assert.NoError(c, err)
 	}, 10*time.Second, 250*time.Millisecond)
 
-	return
+	return uninstallEventSource, err
 }
 
+//nolint:unparam // expectedEventCount might be greater than one in the future
 func assertExpectedLogRecords(t *testing.T, sink *consumertest.LogsSink, expectedEventSrc string, expectedEventCount int) []plog.LogRecord {
 	var actualLogRecords []plog.LogRecord
 
-	// logs sometimes take a while to be written, so a substantial wait buffer is needed
-	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+	// We can't use assert.Eventually because the condition function is launched in a separate goroutine
+	// and we want to return the slice filled by the condition function. Use a local condition check
+	// to avoid data race conditions.
+	startTime := time.Now()
+	actualLogRecords = filterAllLogRecordsBySource(t, sink, expectedEventSrc)
+	for len(actualLogRecords) != expectedEventCount && time.Since(startTime) < 10*time.Second {
+		time.Sleep(250 * time.Millisecond)
 		actualLogRecords = filterAllLogRecordsBySource(t, sink, expectedEventSrc)
-		assert.Len(c, actualLogRecords, expectedEventCount)
-	}, 10*time.Second, 250*time.Millisecond)
+	}
+
+	require.Len(t, actualLogRecords, expectedEventCount)
 
 	return actualLogRecords
 }
@@ -351,7 +489,7 @@ func filterAllLogRecordsBySource(t *testing.T, sink *consumertest.LogsSink, src 
 		}
 	}
 
-	return
+	return filteredLogRecords
 }
 
 func extractEventSourceFromLogRecord(t *testing.T, logRecord plog.LogRecord) string {

@@ -37,13 +37,13 @@ const (
 func assertGroupedByKey(t *testing.T, items []*Item, groupedItems map[time.Time][]*Item, key time.Time, offsetInItems int) {
 	assert.Len(t, groupedItems[key], 3)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		assert.Equal(t, items[i+offsetInItems].SeriesKey, groupedItems[key][i].SeriesKey)
 	}
 }
 
-func assertInitialFiltering(t *testing.T, expected []*Item, actual []*Item) {
-	require.Equal(t, len(expected), len(actual))
+func assertInitialFiltering(t *testing.T, expected, actual []*Item) {
+	require.Len(t, actual, len(expected))
 	for i, expectedItem := range expected {
 		assert.Equal(t, expectedItem.SeriesKey, actual[i].SeriesKey)
 		assert.Equal(t, expectedItem.Timestamp, actual[i].Timestamp)

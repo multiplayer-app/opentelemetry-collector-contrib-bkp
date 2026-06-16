@@ -4,7 +4,7 @@
 package dorisexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/dorisexporter"
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -12,9 +12,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	semconv "go.opentelemetry.io/collector/semconv/v1.25.0"
+	"go.uber.org/zap"
 )
 
 func TestPushLogData(t *testing.T) {
@@ -24,15 +25,14 @@ func TestPushLogData(t *testing.T) {
 	config := createDefaultConfig().(*Config)
 	config.Endpoint = fmt.Sprintf("http://127.0.0.1:%d", port)
 	config.CreateSchema = false
+	require.NoError(t, config.Validate())
 
-	err = config.Validate()
-	require.NoError(t, err)
+	logger := zap.NewNop()
+	exporter := newLogsExporter(logger, config, componenttest.NewNopTelemetrySettings())
 
-	exporter := newLogsExporter(nil, config, testTelemetrySettings)
+	ctx := t.Context()
 
-	ctx := context.Background()
-
-	client, err := createDorisHTTPClient(ctx, config, nil, testTelemetrySettings)
+	client, err := createDorisHTTPClient(ctx, config, componenttest.NewNopHost(), componenttest.NewNopTelemetrySettings())
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -42,13 +42,15 @@ func TestPushLogData(t *testing.T) {
 		_ = exporter.shutdown(ctx)
 	}()
 
+	srvMux := http.NewServeMux()
 	server := &http.Server{
 		ReadTimeout: 3 * time.Second,
 		Addr:        fmt.Sprintf(":%d", port),
+		Handler:     srvMux,
 	}
 
 	go func() {
-		http.HandleFunc("/api/otel/otel_logs/_stream_load", func(w http.ResponseWriter, _ *http.Request) {
+		srvMux.HandleFunc("/api/otel/otel_logs/_stream_load", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"Status":"Success"}`))
 		})
@@ -56,11 +58,12 @@ func TestPushLogData(t *testing.T) {
 		assert.Equal(t, http.ErrServerClosed, err)
 	}()
 
-	err0 := fmt.Errorf("Not Started")
-	for err0 != nil { // until server started
+	err0 := errors.New("Not Started")
+	for i := 0; err0 != nil && i < 10; i++ { // until server started
 		err0 = exporter.pushLogData(ctx, simpleLogs(10))
 		time.Sleep(100 * time.Millisecond)
 	}
+	require.NoError(t, err0)
 
 	_ = server.Shutdown(ctx)
 }
@@ -74,14 +77,14 @@ func simpleLogs(count int) plog.Logs {
 	sl.Scope().SetVersion("1.0.0")
 	sl.Scope().Attributes().PutStr("lib", "doris")
 	timestamp := time.Now()
-	for i := 0; i < count; i++ {
+	for i := range count {
 		r := sl.LogRecords().AppendEmpty()
 		r.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 		r.SetObservedTimestamp(pcommon.NewTimestampFromTime(timestamp))
 		r.SetSeverityNumber(plog.SeverityNumberError2)
 		r.SetSeverityText("error")
 		r.Body().SetStr("error message")
-		r.Attributes().PutStr(semconv.AttributeServiceNamespace, "default")
+		r.Attributes().PutStr("service.namespace", "default")
 		r.SetFlags(plog.DefaultLogRecordFlags)
 		r.SetTraceID([16]byte{1, 2, 3, byte(i)})
 		r.SetSpanID([8]byte{1, 2, 3, byte(i)})

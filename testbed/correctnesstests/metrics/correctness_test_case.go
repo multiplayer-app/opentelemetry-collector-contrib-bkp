@@ -34,7 +34,7 @@ func newCorrectnessTestCase(
 
 func (tc *correctnessTestCase) startCollector() {
 	tc.collector = testbed.NewInProcessCollector(componentFactories(tc.t))
-	_, err := tc.collector.PrepareConfig(correctnesstests.CreateConfigYaml(tc.t, tc.sender, tc.receiver, nil, nil))
+	_, err := tc.collector.PrepareConfig(tc.t, correctnesstests.CreateConfigYaml(tc.t, tc.sender, tc.receiver, nil, nil))
 	require.NoError(tc.t, err)
 	rd, err := newResultsDir(tc.t.Name())
 	require.NoError(tc.t, err)
@@ -92,7 +92,7 @@ func (tc *correctnessTestCase) waitForAllMetrics() {
 }
 
 func componentFactories(t *testing.T) otelcol.Factories {
-	factories, err := testbed.Components()
+	f, err := factories()
 	require.NoError(t, err)
-	return factories
+	return f
 }

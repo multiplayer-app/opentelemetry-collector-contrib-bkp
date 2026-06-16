@@ -28,9 +28,11 @@ func TestResourceAttributesConfig(t *testing.T) {
 				ContainerImageName:        ResourceAttributeConfig{Enabled: true},
 				ContainerImageRepoDigests: ResourceAttributeConfig{Enabled: true},
 				ContainerImageTag:         ResourceAttributeConfig{Enabled: true},
+				ContainerImageTags:        ResourceAttributeConfig{Enabled: true},
 				K8sClusterUID:             ResourceAttributeConfig{Enabled: true},
 				K8sContainerName:          ResourceAttributeConfig{Enabled: true},
 				K8sCronjobName:            ResourceAttributeConfig{Enabled: true},
+				K8sCronjobUID:             ResourceAttributeConfig{Enabled: true},
 				K8sDaemonsetName:          ResourceAttributeConfig{Enabled: true},
 				K8sDaemonsetUID:           ResourceAttributeConfig{Enabled: true},
 				K8sDeploymentName:         ResourceAttributeConfig{Enabled: true},
@@ -49,6 +51,10 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sReplicasetUID:          ResourceAttributeConfig{Enabled: true},
 				K8sStatefulsetName:        ResourceAttributeConfig{Enabled: true},
 				K8sStatefulsetUID:         ResourceAttributeConfig{Enabled: true},
+				ServiceInstanceID:         ResourceAttributeConfig{Enabled: true},
+				ServiceName:               ResourceAttributeConfig{Enabled: true},
+				ServiceNamespace:          ResourceAttributeConfig{Enabled: true},
+				ServiceVersion:            ResourceAttributeConfig{Enabled: true},
 			},
 		},
 		{
@@ -58,9 +64,11 @@ func TestResourceAttributesConfig(t *testing.T) {
 				ContainerImageName:        ResourceAttributeConfig{Enabled: false},
 				ContainerImageRepoDigests: ResourceAttributeConfig{Enabled: false},
 				ContainerImageTag:         ResourceAttributeConfig{Enabled: false},
+				ContainerImageTags:        ResourceAttributeConfig{Enabled: false},
 				K8sClusterUID:             ResourceAttributeConfig{Enabled: false},
 				K8sContainerName:          ResourceAttributeConfig{Enabled: false},
 				K8sCronjobName:            ResourceAttributeConfig{Enabled: false},
+				K8sCronjobUID:             ResourceAttributeConfig{Enabled: false},
 				K8sDaemonsetName:          ResourceAttributeConfig{Enabled: false},
 				K8sDaemonsetUID:           ResourceAttributeConfig{Enabled: false},
 				K8sDeploymentName:         ResourceAttributeConfig{Enabled: false},
@@ -79,15 +87,18 @@ func TestResourceAttributesConfig(t *testing.T) {
 				K8sReplicasetUID:          ResourceAttributeConfig{Enabled: false},
 				K8sStatefulsetName:        ResourceAttributeConfig{Enabled: false},
 				K8sStatefulsetUID:         ResourceAttributeConfig{Enabled: false},
+				ServiceInstanceID:         ResourceAttributeConfig{Enabled: false},
+				ServiceName:               ResourceAttributeConfig{Enabled: false},
+				ServiceNamespace:          ResourceAttributeConfig{Enabled: false},
+				ServiceVersion:            ResourceAttributeConfig{Enabled: false},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

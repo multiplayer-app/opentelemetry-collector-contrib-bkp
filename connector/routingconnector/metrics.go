@@ -13,7 +13,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/routingconnector/internal/pmetricutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottldatapoint"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
 )
 
@@ -32,7 +35,6 @@ func newMetricsConnector(
 	metrics consumer.Metrics,
 ) (*metricsConnector, error) {
 	cfg := config.(*Config)
-
 	mr, ok := metrics.(connector.MetricsRouterAndConsumer)
 	if !ok {
 		return nil, errUnexpectedConsumer
@@ -43,78 +45,164 @@ func newMetricsConnector(
 		cfg.DefaultPipelines,
 		mr.Consumer,
 		set.TelemetrySettings)
-
 	if err != nil {
 		return nil, err
 	}
 
 	return &metricsConnector{
-		logger: set.TelemetrySettings.Logger,
+		logger: set.Logger,
 		config: cfg,
 		router: r,
 	}, nil
 }
 
-func (c *metricsConnector) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{MutatesData: false}
+func (*metricsConnector) Capabilities() consumer.Capabilities {
+	return consumer.Capabilities{MutatesData: true}
 }
 
 func (c *metricsConnector) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) error {
-	// groups is used to group pmetric.ResourceMetrics that are routed to
-	// the same set of exporters. This way we're not ending up with all the
-	// metrics split up which would cause higher CPU usage.
 	groups := make(map[consumer.Metrics]pmetric.Metrics)
-
-	var errs error
-
-	for i := 0; i < md.ResourceMetrics().Len(); i++ {
-		rmetrics := md.ResourceMetrics().At(i)
-		rtx := ottlresource.NewTransformContext(rmetrics.Resource(), rmetrics)
-
-		noRoutesMatch := true
-		for _, route := range c.router.routeSlice {
-			_, isMatch, err := route.statement.Execute(ctx, rtx)
-			if err != nil {
-				if c.config.ErrorMode == ottl.PropagateError {
-					return err
-				}
-				c.group(groups, c.router.defaultConsumer, rmetrics)
-				continue
-			}
-			if isMatch {
-				noRoutesMatch = false
-				c.group(groups, route.consumer, rmetrics)
-				if c.config.MatchOnce {
-					break
+	matched := pmetric.NewMetrics()
+	for i := 0; i < len(c.router.routeSlice) && md.ResourceMetrics().Len() > 0; i++ {
+		var errs error
+		route := c.router.routeSlice[i]
+		switch route.statementContext {
+		case "request":
+			if route.requestCondition.matchRequest(ctx) {
+				switch route.action {
+				case Copy:
+					md.CopyTo(matched)
+				default:
+					// all metrics are routed
+					md.MoveTo(matched)
 				}
 			}
-
+		case "", "resource":
+			switch route.action {
+			case Copy:
+				pmetricutil.CopyResourcesIf(md, matched,
+					func(rs pmetric.ResourceMetrics) bool {
+						rtx := ottlresource.NewTransformContextPtr(rs.Resource(), rs)
+						defer rtx.Close()
+						_, isMatch, err := route.resourceStatement.Execute(ctx, rtx)
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			default:
+				pmetricutil.MoveResourcesIf(md, matched,
+					func(rs pmetric.ResourceMetrics) bool {
+						rtx := ottlresource.NewTransformContextPtr(rs.Resource(), rs)
+						defer rtx.Close()
+						_, isMatch, err := route.resourceStatement.Execute(ctx, rtx)
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			}
+		case "metric":
+			switch route.action {
+			case Copy:
+				pmetricutil.CopyMetricsWithContextIf(md, matched,
+					func(rm pmetric.ResourceMetrics, sm pmetric.ScopeMetrics, m pmetric.Metric) bool {
+						mtx := ottlmetric.NewTransformContextPtr(rm, sm, m)
+						_, isMatch, err := route.metricStatement.Execute(ctx, mtx)
+						mtx.Close()
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			default:
+				pmetricutil.MoveMetricsWithContextIf(md, matched,
+					func(rm pmetric.ResourceMetrics, sm pmetric.ScopeMetrics, m pmetric.Metric) bool {
+						mtx := ottlmetric.NewTransformContextPtr(rm, sm, m)
+						_, isMatch, err := route.metricStatement.Execute(ctx, mtx)
+						mtx.Close()
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			}
+		case "datapoint":
+			switch route.action {
+			case Copy:
+				pmetricutil.CopyDataPointsWithContextIf(md, matched,
+					func(rm pmetric.ResourceMetrics, sm pmetric.ScopeMetrics, m pmetric.Metric, dp any) bool {
+						dptx := ottldatapoint.NewTransformContextPtr(rm, sm, m, dp)
+						_, isMatch, err := route.dataPointStatement.Execute(ctx, dptx)
+						dptx.Close()
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			default:
+				pmetricutil.MoveDataPointsWithContextIf(md, matched,
+					func(rm pmetric.ResourceMetrics, sm pmetric.ScopeMetrics, m pmetric.Metric, dp any) bool {
+						dptx := ottldatapoint.NewTransformContextPtr(rm, sm, m, dp)
+						_, isMatch, err := route.dataPointStatement.Execute(ctx, dptx)
+						dptx.Close()
+						// If error during statement evaluation consider it as not a match.
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return false
+						}
+						return isMatch
+					},
+				)
+			}
 		}
-
-		if noRoutesMatch {
-			// no route conditions are matched, add resource metrics to default exporters group
-			c.group(groups, c.router.defaultConsumer, rmetrics)
+		if errs != nil && c.config.ErrorMode == ottl.PropagateError {
+			return errs
 		}
+		groupAllMetrics(groups, route.consumer, matched)
 	}
-
+	// anything left wasn't matched by any route. Send to default consumer
+	groupAllMetrics(groups, c.router.defaultConsumer, md)
+	var errs error
 	for consumer, group := range groups {
-		errs = errors.Join(errs, consumer.ConsumeMetrics(ctx, group))
+		err := consumer.ConsumeMetrics(ctx, group)
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 	return errs
 }
 
-func (c *metricsConnector) group(
+func groupAllMetrics(
 	groups map[consumer.Metrics]pmetric.Metrics,
-	consumer consumer.Metrics,
-	metrics pmetric.ResourceMetrics,
+	cons consumer.Metrics,
+	metrics pmetric.Metrics,
 ) {
-	if consumer == nil {
+	if cons == nil {
 		return
 	}
-	group, ok := groups[consumer]
+	if metrics.ResourceMetrics().Len() == 0 {
+		return
+	}
+	group, ok := groups[cons]
 	if !ok {
 		group = pmetric.NewMetrics()
+		groups[cons] = group
 	}
-	metrics.CopyTo(group.ResourceMetrics().AppendEmpty())
-	groups[consumer] = group
+	metrics.ResourceMetrics().MoveAndAppendTo(group.ResourceMetrics())
 }

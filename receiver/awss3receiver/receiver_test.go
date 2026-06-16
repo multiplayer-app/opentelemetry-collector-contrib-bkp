@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -19,14 +20,15 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.opentelemetry.io/collector/receiver/receivertest"
-	conventions "go.opentelemetry.io/collector/semconv/v1.22.0"
 	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awss3receiver/internal/metadata"
 )
 
 func generateTraceData() ptrace.Traces {
 	td := ptrace.NewTraces()
 	rs := td.ResourceSpans().AppendEmpty()
-	rs.Resource().Attributes().PutStr(conventions.AttributeServiceName, "test")
+	rs.Resource().Attributes().PutStr("service.name", "test")
 	span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
 	span.SetSpanID([8]byte{0, 1, 2, 3, 4, 5, 6, 7})
 	span.SetTraceID([16]byte{0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0})
@@ -63,6 +65,14 @@ func gzipCompress(data []byte) []byte {
 	return buf.Bytes()
 }
 
+func zstdCompress(data []byte) []byte {
+	var buf bytes.Buffer
+	zw, _ := zstd.NewWriter(&buf)
+	_, _ = zw.Write(data)
+	_ = zw.Close()
+	return buf.Bytes()
+}
+
 type hostWithExtensions struct {
 	extensions map[component.ID]component.Component
 }
@@ -73,11 +83,11 @@ func (h hostWithExtensions) GetExtensions() map[component.ID]component.Component
 
 type nonEncodingExtension struct{}
 
-func (e nonEncodingExtension) Start(_ context.Context, _ component.Host) error {
+func (nonEncodingExtension) Start(context.Context, component.Host) error {
 	return nil
 }
 
-func (e nonEncodingExtension) Shutdown(_ context.Context) error {
+func (nonEncodingExtension) Shutdown(context.Context) error {
 	return nil
 }
 
@@ -87,11 +97,11 @@ type unmarshalExtension struct {
 	log    plog.Logs
 }
 
-func (e unmarshalExtension) Start(_ context.Context, _ component.Host) error {
+func (unmarshalExtension) Start(context.Context, component.Host) error {
 	return nil
 }
 
-func (e unmarshalExtension) Shutdown(_ context.Context) error {
+func (unmarshalExtension) Shutdown(context.Context) error {
 	return nil
 }
 
@@ -206,12 +216,59 @@ func Test_receiveBytes_traces(t *testing.T) {
 			wantErr:   true,
 			wantTrace: false,
 		},
+		{
+			name: "mismatched compression",
+			args: args{
+				key:  "test.json.zst",
+				data: gzipCompress(jsonTrace),
+			},
+			wantErr:   true,
+			wantTrace: false,
+		},
+		{
+			name: ".json.zst",
+			args: args{
+				key:  "test.json.zst",
+				data: zstdCompress(jsonTrace),
+			},
+			wantErr:   false,
+			wantTrace: true,
+		},
+		{
+			name: ".binpb.zst",
+			args: args{
+				key:  "test.binpb.zst",
+				data: zstdCompress(protobufTrace),
+			},
+			wantErr:   false,
+			wantTrace: true,
+		},
+		{
+			name: "encoding extension .zst",
+			args: args{
+				key:  "test.test",
+				data: zstdCompress([]byte("test")),
+			},
+			wantErr:   false,
+			wantTrace: true,
+		},
+		{
+			name: "invalid zstd",
+			args: args{
+				key:  "test.json.zst",
+				data: []byte("invalid zst"),
+			},
+			wantErr:   true,
+			wantTrace: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var traceConsumed bool
 			tracesConsumer, _ := consumer.NewTraces(func(_ context.Context, td ptrace.Traces) error {
 				t.Helper()
+				traceConsumed = true
 				if !tt.wantTrace {
 					t.Errorf("receiveBytes() received unexpected trace")
 				} else {
@@ -219,7 +276,7 @@ func Test_receiveBytes_traces(t *testing.T) {
 				}
 				return nil
 			})
-			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings()})
+			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings(metadata.Type)})
 			require.NoError(t, err)
 			r := &awss3Receiver{
 				logger:  zap.NewNop(),
@@ -234,8 +291,11 @@ func Test_receiveBytes_traces(t *testing.T) {
 					consumer: tracesConsumer,
 				},
 			}
-			if err := r.receiveBytes(context.Background(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
+			if err := r.receiveBytes(t.Context(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
 				t.Errorf("receiveBytes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantTrace && !traceConsumed {
+				t.Errorf("receiveBytes() expected trace to be consumed, none received")
 			}
 		})
 	}
@@ -340,20 +400,67 @@ func Test_receiveBytes_metrics(t *testing.T) {
 			wantErr:    true,
 			wantMetric: false,
 		},
+		{
+			name: "mismatched compression",
+			args: args{
+				key:  "test.json.zst",
+				data: gzipCompress(jsonMetric),
+			},
+			wantErr:    true,
+			wantMetric: false,
+		},
+		{
+			name: ".json.zst",
+			args: args{
+				key:  "test.json.zst",
+				data: zstdCompress(jsonMetric),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: ".binpb.zst",
+			args: args{
+				key:  "test.binpb.zst",
+				data: zstdCompress(protobufMetric),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: "encoding extension .zst",
+			args: args{
+				key:  "test.test",
+				data: zstdCompress([]byte("test")),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: "invalid zst",
+			args: args{
+				key:  "test.json.zst",
+				data: []byte("invalid zstd"),
+			},
+			wantErr:    true,
+			wantMetric: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var metricConsumed bool
 			tracesConsumer, _ := consumer.NewMetrics(func(_ context.Context, md pmetric.Metrics) error {
 				t.Helper()
+				metricConsumed = true
 				if !tt.wantMetric {
-					t.Errorf("receiveBytes() received unexpected trace")
+					t.Errorf("receiveBytes() received unexpected metric")
 				} else {
 					require.Equal(t, testMetric, md)
 				}
 				return nil
 			})
-			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings()})
+			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings(metadata.Type)})
 			require.NoError(t, err)
 			r := &awss3Receiver{
 				logger:  zap.NewNop(),
@@ -368,8 +475,11 @@ func Test_receiveBytes_metrics(t *testing.T) {
 					consumer: tracesConsumer,
 				},
 			}
-			if err := r.receiveBytes(context.Background(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
+			if err := r.receiveBytes(t.Context(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
 				t.Errorf("receiveBytes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantMetric && !metricConsumed {
+				t.Errorf("receiveBytes() expected metric to be consumed, none received")
 			}
 		})
 	}
@@ -474,20 +584,67 @@ func Test_receiveBytes_logs(t *testing.T) {
 			wantErr:    true,
 			wantMetric: false,
 		},
+		{
+			name: "mismatched compression",
+			args: args{
+				key:  "test.json.zst",
+				data: gzipCompress(jsonLog),
+			},
+			wantErr:    true,
+			wantMetric: false,
+		},
+		{
+			name: ".json.zst",
+			args: args{
+				key:  "test.json.zst",
+				data: zstdCompress(jsonLog),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: ".binpb.zst",
+			args: args{
+				key:  "test.binpb.zst",
+				data: zstdCompress(protobufLog),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: "encoding extension .zst",
+			args: args{
+				key:  "test.test",
+				data: zstdCompress([]byte("test")),
+			},
+			wantErr:    false,
+			wantMetric: true,
+		},
+		{
+			name: "invalid zstd",
+			args: args{
+				key:  "test.json.zst",
+				data: []byte("invalid zstd"),
+			},
+			wantErr:    true,
+			wantMetric: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var logConsumed bool
 			tracesConsumer, _ := consumer.NewLogs(func(_ context.Context, ld plog.Logs) error {
 				t.Helper()
+				logConsumed = true
 				if !tt.wantMetric {
-					t.Errorf("receiveBytes() received unexpected trace")
+					t.Errorf("receiveBytes() received unexpected log")
 				} else {
 					require.Equal(t, testLog, ld)
 				}
 				return nil
 			})
-			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings()})
+			obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverCreateSettings: receivertest.NewNopSettings(metadata.Type)})
 			require.NoError(t, err)
 			r := &awss3Receiver{
 				logger:  zap.NewNop(),
@@ -502,8 +659,11 @@ func Test_receiveBytes_logs(t *testing.T) {
 					consumer: tracesConsumer,
 				},
 			}
-			if err := r.receiveBytes(context.Background(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
+			if err := r.receiveBytes(t.Context(), tt.args.key, tt.args.data); (err != nil) != tt.wantErr {
 				t.Errorf("receiveBytes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantMetric && !logConsumed {
+				t.Errorf("receiveBytes() expected log to be consumed, none received")
 			}
 		})
 	}

@@ -14,7 +14,7 @@ import (
 )
 
 // ParallelRaceCompute starts `count` number of go routines that calls the provided function `fn`
-// at the same to allow the race detector greater oppotunity to capture known race conditions.
+// at the same to allow the race detector greater opportunity to capture known race conditions.
 // This method blocks until each count number of fn has completed, any returned errors is considered
 // a failing test method.
 // If the race detector is not enabled, the function then skips with an notice.
@@ -34,14 +34,11 @@ func ParallelRaceCompute(tb testing.TB, count int, fn func() error) {
 		start = make(chan struct{})
 		wg    sync.WaitGroup
 	)
-	for i := 0; i < count; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+	for range count {
+		wg.Go(func() {
 			<-start
 			assert.NoError(tb, fn(), "Must not error when executing function")
-		}()
+		})
 	}
 	close(start)
 

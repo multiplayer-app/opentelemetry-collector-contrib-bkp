@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leodido/go-syslog/v4/rfc5424"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -25,7 +26,7 @@ func TestRFC5424Formatter(t *testing.T) {
 	logRecord.Attributes().PutInt("priority", 165)
 	logRecord.Attributes().PutStr("proc_id", "8710")
 	logRecord.Attributes().PutInt("version", 1)
-	timestamp, err := time.Parse(time.RFC3339Nano, "2003-08-24T05:14:15.000003Z")
+	timestamp, err := time.Parse(rfc5424.RFC3339MICRO, "2003-08-24T05:14:15.000003Z")
 	require.NoError(t, err)
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 
@@ -43,7 +44,7 @@ func TestRFC5424Formatter(t *testing.T) {
 	logRecord.Attributes().PutInt("priority", 165)
 	logRecord.Attributes().PutStr("proc_id", "111")
 	logRecord.Attributes().PutInt("version", 1)
-	timestamp, err = time.Parse(time.RFC3339Nano, "2003-10-11T22:14:15.003Z")
+	timestamp, err = time.Parse(rfc5424.RFC3339MICRO, "2003-10-11T22:14:15.003Z")
 	require.NoError(t, err)
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 
@@ -72,7 +73,7 @@ func TestRFC5424Formatter(t *testing.T) {
 	structuredDataSubmap.Map().PutStr("UserHostAddress", "192.168.2.132")
 	structuredDataSubmap.Map().PutStr("UserID", "Tester2")
 	logRecord.Attributes().PutInt("version", 1)
-	timestamp, err = time.Parse(time.RFC3339Nano, "2003-08-24T05:14:15.000003-07:00")
+	timestamp, err = time.Parse(rfc5424.RFC3339MICRO, "2003-08-24T05:14:15.000003-07:00")
 	require.NoError(t, err)
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 
@@ -81,18 +82,110 @@ func TestRFC5424Formatter(t *testing.T) {
 	matched, err := regexp.MatchString(expectedRegex, actual)
 	assert.NoError(t, err)
 	assert.Truef(t, matched, "unexpected form of formatted message, formatted message: %s, regexp: %s", actual, expectedRegex)
-	assert.True(t, strings.Contains(actual, "Realm=\"SecureAuth0\""))
-	assert.True(t, strings.Contains(actual, "UserHostAddress=\"192.168.2.132\""))
-	assert.True(t, strings.Contains(actual, "UserID=\"Tester2\""))
-	assert.True(t, strings.Contains(actual, "PEN=\"27389\""))
+	assert.Contains(t, actual, "Realm=\"SecureAuth0\"")
+	assert.Contains(t, actual, "UserHostAddress=\"192.168.2.132\"")
+	assert.Contains(t, actual, "UserID=\"Tester2\"")
+	assert.Contains(t, actual, "PEN=\"27389\"")
+
+	// Test structured data (more than one field)
+	expectedRegex = "\\<165\\>1 2003-08-24T12:14:15.000003Z 192\\.0\\.2\\.1 myproc 8710 - " +
+		"\\[(\\S+ \\S+ \\S+)\\]" +
+		"\\[(\\S+ \\S+ \\S+)\\]" +
+		" It's time to make the do-nuts\\.\n"
+	logRecord = plog.NewLogRecord()
+	logRecord.Attributes().PutStr("appname", "myproc")
+	logRecord.Attributes().PutStr("hostname", "192.0.2.1")
+	logRecord.Attributes().PutStr("message", "It's time to make the do-nuts.")
+	logRecord.Attributes().PutInt("priority", 165)
+	logRecord.Attributes().PutStr("proc_id", "8710")
+	logRecord.Attributes().PutEmptyMap("structured_data")
+	structuredData, found = logRecord.Attributes().Get("structured_data")
+	require.True(t, found)
+	structuredData.Map().PutEmptyMap("A@123")
+	structuredDataSubmap, found = structuredData.Map().Get("A@123")
+	require.True(t, found)
+	structuredDataSubmap.Map().PutStr("A", "123")
+	structuredDataSubmap.Map().PutStr("UserHostAddress", "192.168.2.132")
+	structuredData.Map().PutEmptyMap("B@321")
+	structuredDataSubmap, found = structuredData.Map().Get("B@321")
+	require.True(t, found)
+	structuredDataSubmap.Map().PutStr("B", "321")
+	structuredDataSubmap.Map().PutStr("UserHostAddress", "192.168.2.132")
+	logRecord.Attributes().PutInt("version", 1)
+
+	timestamp, err = time.Parse(rfc5424.RFC3339MICRO, "2003-08-24T05:14:15.000003-07:00")
+	require.NoError(t, err)
+	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
+
+	actual = newRFC5424Formatter(false).format(logRecord)
+	assert.NoError(t, err)
+
+	// check that the output message is of the right form
+	matched, err = regexp.MatchString(expectedRegex, actual)
+	assert.NoError(t, err)
+	assert.Truef(t, matched, "unexpected form of formatted message, formatted message: %s, regexp: %s", actual, expectedRegex)
+	regex := regexp.MustCompile(expectedRegex)
+	submatches := regex.FindStringSubmatch(actual)
+	// make sure we have received exactly two SD-elements
+	assert.Lenf(t, submatches, 3,
+		"expected 2 SD-elements but got %d", len(submatches)-1)
+
+	// validate all found SD-elements
+	for _, submatch := range submatches[1:] {
+		elements := strings.Split(submatch, " ")
+		// make sure that the element has three substrings
+		// one for the key and two key-value pairs
+		assert.Len(t, elements, 3, "expected 3 elements in SD-element")
+
+		// make sure the first element is the key in the structured data map
+		submap, found := structuredData.Map().Get(elements[0])
+		require.True(t, found)
+
+		// make sure each element in the found submap is rendered
+		// somewhere in the found SD-element string
+		for k, v := range submap.Map().AsRaw() {
+			attribute := fmt.Sprintf("%s=\"%v\"", k, v)
+			assert.Contains(t, submatch, attribute)
+		}
+	}
 
 	// Test defaults
 	expected = "<165>1 2003-08-24T12:14:15.000003Z - - - - -\n"
 	logRecord = plog.NewLogRecord()
-	timestamp, err = time.Parse(time.RFC3339Nano, "2003-08-24T05:14:15.000003-07:00")
+	timestamp, err = time.Parse(rfc5424.RFC3339MICRO, "2003-08-24T05:14:15.000003-07:00")
 	require.NoError(t, err)
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 
 	actual = newRFC5424Formatter(false).format(logRecord)
 	assert.Equal(t, expected, actual)
+}
+
+func TestRFC5424Formatter_NanoFractionIsTruncatedToMicro(t *testing.T) {
+	logRecord := plog.NewLogRecord()
+	logRecord.Attributes().PutStr("appname", "myapp")
+	logRecord.Attributes().PutStr("hostname", "myhost")
+	logRecord.Attributes().PutStr("message", "nano->micro")
+	logRecord.Attributes().PutInt("priority", 14)
+	logRecord.Attributes().PutInt("version", 1)
+	logRecord.Attributes().PutStr("proc_id", "1234")
+
+	timestamp, err := time.Parse(rfc5424.RFC3339MICRO, "2025-10-02T20:04:11.518870899Z")
+	require.NoError(t, err)
+	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
+
+	expectedPrefix := "<14>1 2025-10-02T20:04:11.51887Z myhost myapp 1234 - - nano->micro"
+	actual := newRFC5424Formatter(false).format(logRecord)
+
+	// The formatted output should contain the truncated (not rounded) timestamp
+	assert.Contains(t, actual, expectedPrefix)
+
+	// Validate timestamp parseability using RFC3339MICRO layout
+	parts := strings.Split(actual, " ")
+	require.GreaterOrEqual(t, len(parts), 3)
+	_, err = time.Parse(rfc5424.RFC3339MICRO, parts[1])
+	require.NoError(t, err)
+
+	// Check that octet counting mode also works correctly
+	octetCounting := newRFC5424Formatter(true).format(logRecord)
+	assert.True(t, strings.HasPrefix(octetCounting, fmt.Sprintf("%d ", len(actual))))
 }

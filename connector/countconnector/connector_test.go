@@ -4,7 +4,6 @@
 package countconnector
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -12,8 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/connector/connectortest"
+	"go.opentelemetry.io/collector/connector/xconnector"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 )
@@ -39,8 +40,9 @@ import (
 //   - (no attributes)
 func TestTracesToMetrics(t *testing.T) {
 	testCases := []struct {
-		name string
-		cfg  *Config
+		name       string
+		goldenFile string
+		cfg        *Config
 	}{
 		{
 			name: "zero_conditions",
@@ -242,36 +244,63 @@ func TestTracesToMetrics(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:       "multiple_conditions_path_context",
+			goldenFile: "multiple_conditions",
+			cfg: &Config{
+				Spans: map[string]MetricInfo{
+					"span.count.if": {
+						Description: "Span count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`span.attributes["span.optional"] != nil`,
+						},
+					},
+				},
+				SpanEvents: map[string]MetricInfo{
+					"spanevent.count.if": {
+						Description: "Span event count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`spanevent.attributes["event.optional"] != nil`,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			goldenFile := tc.goldenFile
+			if goldenFile == "" {
+				goldenFile = tc.name
+			}
 			require.NoError(t, tc.cfg.Validate())
 			factory := NewFactory()
 			sink := &consumertest.MetricsSink{}
-			conn, err := factory.CreateTracesToMetrics(context.Background(),
-				connectortest.NewNopSettings(), tc.cfg, sink)
+			conn, err := factory.CreateTracesToMetrics(t.Context(),
+				connectortest.NewNopSettings(metadata.Type), tc.cfg, sink)
 			require.NoError(t, err)
 			require.NotNil(t, conn)
 			assert.False(t, conn.Capabilities().MutatesData)
 
-			require.NoError(t, conn.Start(context.Background(), componenttest.NewNopHost()))
+			require.NoError(t, conn.Start(t.Context(), componenttest.NewNopHost()))
 			defer func() {
-				assert.NoError(t, conn.Shutdown(context.Background()))
+				assert.NoError(t, conn.Shutdown(t.Context()))
 			}()
 
 			testSpans, err := golden.ReadTraces(filepath.Join("testdata", "traces", "input.yaml"))
 			assert.NoError(t, err)
-			assert.NoError(t, conn.ConsumeTraces(context.Background(), testSpans))
+			assert.NoError(t, conn.ConsumeTraces(t.Context(), testSpans))
 
 			allMetrics := sink.AllMetrics()
 			assert.Len(t, allMetrics, 1)
 
-			// golden.WriteMetrics(t, filepath.Join("testdata", "traces", tc.name+".yaml"), allMetrics[0])
-			expected, err := golden.ReadMetrics(filepath.Join("testdata", "traces", tc.name+".yaml"))
+			// golden.WriteMetrics(t, filepath.Join("testdata", "traces", goldenFile+".yaml"), allMetrics[0])
+			expected, err := golden.ReadMetrics(filepath.Join("testdata", "traces", goldenFile+".yaml"))
 			assert.NoError(t, err)
 			assert.NoError(t, pmetrictest.CompareMetrics(expected, allMetrics[0],
-				pmetrictest.IgnoreTimestamp(),
 				pmetrictest.IgnoreResourceMetricsOrder(),
 				pmetrictest.IgnoreMetricsOrder(),
 				pmetrictest.IgnoreMetricDataPointsOrder()))
@@ -288,7 +317,7 @@ func TestTracesToMetrics(t *testing.T) {
 //   - (no attributes)
 //
 // - The size metrics have the following sets of types:
-//   - int gauge, double gauge, int sum, double sum, historgram, summary
+//   - int gauge, double gauge, int sum, double sum, histogram, summary
 //
 // - The four data points on each metric have the following sets of attributes:
 //   - datapoint.required: foo, datapoint.optional: bar
@@ -297,8 +326,9 @@ func TestTracesToMetrics(t *testing.T) {
 //   - (no attributes)
 func TestMetricsToMetrics(t *testing.T) {
 	testCases := []struct {
-		name string
-		cfg  *Config
+		name       string
+		goldenFile string
+		cfg        *Config
 	}{
 		{
 			name: "zero_conditions",
@@ -484,35 +514,64 @@ func TestMetricsToMetrics(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:       "multiple_conditions_path_context",
+			goldenFile: "multiple_conditions",
+			cfg: &Config{
+				Metrics: map[string]MetricInfo{
+					"metric.count.if": {
+						Description: "Metric count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`metric.type == METRIC_DATA_TYPE_HISTOGRAM`,
+						},
+					},
+				},
+				DataPoints: map[string]MetricInfo{
+					"datapoint.count.if": {
+						Description: "Data point count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`datapoint.attributes["datapoint.optional"] != nil`,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			goldenFile := tc.goldenFile
+			if goldenFile == "" {
+				goldenFile = tc.name
+			}
 			require.NoError(t, tc.cfg.Validate())
 			factory := NewFactory()
 			sink := &consumertest.MetricsSink{}
-			conn, err := factory.CreateMetricsToMetrics(context.Background(),
-				connectortest.NewNopSettings(), tc.cfg, sink)
+			conn, err := factory.CreateMetricsToMetrics(t.Context(),
+				connectortest.NewNopSettings(metadata.Type), tc.cfg, sink)
 			require.NoError(t, err)
 			require.NotNil(t, conn)
 			assert.False(t, conn.Capabilities().MutatesData)
 
-			require.NoError(t, conn.Start(context.Background(), componenttest.NewNopHost()))
+			require.NoError(t, conn.Start(t.Context(), componenttest.NewNopHost()))
 			defer func() {
-				assert.NoError(t, conn.Shutdown(context.Background()))
+				assert.NoError(t, conn.Shutdown(t.Context()))
 			}()
 
 			testMetrics, err := golden.ReadMetrics(filepath.Join("testdata", "metrics", "input.yaml"))
 			assert.NoError(t, err)
-			assert.NoError(t, conn.ConsumeMetrics(context.Background(), testMetrics))
+			assert.NoError(t, conn.ConsumeMetrics(t.Context(), testMetrics))
 
 			allMetrics := sink.AllMetrics()
 			assert.Len(t, allMetrics, 1)
 
-			// golden.WriteMetrics(t, filepath.Join("testdata", "metrics", tc.name+".yaml"), allMetrics[0])
-			expected, err := golden.ReadMetrics(filepath.Join("testdata", "metrics", tc.name+".yaml"))
+			// golden.WriteMetrics(t, filepath.Join("testdata", "metrics", goldenFile+".yaml"), allMetrics[0])
+			expected, err := golden.ReadMetrics(filepath.Join("testdata", "metrics", goldenFile+".yaml"))
 			assert.NoError(t, err)
 			assert.NoError(t, pmetrictest.CompareMetrics(expected, allMetrics[0],
+				pmetrictest.IgnoreStartTimestamp(),
 				pmetrictest.IgnoreTimestamp(),
 				pmetrictest.IgnoreResourceMetricsOrder(),
 				pmetrictest.IgnoreMetricsOrder(),
@@ -536,8 +595,9 @@ func TestMetricsToMetrics(t *testing.T) {
 //   - (no attributes)
 func TestLogsToMetrics(t *testing.T) {
 	testCases := []struct {
-		name string
-		cfg  *Config
+		name       string
+		goldenFile string
+		cfg        *Config
 	}{
 		{
 			name: "zero_conditions",
@@ -656,35 +716,248 @@ func TestLogsToMetrics(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:       "multiple_conditions_path_context",
+			goldenFile: "multiple_conditions",
+			cfg: &Config{
+				Logs: map[string]MetricInfo{
+					"count.if": {
+						Description: "Count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`log.attributes["log.optional"] != nil`,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			goldenFile := tc.goldenFile
+			if goldenFile == "" {
+				goldenFile = tc.name
+			}
 			require.NoError(t, tc.cfg.Validate())
 			factory := NewFactory()
 			sink := &consumertest.MetricsSink{}
-			conn, err := factory.CreateLogsToMetrics(context.Background(),
-				connectortest.NewNopSettings(), tc.cfg, sink)
+			conn, err := factory.CreateLogsToMetrics(t.Context(),
+				connectortest.NewNopSettings(metadata.Type), tc.cfg, sink)
 			require.NoError(t, err)
 			require.NotNil(t, conn)
 			assert.False(t, conn.Capabilities().MutatesData)
 
-			require.NoError(t, conn.Start(context.Background(), componenttest.NewNopHost()))
+			require.NoError(t, conn.Start(t.Context(), componenttest.NewNopHost()))
 			defer func() {
-				assert.NoError(t, conn.Shutdown(context.Background()))
+				assert.NoError(t, conn.Shutdown(t.Context()))
 			}()
 
 			testLogs, err := golden.ReadLogs(filepath.Join("testdata", "logs", "input.yaml"))
 			assert.NoError(t, err)
-			assert.NoError(t, conn.ConsumeLogs(context.Background(), testLogs))
+			assert.NoError(t, conn.ConsumeLogs(t.Context(), testLogs))
 
 			allMetrics := sink.AllMetrics()
 			assert.Len(t, allMetrics, 1)
 
-			// golden.WriteMetrics(t, filepath.Join("testdata", "logs", tc.name+".yaml"), allMetrics[0])
-			expected, err := golden.ReadMetrics(filepath.Join("testdata", "logs", tc.name+".yaml"))
+			// golden.WriteMetrics(t, filepath.Join("testdata", "logs", goldenFile+".yaml"), allMetrics[0])
+			expected, err := golden.ReadMetrics(filepath.Join("testdata", "logs", goldenFile+".yaml"))
 			assert.NoError(t, err)
 			assert.NoError(t, pmetrictest.CompareMetrics(expected, allMetrics[0],
+				pmetrictest.IgnoreTimestamp(),
+				pmetrictest.IgnoreStartTimestamp(),
+				pmetrictest.IgnoreResourceMetricsOrder(),
+				pmetrictest.IgnoreMetricsOrder(),
+				pmetrictest.IgnoreMetricDataPointsOrder()))
+		})
+	}
+}
+
+// The test input file has a repetitive structure:
+// - There are four resources, each with four profiles, each with one sample.
+// - The four resources have the following sets of attributes:
+//   - resource.required: foo, resource.optional: bar
+//   - resource.required: foo, resource.optional: notbar
+//   - resource.required: notfoo
+//   - (no attributes)
+//
+// - The four profiles on each resource have the following sets of attributes:
+//   - profile.required: foo, profile.optional: bar
+//   - profile.required: foo, profile.optional: notbar
+//   - profile.required: notfoo
+//   - (no attributes)
+func TestProfilesToMetrics(t *testing.T) {
+	testCases := []struct {
+		name       string
+		goldenFile string
+		cfg        *Config
+	}{
+		{
+			name: "zero_conditions",
+			cfg:  &Config{Profiles: defaultProfilesConfig()},
+		},
+		{
+			name: "one_condition",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"count.if": {
+						Description: "Count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple_conditions",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"count.if": {
+						Description: "Count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`profile.duration_unix_nano > 1000`,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple_metrics",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"count.all": {
+						Description: "All profiles count",
+					},
+					"count.if": {
+						Description: "Count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "one_attribute",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"profile.count.by_attr": {
+						Description: "Profile count by attribute",
+						Attributes: []AttributeConfig{
+							{
+								Key: "profile.required",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple_attributes",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"profile.count.by_attr": {
+						Description: "Profile count by attributes",
+						Attributes: []AttributeConfig{
+							{
+								Key: "profile.required",
+							},
+							{
+								Key: "profile.optional",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "default_attribute_value",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"profile.count.by_attr": {
+						Description: "Profile count by attribute with default",
+						Attributes: []AttributeConfig{
+							{
+								Key: "profile.required",
+							},
+							{
+								Key:          "profile.optional",
+								DefaultValue: "other",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "condition_and_attribute",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"profile.count.if.by_attr": {
+						Description: "Profile count by attribute if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+						},
+						Attributes: []AttributeConfig{
+							{
+								Key: "profile.required",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:       "multiple_conditions_path_context",
+			goldenFile: "multiple_conditions",
+			cfg: &Config{
+				Profiles: map[string]MetricInfo{
+					"count.if": {
+						Description: "Count if ...",
+						Conditions: []string{
+							`resource.attributes["resource.optional"] != nil`,
+							`profile.duration_unix_nano > 1000`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			goldenFile := tc.goldenFile
+			if goldenFile == "" {
+				goldenFile = tc.name
+			}
+			require.NoError(t, tc.cfg.Validate())
+			factory := NewFactory().(xconnector.Factory)
+			sink := &consumertest.MetricsSink{}
+			conn, err := factory.CreateProfilesToMetrics(t.Context(),
+				connectortest.NewNopSettings(metadata.Type), tc.cfg, sink)
+			require.NoError(t, err)
+			require.NotNil(t, conn)
+			assert.False(t, conn.Capabilities().MutatesData)
+
+			require.NoError(t, conn.Start(t.Context(), componenttest.NewNopHost()))
+			defer func() {
+				assert.NoError(t, conn.Shutdown(t.Context()))
+			}()
+
+			testProfiles, err := golden.ReadProfiles(filepath.Join("testdata", "profiles", "input.yaml"))
+			assert.NoError(t, err)
+			assert.NoError(t, conn.ConsumeProfiles(t.Context(), testProfiles))
+
+			allMetrics := sink.AllMetrics()
+			assert.Len(t, allMetrics, 1)
+
+			// golden.WriteMetrics(t, filepath.Join("testdata", "profiles", goldenFile+".yaml"), allMetrics[0])
+			expected, err := golden.ReadMetrics(filepath.Join("testdata", "profiles", goldenFile+".yaml"))
+			assert.NoError(t, err)
+			assert.NoError(t, pmetrictest.CompareMetrics(expected, allMetrics[0],
+				pmetrictest.IgnoreStartTimestamp(),
 				pmetrictest.IgnoreTimestamp(),
 				pmetrictest.IgnoreResourceMetricsOrder(),
 				pmetrictest.IgnoreMetricsOrder(),

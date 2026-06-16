@@ -4,7 +4,6 @@
 package googlecloudpubsubexporter
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,30 +25,30 @@ func TestType(t *testing.T) {
 	assert.Equal(t, metadata.Type, factory.Type())
 }
 
-func TestCreateTracesExporter(t *testing.T) {
+func TestCreateTraces(t *testing.T) {
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	eCfg := cfg.(*Config)
 	eCfg.Endpoint = "http://testing.invalid"
 
-	te, err := factory.CreateTracesExporter(
-		context.Background(),
-		exportertest.NewNopSettings(),
+	te, err := factory.CreateTraces(
+		t.Context(),
+		exportertest.NewNopSettings(metadata.Type),
 		eCfg,
 	)
 	assert.NoError(t, err)
 	assert.NotNil(t, te, "failed to create trace exporter")
 }
 
-func TestCreateMetricsExporter(t *testing.T) {
+func TestCreateMetrics(t *testing.T) {
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	eCfg := cfg.(*Config)
 	eCfg.Endpoint = "http://testing.invalid"
 
-	me, err := factory.CreateMetricsExporter(
-		context.Background(),
-		exportertest.NewNopSettings(),
+	me, err := factory.CreateMetrics(
+		t.Context(),
+		exportertest.NewNopSettings(metadata.Type),
 		eCfg,
 	)
 	assert.NoError(t, err)
@@ -62,9 +61,9 @@ func TestLogsCreateExporter(t *testing.T) {
 	eCfg := cfg.(*Config)
 	eCfg.Endpoint = "http://testing.invalid"
 
-	me, err := factory.CreateLogsExporter(
-		context.Background(),
-		exportertest.NewNopSettings(),
+	me, err := factory.CreateLogs(
+		t.Context(),
+		exportertest.NewNopSettings(metadata.Type),
 		eCfg,
 	)
 	assert.NoError(t, err)
@@ -77,7 +76,7 @@ func TestEnsureExporter(t *testing.T) {
 	eCfg := cfg.(*Config)
 	eCfg.Endpoint = "http://testing.invalid"
 
-	exporter1 := ensureExporter(exportertest.NewNopSettings(), eCfg)
-	exporter2 := ensureExporter(exportertest.NewNopSettings(), eCfg)
+	exporter1 := ensureExporter(exportertest.NewNopSettings(metadata.Type), eCfg)
+	exporter2 := ensureExporter(exportertest.NewNopSettings(metadata.Type), eCfg)
 	assert.Equal(t, exporter1, exporter2)
 }

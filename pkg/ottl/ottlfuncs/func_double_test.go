@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
@@ -76,7 +77,6 @@ func Test_Double(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			exprFunc := doubleFunc[any](&ottl.StandardFloatLikeGetter[any]{
-
 				Getter: func(context.Context, any) (any, error) {
 					return test.value, nil
 				},
@@ -85,7 +85,7 @@ func Test_Double(t *testing.T) {
 			if test.err {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 			assert.Equal(t, test.expected, result)
 		})

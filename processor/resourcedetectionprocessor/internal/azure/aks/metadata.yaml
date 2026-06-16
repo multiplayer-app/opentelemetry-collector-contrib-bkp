@@ -2,18 +2,13 @@ type: resourcedetectionprocessor/aks
 
 parent: resourcedetection
 
-status:
-  class: pkg
-  codeowners:
-    active:
-
 resource_attributes:
-  cloud.provider:
-    description: The cloud.provider
-    type: string
-    enabled: true
   cloud.platform:
     description: The cloud.platform
+    type: string
+    enabled: true
+  cloud.provider:
+    description: The cloud.provider
     type: string
     enabled: true
   k8s.cluster.name:

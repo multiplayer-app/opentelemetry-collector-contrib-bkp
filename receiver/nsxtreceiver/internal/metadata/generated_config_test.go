@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 )
 
@@ -19,19 +20,41 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	}{
 		{
 			name: "default",
-			want: DefaultMetricsBuilderConfig(),
+			want: NewDefaultMetricsBuilderConfig(),
 		},
 		{
 			name: "all_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					NsxtNodeCPUUtilization:        MetricConfig{Enabled: true},
-					NsxtNodeFilesystemUsage:       MetricConfig{Enabled: true},
-					NsxtNodeFilesystemUtilization: MetricConfig{Enabled: true},
-					NsxtNodeMemoryCacheUsage:      MetricConfig{Enabled: true},
-					NsxtNodeMemoryUsage:           MetricConfig{Enabled: true},
-					NsxtNodeNetworkIo:             MetricConfig{Enabled: true},
-					NsxtNodeNetworkPacketCount:    MetricConfig{Enabled: true},
+					NsxtNodeCPUUtilization: NsxtNodeCPUUtilizationMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []NsxtNodeCPUUtilizationMetricAttributeKey{NsxtNodeCPUUtilizationMetricAttributeKeyClass},
+					},
+					NsxtNodeFilesystemUsage: NsxtNodeFilesystemUsageMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeFilesystemUsageMetricAttributeKey{NsxtNodeFilesystemUsageMetricAttributeKeyDiskState},
+					},
+					NsxtNodeFilesystemUtilization: NsxtNodeFilesystemUtilizationMetricConfig{
+						Enabled: true,
+					},
+					NsxtNodeMemoryCacheUsage: NsxtNodeMemoryCacheUsageMetricConfig{
+						Enabled: true,
+					},
+					NsxtNodeMemoryUsage: NsxtNodeMemoryUsageMetricConfig{
+						Enabled: true,
+					},
+					NsxtNodeNetworkIo: NsxtNodeNetworkIoMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeNetworkIoMetricAttributeKey{NsxtNodeNetworkIoMetricAttributeKeyDirection},
+					},
+					NsxtNodeNetworkPacketCount: NsxtNodeNetworkPacketCountMetricConfig{
+						Enabled:             true,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeNetworkPacketCountMetricAttributeKey{NsxtNodeNetworkPacketCountMetricAttributeKeyDirection, NsxtNodeNetworkPacketCountMetricAttributeKeyPacketType},
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
 					DeviceID:     ResourceAttributeConfig{Enabled: true},
@@ -45,13 +68,35 @@ func TestMetricsBuilderConfig(t *testing.T) {
 			name: "none_set",
 			want: MetricsBuilderConfig{
 				Metrics: MetricsConfig{
-					NsxtNodeCPUUtilization:        MetricConfig{Enabled: false},
-					NsxtNodeFilesystemUsage:       MetricConfig{Enabled: false},
-					NsxtNodeFilesystemUtilization: MetricConfig{Enabled: false},
-					NsxtNodeMemoryCacheUsage:      MetricConfig{Enabled: false},
-					NsxtNodeMemoryUsage:           MetricConfig{Enabled: false},
-					NsxtNodeNetworkIo:             MetricConfig{Enabled: false},
-					NsxtNodeNetworkPacketCount:    MetricConfig{Enabled: false},
+					NsxtNodeCPUUtilization: NsxtNodeCPUUtilizationMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategyAvg,
+						EnabledAttributes:   []NsxtNodeCPUUtilizationMetricAttributeKey{NsxtNodeCPUUtilizationMetricAttributeKeyClass},
+					},
+					NsxtNodeFilesystemUsage: NsxtNodeFilesystemUsageMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeFilesystemUsageMetricAttributeKey{NsxtNodeFilesystemUsageMetricAttributeKeyDiskState},
+					},
+					NsxtNodeFilesystemUtilization: NsxtNodeFilesystemUtilizationMetricConfig{
+						Enabled: false,
+					},
+					NsxtNodeMemoryCacheUsage: NsxtNodeMemoryCacheUsageMetricConfig{
+						Enabled: false,
+					},
+					NsxtNodeMemoryUsage: NsxtNodeMemoryUsageMetricConfig{
+						Enabled: false,
+					},
+					NsxtNodeNetworkIo: NsxtNodeNetworkIoMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeNetworkIoMetricAttributeKey{NsxtNodeNetworkIoMetricAttributeKeyDirection},
+					},
+					NsxtNodeNetworkPacketCount: NsxtNodeNetworkPacketCountMetricConfig{
+						Enabled:             false,
+						AggregationStrategy: AggregationStrategySum,
+						EnabledAttributes:   []NsxtNodeNetworkPacketCountMetricAttributeKey{NsxtNodeNetworkPacketCountMetricAttributeKeyDirection, NsxtNodeNetworkPacketCountMetricAttributeKeyPacketType},
+					},
 				},
 				ResourceAttributes: ResourceAttributesConfig{
 					DeviceID:     ResourceAttributeConfig{Enabled: false},
@@ -65,9 +110,8 @@ func TestMetricsBuilderConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadMetricsBuilderConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(MetricConfig{}, ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(NsxtNodeCPUUtilizationMetricConfig{}, NsxtNodeFilesystemUsageMetricConfig{}, NsxtNodeFilesystemUtilizationMetricConfig{}, NsxtNodeMemoryCacheUsageMetricConfig{}, NsxtNodeMemoryUsageMetricConfig{}, NsxtNodeNetworkIoMetricConfig{}, NsxtNodeNetworkPacketCountMetricConfig{}, ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }
@@ -77,8 +121,8 @@ func loadMetricsBuilderConfig(t *testing.T, name string) MetricsBuilderConfig {
 	require.NoError(t, err)
 	sub, err := cm.Sub(name)
 	require.NoError(t, err)
-	cfg := DefaultMetricsBuilderConfig()
-	require.NoError(t, sub.Unmarshal(&cfg))
+	cfg := NewDefaultMetricsBuilderConfig()
+	require.NoError(t, sub.Unmarshal(&cfg, confmap.WithIgnoreUnused()))
 	return cfg
 }
 
@@ -113,9 +157,8 @@ func TestResourceAttributesConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

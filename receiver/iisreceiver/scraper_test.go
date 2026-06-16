@@ -6,9 +6,9 @@
 package iisreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/iisreceiver"
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -32,7 +32,7 @@ func TestScrape(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 
 	scraper := newIisReceiver(
-		receivertest.NewNopSettings(),
+		receivertest.NewNopSettings(metadata.Type),
 		cfg,
 		consumertest.NewNop(),
 	)
@@ -42,10 +42,17 @@ func TestScrape(t *testing.T) {
 		return []string{strings.Replace(s, "*", "Instance", 1)}, nil
 	}
 
-	err := scraper.start(context.Background(), componenttest.NewNopHost())
+	err := scraper.start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
 
-	actualMetrics, err := scraper.scrape(context.Background())
+	actualMetrics, err := scraper.scrape(t.Context())
+	defer func() {
+		if t.Failed() {
+			metricBytes, errMarshal := golden.MarshalMetricsYAML(actualMetrics)
+			require.NoError(t, errMarshal)
+			t.Errorf("latest result:\n%s", metricBytes)
+		}
+	}()
 	require.NoError(t, err)
 
 	expectedFile := filepath.Join("testdata", "scraper", "expected.yaml")
@@ -56,12 +63,33 @@ func TestScrape(t *testing.T) {
 		pmetrictest.IgnoreMetricDataPointsOrder(), pmetrictest.IgnoreStartTimestamp(), pmetrictest.IgnoreTimestamp()))
 }
 
+func TestAllMetricsDisabledScrape(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	disableAllMetricEnabledFlags(&cfg.Metrics)
+
+	scraper := newIisReceiver(
+		receivertest.NewNopSettings(metadata.Type),
+		cfg,
+		consumertest.NewNop(),
+	)
+
+	// Do not mock the watchers in this test, because if the metrics are all disabled,
+	// the scraper should not even attempt to create watchers
+
+	err := scraper.start(t.Context(), componenttest.NewNopHost())
+	require.NoError(t, err)
+
+	actualMetrics, err := scraper.scrape(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 0, actualMetrics.MetricCount())
+}
+
 func TestScrapeFailure(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 
 	core, obs := observer.New(zapcore.WarnLevel)
 	logger := zap.New(core)
-	rcvrSettings := receivertest.NewNopSettings()
+	rcvrSettings := receivertest.NewNopSettings(metadata.Type)
 	rcvrSettings.Logger = logger
 
 	scraper := newIisReceiver(
@@ -82,7 +110,7 @@ func TestScrapeFailure(t *testing.T) {
 		},
 	}
 
-	_, err = scraper.scrape(context.Background())
+	_, err = scraper.scrape(t.Context())
 	require.NoError(t, err)
 
 	require.Equal(t, 1, obs.Len())
@@ -97,7 +125,7 @@ func TestMaxQueueItemAgeScrapeFailure(t *testing.T) {
 
 	core, obs := observer.New(zapcore.WarnLevel)
 	logger := zap.New(core)
-	rcvrSettings := receivertest.NewNopSettings()
+	rcvrSettings := receivertest.NewNopSettings(metadata.Type)
 	rcvrSettings.Logger = logger
 
 	scraper := newIisReceiver(
@@ -116,7 +144,7 @@ func TestMaxQueueItemAgeScrapeFailure(t *testing.T) {
 		},
 	}
 
-	_, err = scraper.scrape(context.Background())
+	_, err = scraper.scrape(t.Context())
 	require.NoError(t, err)
 
 	require.Equal(t, 1, obs.Len())
@@ -128,7 +156,7 @@ func TestMaxQueueItemAgeScrapeFailure(t *testing.T) {
 
 func TestMaxQueueItemAgeNegativeDenominatorScrapeFailure(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
-	rcvrSettings := receivertest.NewNopSettings()
+	rcvrSettings := receivertest.NewNopSettings(metadata.Type)
 
 	scraper := newIisReceiver(
 		rcvrSettings,
@@ -146,7 +174,7 @@ func TestMaxQueueItemAgeNegativeDenominatorScrapeFailure(t *testing.T) {
 		},
 	}
 
-	actualMetrics, err := scraper.scrape(context.Background())
+	actualMetrics, err := scraper.scrape(t.Context())
 	require.NoError(t, err)
 
 	expectedFile := filepath.Join("testdata", "scraper", "expected_negative_denominator.yaml")
@@ -155,7 +183,35 @@ func TestMaxQueueItemAgeNegativeDenominatorScrapeFailure(t *testing.T) {
 
 	require.NoError(t, pmetrictest.CompareMetrics(expectedMetrics, actualMetrics,
 		pmetrictest.IgnoreMetricDataPointsOrder(), pmetrictest.IgnoreStartTimestamp(), pmetrictest.IgnoreTimestamp()))
+}
 
+func disableAllMetricEnabledFlags(metricsConfig any) {
+	disableEnabledFieldsRecursively(reflect.ValueOf(metricsConfig))
+}
+
+func disableEnabledFieldsRecursively(v reflect.Value) {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+
+	if v.Kind() != reflect.Struct {
+		return
+	}
+
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		fieldType := v.Type().Field(i)
+
+		if fieldType.Name == "Enabled" && field.Kind() == reflect.Bool && field.CanSet() {
+			field.SetBool(false)
+			continue
+		}
+
+		disableEnabledFieldsRecursively(field)
+	}
 }
 
 type mockPerfCounter struct {
@@ -176,8 +232,18 @@ func newMockWatcherFactorFromPath(watchErr error, value float64) func(string) (w
 	}
 }
 
+// ScrapeRawValue implements winperfcounters.PerfCounterWatcher.
+func (*mockPerfCounter) ScrapeRawValue(*int64) (bool, error) {
+	panic("unimplemented")
+}
+
+// ScrapeRawValues implements winperfcounters.PerfCounterWatcher.
+func (*mockPerfCounter) ScrapeRawValues() ([]winperfcounters.RawCounterValue, error) {
+	panic("unimplemented")
+}
+
 // Path
-func (mpc *mockPerfCounter) Path() string {
+func (*mockPerfCounter) Path() string {
 	return ""
 }
 
@@ -187,10 +253,10 @@ func (mpc *mockPerfCounter) ScrapeData() ([]winperfcounters.CounterValue, error)
 }
 
 // Close
-func (mpc *mockPerfCounter) Close() error {
+func (*mockPerfCounter) Close() error {
 	return nil
 }
 
-func (mpc *mockPerfCounter) Reset() error {
+func (*mockPerfCounter) Reset() error {
 	return nil
 }

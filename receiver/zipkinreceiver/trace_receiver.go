@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/zipkin/zipkinv1"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/zipkin/zipkinv2"
@@ -33,8 +34,10 @@ const (
 	receiverTransportV2PROTO  = "http_v2_proto"
 )
 
-var errNextConsumerRespBody = []byte(`"Internal Server Error"`)
-var errBadRequestRespBody = []byte(`"Bad Request"`)
+var (
+	errNextConsumerRespBody = []byte(`"Internal Server Error"`)
+	errBadRequestRespBody   = []byte(`"Bad Request"`)
+)
 
 // zipkinReceiver type is used to handle spans received in the Zipkin format.
 type zipkinReceiver struct {
@@ -92,25 +95,28 @@ func (zr *zipkinReceiver) Start(ctx context.Context, host component.Host) error 
 		return errors.New("nil host")
 	}
 
+	if err := zipkinv2.ValidateFeatureGates(); err != nil {
+		zr.settings.Logger.Error("Invalid feature gate combination", zap.Error(err))
+		componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
+		return err
+	}
+
 	var err error
-	zr.server, err = zr.config.ServerConfig.ToServer(ctx, host, zr.settings.TelemetrySettings, zr)
+	zr.server, err = zr.config.ToServer(ctx, host.GetExtensions(), zr.settings.TelemetrySettings, zr)
 	if err != nil {
 		return err
 	}
 
 	var listener net.Listener
-	listener, err = zr.config.ServerConfig.ToListener(ctx)
+	listener, err = zr.config.ToListener(ctx)
 	if err != nil {
 		return err
 	}
-	zr.shutdownWG.Add(1)
-	go func() {
-		defer zr.shutdownWG.Done()
-
+	zr.shutdownWG.Go(func() {
 		if errHTTP := zr.server.Serve(listener); !errors.Is(errHTTP, http.ErrServerClosed) && errHTTP != nil {
 			componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(errHTTP))
 		}
-	}()
+	})
 
 	return nil
 }
@@ -254,7 +260,6 @@ func (zr *zipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write(errNextConsumerRespBody)
 	}
-
 }
 
 func transportType(r *http.Request, asZipkinv1 bool) string {

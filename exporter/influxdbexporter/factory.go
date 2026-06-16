@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package influxdbexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/influxdbexporter"
 
@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
@@ -34,14 +35,15 @@ func NewFactory() exporter.Factory {
 }
 
 func createDefaultConfig() component.Config {
+	clientConfig := confighttp.NewDefaultClientConfig()
+	clientConfig.Timeout = 5 * time.Second
+	clientConfig.Headers = configopaque.MapList{
+		{Name: "User-Agent", Value: "OpenTelemetry -> Influx"},
+	}
+
 	return &Config{
-		ClientConfig: confighttp.ClientConfig{
-			Timeout: 5 * time.Second,
-			Headers: map[string]configopaque.String{
-				"User-Agent": "OpenTelemetry -> Influx",
-			},
-		},
-		QueueSettings:       exporterhelper.NewDefaultQueueConfig(),
+		ClientConfig:        clientConfig,
+		QueueSettings:       configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 		BackOffConfig:       configretry.NewDefaultBackOffConfig(),
 		MetricsSchema:       common.MetricsSchemaTelegrafPrometheusV1.String(),
 		SpanDimensions:      otel2influx.DefaultOtelTracesToLineProtocolConfig().SpanDimensions,
@@ -50,6 +52,7 @@ func createDefaultConfig() component.Config {
 		// https://docs.influxdata.com/influxdb/cloud-serverless/write-data/best-practices/optimize-writes/#batch-writes
 		PayloadMaxLines: 10_000,
 		PayloadMaxBytes: 10_000_000,
+		Precision:       "ns",
 	}
 }
 
@@ -76,7 +79,7 @@ func createTraceExporter(
 		return nil, err
 	}
 
-	return exporterhelper.NewTracesExporter(
+	return exporterhelper.NewTraces(
 		ctx,
 		set,
 		cfg,
@@ -111,7 +114,7 @@ func createMetricsExporter(ctx context.Context, set exporter.Settings, config co
 		return nil, err
 	}
 
-	return exporterhelper.NewMetricsExporter(
+	return exporterhelper.NewMetrics(
 		ctx,
 		set,
 		cfg,
@@ -141,7 +144,7 @@ func createLogsExporter(ctx context.Context, set exporter.Settings, config compo
 		return nil, err
 	}
 
-	return exporterhelper.NewLogsExporter(
+	return exporterhelper.NewLogs(
 		ctx,
 		set,
 		cfg,

@@ -11,9 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/config/configopaque"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/otelcol/otelcoltest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubreceiver/internal"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/githubreceiver/internal/metadata"
@@ -26,8 +29,6 @@ func TestLoadConfig(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Receivers[metadata.Type] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "config.yaml"), factories)
 
 	require.NoError(t, err)
@@ -36,12 +37,40 @@ func TestLoadConfig(t *testing.T) {
 	assert.Len(t, cfg.Receivers, 2)
 
 	r0 := cfg.Receivers[component.NewID(metadata.Type)]
-	defaultConfigGitHubScraper := factory.CreateDefaultConfig()
-	defaultConfigGitHubScraper.(*Config).Scrapers = map[string]internal.Config{
-		metadata.Type.String(): (&githubscraper.Factory{}).CreateDefaultConfig(),
+	defaultConfigGitHubReceiver := factory.CreateDefaultConfig()
+
+	defaultConfigGitHubReceiver.(*Config).Scrapers = map[string]internal.Config{
+		githubscraper.TypeStr: (&githubscraper.Factory{}).CreateDefaultConfig(),
 	}
 
-	assert.Equal(t, defaultConfigGitHubScraper, r0)
+	defaultConfigGitHubReceiver.(*Config).WebHook = WebHook{
+		ServerConfig: confighttp.ServerConfig{
+			NetAddr: confignet.AddrConfig{
+				Transport: confignet.TransportTypeTCP,
+				Endpoint:  "localhost:8080",
+			},
+			ReadTimeout:  500 * time.Millisecond,
+			WriteTimeout: 500 * time.Millisecond,
+		},
+		Path:       "some/path",
+		HealthPath: "health/path",
+		RequiredHeaders: map[string]configopaque.String{
+			"key": "value-present",
+		},
+		GitHubHeaders: GitHubHeaders{
+			Customizable: map[string]string{
+				"User-Agent": "",
+			},
+			Fixed: map[string]string{
+				"X-GitHub-Delivery":   "",
+				"X-GitHub-Event":      "",
+				"X-GitHub-Hook-ID":    "",
+				"X-Hub-Signature-256": "",
+			},
+		},
+	}
+
+	assert.Equal(t, defaultConfigGitHubReceiver, r0)
 
 	r1 := cfg.Receivers[component.NewIDWithName(metadata.Type, "customname")].(*Config)
 	expectedConfig := &Config{
@@ -50,7 +79,34 @@ func TestLoadConfig(t *testing.T) {
 			InitialDelay:       1 * time.Second,
 		},
 		Scrapers: map[string]internal.Config{
-			metadata.Type.String(): (&githubscraper.Factory{}).CreateDefaultConfig(),
+			githubscraper.TypeStr: (&githubscraper.Factory{}).CreateDefaultConfig(),
+		},
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+		WebHook: WebHook{
+			ServerConfig: confighttp.ServerConfig{
+				NetAddr: confignet.AddrConfig{
+					Transport: confignet.TransportTypeTCP,
+					Endpoint:  "localhost:8080",
+				},
+				ReadTimeout:  500 * time.Millisecond,
+				WriteTimeout: 500 * time.Millisecond,
+			},
+			Path:       "some/path",
+			HealthPath: "health/path",
+			RequiredHeaders: map[string]configopaque.String{
+				"key": "value-present",
+			},
+			GitHubHeaders: GitHubHeaders{
+				Customizable: map[string]string{
+					"User-Agent": "",
+				},
+				Fixed: map[string]string{
+					"X-GitHub-Delivery":   "",
+					"X-GitHub-Event":      "",
+					"X-GitHub-Hook-ID":    "",
+					"X-Hub-Signature-256": "",
+				},
+			},
 		},
 	}
 
@@ -63,8 +119,6 @@ func TestLoadInvalidConfig_NoScrapers(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Receivers[metadata.Type] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	_, err = otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "config-noscrapers.yaml"), factories)
 
 	require.ErrorContains(t, err, "must specify at least one scraper")
@@ -76,11 +130,9 @@ func TestLoadInvalidConfig_InvalidScraperKey(t *testing.T) {
 
 	factory := NewFactory()
 	factories.Receivers[metadata.Type] = factory
-	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/33594
-	// nolint:staticcheck
 	_, err = otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", "config-invalidscraperkey.yaml"), factories)
 
-	require.ErrorContains(t, err, "error reading configuration for \"github\": invalid scraper key: \"invalidscraperkey\"")
+	require.ErrorContains(t, err, "invalid scraper key: \"invalidscraperkey\"")
 }
 
 func TestConfig_Unmarshal(t *testing.T) {
@@ -117,6 +169,35 @@ func TestConfig_Unmarshal(t *testing.T) {
 			if err := cfg.Unmarshal(test.args.componentParser); (err != nil) != test.wantErr {
 				t.Errorf("Config.Unmarshal() error = %v, wantErr %v", err, test.wantErr)
 			}
+		})
+	}
+}
+
+func TestIncludeSpanEventsConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *Config
+		expected bool
+	}{
+		{
+			name:     "default config has span events disabled",
+			config:   createDefaultConfig().(*Config),
+			expected: false,
+		},
+		{
+			name: "span events can be enabled",
+			config: &Config{
+				WebHook: WebHook{
+					IncludeSpanEvents: true,
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, tt.config.WebHook.IncludeSpanEvents)
 		})
 	}
 }

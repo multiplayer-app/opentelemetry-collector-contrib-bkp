@@ -19,11 +19,10 @@ type marshaler interface {
 	MarshalLogs(ld plog.Logs) ([]byte, error)
 	MarshalMetrics(md pmetric.Metrics) ([]byte, error)
 	format() string
+	compressed() bool
 }
 
-var (
-	ErrUnknownMarshaler = errors.New("unknown marshaler")
-)
+var ErrUnknownMarshaler = errors.New("unknown marshaler")
 
 func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host component.Host, logger *zap.Logger) (marshaler, error) {
 	marshaler := &s3Marshaler{logger: logger}
@@ -36,6 +35,7 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 	marshaler.metricsMarshaler, _ = e.(pmetric.Marshaler)
 	marshaler.tracesMarshaler, _ = e.(ptrace.Marshaler)
 	marshaler.fileFormat = fileFormat
+	marshaler.IsCompressed = false
 	return marshaler, nil
 }
 
@@ -47,19 +47,23 @@ func newMarshaler(mType MarshalerType, logger *zap.Logger) (marshaler, error) {
 		marshaler.tracesMarshaler = &ptrace.ProtoMarshaler{}
 		marshaler.metricsMarshaler = &pmetric.ProtoMarshaler{}
 		marshaler.fileFormat = "binpb"
+		marshaler.IsCompressed = false
 	case OtlpJSON:
 		marshaler.logsMarshaler = &plog.JSONMarshaler{}
 		marshaler.tracesMarshaler = &ptrace.JSONMarshaler{}
 		marshaler.metricsMarshaler = &pmetric.JSONMarshaler{}
 		marshaler.fileFormat = "json"
+		marshaler.IsCompressed = false
 	case SumoIC:
 		sumomarshaler := newSumoICMarshaler()
 		marshaler.logsMarshaler = &sumomarshaler
-		marshaler.fileFormat = "json.gz"
+		marshaler.fileFormat = "json"
+		marshaler.IsCompressed = true
 	case Body:
 		exportbodyMarshaler := newbodyMarshaler()
 		marshaler.logsMarshaler = &exportbodyMarshaler
 		marshaler.fileFormat = exportbodyMarshaler.format()
+		marshaler.IsCompressed = false
 	default:
 		return nil, ErrUnknownMarshaler
 	}

@@ -140,9 +140,9 @@ func newNullFloat64MetricValue(metadata MetricValueMetadata, valueHolder any) Me
 	}
 }
 
-func NewMetricValueMetadata(name string, columnName string, dataType MetricType, unit string,
-	valueType ValueType) (MetricValueMetadata, error) {
-
+func NewMetricValueMetadata(name, columnName string, dataType MetricType, unit string,
+	valueType ValueType,
+) (MetricValueMetadata, error) {
 	var newMetricValueFunc newMetricValueFunction
 	var valueHolderFunc valueHolderFunction
 
@@ -165,8 +165,6 @@ func NewMetricValueMetadata(name string, columnName string, dataType MetricType,
 			var valueHolder spanner.NullFloat64
 			return &valueHolder
 		}
-	case UnknownValueType, StringValueType, BoolValueType, StringSliceValueType, ByteSliceValueType, LockRequestSliceValueType:
-		fallthrough
 	default:
 		return nil, fmt.Errorf("invalid value type received for metric value %q", name)
 	}

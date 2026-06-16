@@ -2,12 +2,15 @@ type: resourcedetectionprocessor/docker
 
 parent: resourcedetection
 
-status:
-  class: pkg
-  codeowners:
-    active:
-
 resource_attributes:
+  container.image.name:
+    description: The container image name
+    type: string
+    enabled: false
+  container.name:
+    description: The container name
+    type: string
+    enabled: false
   host.name:
     description: The host.name
     type: string

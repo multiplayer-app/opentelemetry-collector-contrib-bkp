@@ -6,8 +6,9 @@ package googlecloudspannerreceiver // import "github.com/open-telemetry/opentele
 import (
 	"errors"
 	"fmt"
+	"slices"
 
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 )
 
 const (
@@ -94,10 +95,8 @@ func (instance Instance) Validate() error {
 		return errors.New("field \"databases\" is required and cannot be empty for instance configuration")
 	}
 
-	for _, database := range instance.Databases {
-		if database == "" {
-			return errors.New("field \"databases\" contains empty database names")
-		}
+	if slices.Contains(instance.Databases, "") {
+		return errors.New("field \"databases\" contains empty database names")
 	}
 
 	return nil

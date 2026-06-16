@@ -8,12 +8,13 @@ package filesystemscraper // import "github.com/open-telemetry/opentelemetry-col
 import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver/internal/precision"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver/internal/scraper/filesystemscraper/internal/metadata"
 )
 
 const fileSystemStatesLen = 2
 
-func (s *scraper) recordFileSystemUsageMetric(now pcommon.Timestamp, deviceUsages []*deviceUsage) {
+func (s *filesystemsScraper) recordFileSystemUsageMetric(now pcommon.Timestamp, deviceUsages []*deviceUsage) {
 	for _, deviceUsage := range deviceUsages {
 		s.mb.RecordSystemFilesystemUsageDataPoint(
 			now, int64(deviceUsage.usage.Used),
@@ -26,7 +27,7 @@ func (s *scraper) recordFileSystemUsageMetric(now pcommon.Timestamp, deviceUsage
 			deviceUsage.partition.Mountpoint, deviceUsage.partition.Fstype,
 			metadata.AttributeStateFree)
 		s.mb.RecordSystemFilesystemUtilizationDataPoint(
-			now, deviceUsage.usage.UsedPercent/100.0,
+			now, precision.Ratio(deviceUsage.usage.Used, deviceUsage.usage.Used+deviceUsage.usage.Free),
 			deviceUsage.partition.Device, getMountMode(deviceUsage.partition.Opts),
 			deviceUsage.partition.Mountpoint, deviceUsage.partition.Fstype)
 	}
@@ -34,5 +35,5 @@ func (s *scraper) recordFileSystemUsageMetric(now pcommon.Timestamp, deviceUsage
 
 const systemSpecificMetricsLen = 0
 
-func (s *scraper) recordSystemSpecificMetrics(_ pcommon.Timestamp, _ []*deviceUsage) {
+func (*filesystemsScraper) recordSystemSpecificMetrics(pcommon.Timestamp, []*deviceUsage) {
 }

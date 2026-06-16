@@ -1,6 +1,8 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build !aix
+
 package pulsarreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/pulsarreceiver"
 
 import (
@@ -16,7 +18,7 @@ import (
 const (
 	defaultEncoding     = "otlp_proto"
 	defaultTraceTopic   = "otlp_spans"
-	defaultMeticsTopic  = "otlp_metrics"
+	defaultMetricsTopic = "otlp_metrics"
 	defaultLogsTopic    = "otlp_logs"
 	defaultConsumerName = ""
 	defaultSubscription = "otlp_subscription"
@@ -55,7 +57,6 @@ func withLogsUnmarshalers(logsUnmarshalers ...LogsUnmarshaler) FactoryOption {
 
 // NewFactory creates Pulsar receiver factory.
 func NewFactory(options ...FactoryOption) receiver.Factory {
-
 	f := &pulsarReceiverFactory{
 		tracesUnmarshalers:  defaultTracesUnmarshalers(),
 		metricsUnmarshalers: defaultMetricsUnmarshalers(),
@@ -86,7 +87,7 @@ func (f *pulsarReceiverFactory) createTracesReceiver(
 	nextConsumer consumer.Traces,
 ) (receiver.Traces, error) {
 	c := *(cfg.(*Config))
-	if len(c.Topic) == 0 {
+	if c.Topic == "" {
 		c.Topic = defaultTraceTopic
 	}
 	r, err := newTracesReceiver(c, set, f.tracesUnmarshalers, nextConsumer)
@@ -103,8 +104,8 @@ func (f *pulsarReceiverFactory) createMetricsReceiver(
 	nextConsumer consumer.Metrics,
 ) (receiver.Metrics, error) {
 	c := *(cfg.(*Config))
-	if len(c.Topic) == 0 {
-		c.Topic = defaultMeticsTopic
+	if c.Topic == "" {
+		c.Topic = defaultMetricsTopic
 	}
 	r, err := newMetricsReceiver(c, set, f.metricsUnmarshalers, nextConsumer)
 	if err != nil {
@@ -120,7 +121,7 @@ func (f *pulsarReceiverFactory) createLogsReceiver(
 	nextConsumer consumer.Logs,
 ) (receiver.Logs, error) {
 	c := *(cfg.(*Config))
-	if len(c.Topic) == 0 {
+	if c.Topic == "" {
 		c.Topic = defaultLogsTopic
 	}
 	r, err := newLogsReceiver(c, set, f.logsUnmarshalers, nextConsumer)

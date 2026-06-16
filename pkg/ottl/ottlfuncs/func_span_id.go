@@ -4,41 +4,42 @@
 package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 
 import (
-	"context"
+	"encoding/hex"
 	"errors"
-	"fmt"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
+const spanIDFuncName = "SpanID"
+
 type SpanIDArguments[K any] struct {
-	Bytes []byte
+	Target ottl.ByteSliceLikeGetter[K]
 }
 
 func NewSpanIDFactory[K any]() ottl.Factory[K] {
-	return ottl.NewFactory("SpanID", &SpanIDArguments[K]{}, createSpanIDFunction[K])
+	return ottl.NewFactory(spanIDFuncName, &SpanIDArguments[K]{}, createSpanIDFunction[K])
 }
 
 func createSpanIDFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[K], error) {
 	args, ok := oArgs.(*SpanIDArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("SpanIDFactory args must be of type *SpanIDArguments[K]")
+		return nil, errors.New("SpanIDFactory args must be of type *SpanIDArguments[K]")
 	}
 
-	return spanID[K](args.Bytes)
+	return spanID[K](args.Target)
 }
 
-func spanID[K any](bytes []byte) (ottl.ExprFunc[K], error) {
-	if len(bytes) != 8 {
-		return nil, errors.New("span ids must be 8 bytes")
+func spanID[K any](target ottl.ByteSliceLikeGetter[K]) (ottl.ExprFunc[K], error) {
+	return newIDExprFunc(spanIDFuncName, target, decodeHexToSpanID)
+}
+
+func decodeHexToSpanID(b []byte) (pcommon.SpanID, error) {
+	var id pcommon.SpanID
+	if _, err := hex.Decode(id[:], b); err != nil {
+		return pcommon.SpanID{}, err
 	}
-	var idArr [8]byte
-	copy(idArr[:8], bytes)
-	id := pcommon.SpanID(idArr)
-	return func(context.Context, K) (any, error) {
-		return id, nil
-	}, nil
+	return id, nil
 }

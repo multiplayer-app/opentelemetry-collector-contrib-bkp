@@ -4,7 +4,6 @@
 package oidcauthextension
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,12 +25,12 @@ func TestCreateDefaultConfig(t *testing.T) {
 	assert.NoError(t, componenttest.CheckConfigStruct(cfg))
 }
 
-func TestCreateExtension(t *testing.T) {
+func TestCreate(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	cfg.Audience = "collector"
 	cfg.IssuerURL = "https://auth.example.com"
 
-	ext, err := createExtension(context.Background(), extensiontest.NewNopSettings(), cfg)
+	ext, err := createExtension(t.Context(), extensiontest.NewNopSettings(extensiontest.NopType), cfg)
 	assert.NoError(t, err)
 	assert.NotNil(t, ext)
 }

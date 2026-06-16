@@ -13,7 +13,7 @@ import (
 	"go.mongodb.org/atlas/mongodbatlas"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbatlasreceiver/internal"
@@ -35,10 +35,17 @@ type timeconstraints struct {
 	resolution string
 }
 
-func newMongoDBAtlasReceiver(settings receiver.Settings, cfg *Config) *mongodbatlasreceiver {
-	client := internal.NewMongoDBAtlasClient(cfg.PublicKey, string(cfg.PrivateKey), cfg.BackOffConfig, settings.Logger)
-	for _, p := range cfg.Projects {
-		p.populateIncludesAndExcludes()
+func newMongoDBAtlasReceiver(settings receiver.Settings, cfg *Config) (*mongodbatlasreceiver, error) {
+	client, err := internal.NewMongoDBAtlasClient(cfg.BaseURL, cfg.PublicKey, string(cfg.PrivateKey), cfg.BackOffConfig, settings.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MongoDB Atlas client receiver: %w", err)
+	}
+
+	// Use index-based iteration: cfg.Projects is []ProjectConfig (value slice),
+	// so a range-copy would make populateIncludesAndExcludes a no-op on the
+	// original elements.
+	for i := range cfg.Projects {
+		cfg.Projects[i].populateIncludesAndExcludes()
 	}
 
 	return &mongodbatlasreceiver{
@@ -47,11 +54,11 @@ func newMongoDBAtlasReceiver(settings receiver.Settings, cfg *Config) *mongodbat
 		client:      client,
 		mb:          metadata.NewMetricsBuilder(cfg.MetricsBuilderConfig, settings),
 		stopperChan: make(chan struct{}),
-	}
+	}, nil
 }
 
-func newMongoDBAtlasScraper(recv *mongodbatlasreceiver) (scraperhelper.Scraper, error) {
-	return scraperhelper.NewScraper(metadata.Type, recv.scrape, scraperhelper.WithShutdown(recv.shutdown))
+func newMongoDBAtlasScraper(recv *mongodbatlasreceiver) (scraper.Metrics, error) {
+	return scraper.NewMetrics(recv.scrape, scraper.WithShutdown(recv.shutdown))
 }
 
 func (s *mongodbatlasreceiver) scrape(ctx context.Context) (pmetric.Metrics, error) {
@@ -126,7 +133,7 @@ func (s *mongodbatlasreceiver) pollProjects(ctx context.Context, time timeconstr
 			continue
 		}
 
-		if err := s.processProject(ctx, time, org.Name, project, projectCfg); err != nil {
+		if err := s.processProject(ctx, time, org.Name, project, &projectCfg); err != nil {
 			s.log.Error("error processing project", zap.String("projectID", project.ID), zap.Error(err))
 		}
 	}
@@ -204,14 +211,13 @@ func (s *mongodbatlasreceiver) getNodeClusterNameMap(
 		return nil, nil, err
 	}
 
-	for _, cluster := range clusters {
+	for i := range clusters {
+		cluster := &clusters[i]
 		// URI in the form mongodb://host1.mongodb.net:27017,host2.mongodb.net:27017,host3.mongodb.net:27017
-		nodes := strings.Split(strings.TrimPrefix(cluster.MongoURI, "mongodb://"), ",")
-		for _, node := range nodes {
+		for node := range strings.SplitSeq(strings.TrimPrefix(cluster.MongoURI, "mongodb://"), ",") {
 			// Remove the port from the node
 			n, _, _ := strings.Cut(node, ":")
 			clusterMap[n] = cluster.Name
-
 		}
 
 		providerMap[cluster.Name] = providerValues{

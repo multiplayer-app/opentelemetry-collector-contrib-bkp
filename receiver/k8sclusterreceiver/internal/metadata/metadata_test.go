@@ -19,6 +19,7 @@ func Test_getGenericMetadata(t *testing.T) {
 	om := &v1.ObjectMeta{
 		Name:              "test-name",
 		UID:               "test-uid",
+		Namespace:         "test-namespace",
 		Generation:        0,
 		CreationTimestamp: v1.NewTime(now),
 		Labels: map[string]string{
@@ -46,13 +47,14 @@ func Test_getGenericMetadata(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"k8s.workload.name":               "test-name",
 		"k8s.workload.kind":               "ResourceType",
+		"k8s.namespace.name":              "test-namespace",
 		"resourcetype.creation_timestamp": now.Format(time.RFC3339),
 		"k8s.owner-kind-1.name":           "owner1",
 		"k8s.owner-kind-1.uid":            "owner1",
 		"k8s.owner-kind-2.name":           "owner2",
 		"k8s.owner-kind-2.uid":            "owner2",
-		"foo":                             "bar",
-		"foo1":                            "",
+		"k8s.resourcetype.label.foo":      "bar",
+		"k8s.resourcetype.label.foo1":     "",
 	}, rm.Metadata)
 }
 

@@ -11,28 +11,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Showmax/go-fqdn"
 	"github.com/cenkalti/backoff/v4"
-	ps "github.com/mitchellh/go-ps"
 	"github.com/shirou/gopsutil/v4/host"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/confighttp"
-	"go.opentelemetry.io/collector/extension/auth"
-	"go.opentelemetry.io/collector/featuregate"
+	"go.opentelemetry.io/collector/extension"
+	"go.opentelemetry.io/collector/extension/extensionauth"
 	"go.uber.org/zap"
-	grpccredentials "google.golang.org/grpc/credentials"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sumologicextension/api"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sumologicextension/credentials"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sumologicextension/internal/api"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sumologicextension/internal/credentials"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/sumologicextension/internal/procx"
 )
 
 type SumologicExtension struct {
@@ -60,10 +61,12 @@ type SumologicExtension struct {
 	stickySessionCookieLock sync.RWMutex
 	stickySessionCookie     string
 
-	closeChan chan struct{}
-	closeOnce sync.Once
-	backOff   *backoff.ExponentialBackOff
-	id        component.ID
+	closeChan            chan struct{}
+	closeOnce            sync.Once
+	backOff              *backoff.ExponentialBackOff
+	id                   component.ID
+	collectorCredentials credentials.CollectorCredentials
+	procx                *procx.Procx
 }
 
 const (
@@ -79,27 +82,14 @@ const (
 )
 
 const (
-	updateCollectorMetadataID    = "extension.sumologic.updateCollectorMetadata"
-	updateCollectorMetadataStage = featuregate.StageAlpha
-
 	DefaultHeartbeatInterval = 15 * time.Second
 )
 
-var updateCollectorMetadataFeatureGate *featuregate.Gate
-
-func init() {
-	updateCollectorMetadataFeatureGate = featuregate.GlobalRegistry().MustRegister(
-		updateCollectorMetadataID,
-		updateCollectorMetadataStage,
-		featuregate.WithRegisterDescription("When enabled, the collector will update its Sumo Logic metadata on startup."),
-		featuregate.WithRegisterReferenceURL("https://github.com/SumoLogic/sumologic-otel-collector/pull/858"),
-	)
-}
-
-var errGRPCNotSupported = fmt.Errorf("gRPC is not supported by sumologicextension")
-
-// SumologicExtension implements ClientAuthenticator
-var _ auth.Client = (*SumologicExtension)(nil)
+// SumologicExtension implements extensionauth.HTTPClient
+var (
+	_ extension.Extension      = (*SumologicExtension)(nil)
+	_ extensionauth.HTTPClient = (*SumologicExtension)(nil)
+)
 
 func newSumologicExtension(conf *Config, logger *zap.Logger, id component.ID, buildVersion string) (*SumologicExtension, error) {
 	if conf.Credentials.InstallationToken == "" {
@@ -122,7 +112,16 @@ func newSumologicExtension(conf *Config, logger *zap.Logger, id component.ID, bu
 	var (
 		collectorName string
 		hashKey       = createHashKey(conf)
+		hashKeyV2     = createHashKeyV2(conf)
 	)
+
+	_, err = credentialsStore.Get(hashKeyV2)
+	if err != nil {
+		logger.Info("credentials not found, trying legacy credentials", zap.Error(err))
+	} else {
+		logger.Debug("v2 credentials found")
+		hashKey = hashKeyV2
+	}
 	if conf.CollectorName == "" {
 		// If collector name is not set by the user, check if the collector was restarted
 		// and that we can reuse collector name save in credentials store.
@@ -156,16 +155,24 @@ func newSumologicExtension(conf *Config, logger *zap.Logger, id component.ID, bu
 		logger:            logger,
 		hashKey:           hashKey,
 		credentialsStore:  credentialsStore,
-		updateMetadata:    updateCollectorMetadataFeatureGate.IsEnabled(),
+		updateMetadata:    conf.UpdateMetadata,
 		closeChan:         make(chan struct{}),
 		backOff:           backOff,
 		id:                id,
+		procx:             procx.NewProcx(logger),
 	}, nil
 }
 
 func createHashKey(conf *Config) string {
 	return fmt.Sprintf("%s%s%s",
 		conf.CollectorName,
+		conf.Credentials.InstallationToken,
+		strings.TrimSuffix(conf.APIBaseURL, "/"),
+	)
+}
+
+func createHashKeyV2(conf *Config) string {
+	return fmt.Sprintf("%s%s",
 		conf.Credentials.InstallationToken,
 		strings.TrimSuffix(conf.APIBaseURL, "/"),
 	)
@@ -184,11 +191,13 @@ func (se *SumologicExtension) Start(ctx context.Context, host component.Host) er
 	}
 
 	colCreds, err := se.getCredentials(ctx)
+	se.collectorCredentials = colCreds
 	if err != nil {
 		return err
 	}
 
-	if err = se.injectCredentials(ctx, colCreds); err != nil {
+	err = se.injectCredentials(ctx, colCreds)
+	if err != nil {
 		return err
 	}
 
@@ -199,9 +208,10 @@ func (se *SumologicExtension) Start(ctx context.Context, host component.Host) er
 	)
 
 	if se.updateMetadata {
-		err = se.updateMetadataWithBackoff(ctx)
+		err = se.updateMetadataWithHTTPClient(ctx, se.httpClient)
 		if err != nil {
-			return err
+			se.logger.Warn("Initial metadata update failed, will retry asynchronously", zap.Error(err))
+			go se.updateMetadataAsync()
 		}
 	}
 
@@ -210,9 +220,20 @@ func (se *SumologicExtension) Start(ctx context.Context, host component.Host) er
 	return nil
 }
 
-// Shutdown is invoked during service shutdown.
 func (se *SumologicExtension) Shutdown(ctx context.Context) error {
 	se.closeOnce.Do(func() { close(se.closeChan) })
+
+	hashKeyV2 := createHashKeyV2(se.conf)
+	_, err := se.credentialsStore.Get(hashKeyV2)
+	se.logger.Debug("Shutting down Sumo Logic extension migrating to hashkeyV2 ")
+	if err != nil {
+		se.logger.Warn("Failed to get collector v2 credentials on shutdown, migrating to v2", zap.Error(err))
+		err := se.credentialsStore.Store(hashKeyV2, se.collectorCredentials)
+		if err != nil {
+			se.logger.Warn("Failed to migrate collector credentials to v2 on shutdown", zap.Error(err))
+		}
+	}
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -296,7 +317,7 @@ func (se *SumologicExtension) getHTTPClient(
 ) (*http.Client, error) {
 	httpClient, err := httpClientSettings.ToClient(
 		ctx,
-		se.host,
+		se.host.GetExtensions(),
 		componenttest.NewNopTelemetrySettings(),
 	)
 	if err != nil {
@@ -421,7 +442,7 @@ func (se *SumologicExtension) registerCollector(ctx context.Context, collectorNa
 	}
 
 	var buff bytes.Buffer
-	if err = json.NewEncoder(&buff).Encode(api.OpenRegisterRequestPayload{
+	err = json.NewEncoder(&buff).Encode(api.OpenRegisterRequestPayload{
 		CollectorName: collectorName,
 		Description:   se.conf.CollectorDescription,
 		Category:      se.conf.CollectorCategory,
@@ -430,7 +451,8 @@ func (se *SumologicExtension) registerCollector(ctx context.Context, collectorNa
 		Ephemeral:     se.conf.Ephemeral,
 		Clobber:       se.conf.Clobber,
 		TimeZone:      se.conf.TimeZone,
-	}); err != nil {
+	})
+	if err != nil {
 		return credentials.CollectorCredentials{}, err
 	}
 
@@ -460,7 +482,7 @@ func (se *SumologicExtension) registerCollector(ctx context.Context, collectorNa
 
 	if res.StatusCode < 200 || res.StatusCode >= 400 {
 		return credentials.CollectorCredentials{}, se.handleRegistrationError(res)
-	} else if res.StatusCode == 301 {
+	} else if res.StatusCode == http.StatusMovedPermanently {
 		// Use the URL from Location header for subsequent requests.
 		u := strings.TrimSuffix(res.Header.Get("Location"), "/")
 		se.SetBaseURL(u)
@@ -511,7 +533,7 @@ func (se *SumologicExtension) handleRegistrationError(res *http.Response) error 
 	)
 
 	// Return unrecoverable error for 4xx status codes except 429
-	if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 429 {
+	if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != http.StatusTooManyRequests {
 		return backoff.Permanent(fmt.Errorf(
 			"failed to register the collector, got HTTP status code: %d",
 			res.StatusCode,
@@ -572,7 +594,7 @@ func (se *SumologicExtension) heartbeatLoop() {
 		cancel()
 	}()
 
-	se.logger.Info("Heartbeat loop initialized. Starting to send hearbeat requests")
+	se.logger.Info("Heartbeat loop initialized. Starting to send heartbeat requests")
 	timer := time.NewTimer(se.conf.HeartBeatInterval)
 	for {
 		select {
@@ -604,7 +626,6 @@ func (se *SumologicExtension) heartbeatLoop() {
 						zap.String(collectorNameField, colCreds.Credentials.CollectorName),
 						zap.String(collectorIDField, colCreds.Credentials.CollectorID),
 					)
-
 				} else {
 					se.logger.Error("Heartbeat error", zap.Error(err))
 				}
@@ -618,20 +639,21 @@ func (se *SumologicExtension) heartbeatLoop() {
 				timer.Reset(se.conf.HeartBeatInterval)
 			case <-se.closeChan:
 			}
-
 		}
 	}
 }
 
-var errUnauthorizedHeartbeat = errors.New("heartbeat unauthorized")
-var errUnauthorizedMetadata = errors.New("metadata update unauthorized")
+var (
+	errUnauthorizedHeartbeat = errors.New("heartbeat unauthorized")
+	errUnauthorizedMetadata  = errors.New("metadata update unauthorized")
+)
 
-type ErrorAPI struct {
+type errorAPI struct {
 	status int
 	body   string
 }
 
-func (e ErrorAPI) Error() string {
+func (e errorAPI) Error() string {
 	return fmt.Sprintf("API error (status code: %d): %s", e.status, e.body)
 }
 
@@ -640,7 +662,7 @@ func (se *SumologicExtension) sendHeartbeatWithHTTPClient(ctx context.Context, h
 	if err != nil {
 		return fmt.Errorf("unable to parse heartbeat URL %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("unable to create HTTP request %w", err)
 	}
@@ -664,7 +686,7 @@ func (se *SumologicExtension) sendHeartbeatWithHTTPClient(ctx context.Context, h
 		}
 
 		return fmt.Errorf("collector heartbeat request failed: %w",
-			ErrorAPI{
+			errorAPI{
 				status: res.StatusCode,
 				body:   buff.String(),
 			},
@@ -696,47 +718,12 @@ func baseURL() (string, error) {
 	return h, nil
 }
 
-var sumoAppProcesses = map[string]string{
-	"apache":                "apache",
-	"apache2":               "apache",
-	"httpd":                 "apache",
-	"docker":                "docker",
-	"elasticsearch":         "elasticsearch",
-	"mysql-server":          "mysql",
-	"mysqld":                "mysql",
-	"nginx":                 "nginx",
-	"postgresql":            "postgres",
-	"postgresql-9.5":        "postgres",
-	"rabbitmq-server":       "rabbitmq",
-	"redis":                 "redis",
-	"tomcat":                "tomcat",
-	"kafka-server-start.sh": "kafka", // Need to test this, most common shell wrapper.
-}
-
-func filteredProcessList() ([]string, error) {
-	var pl []string
-
-	p, err := ps.Processes()
-	if err != nil {
-		return pl, err
-	}
-
-	for _, v := range p {
-		e := strings.ToLower(v.Executable())
-		if a, i := sumoAppProcesses[e]; i {
-			pl = append(pl, a)
-		}
-	}
-
-	return pl, nil
-}
-
-func discoverTags() (map[string]any, error) {
+func (se *SumologicExtension) discoverTags() (map[string]any, error) {
 	t := map[string]any{
 		"sumo.disco.enabled": "true",
 	}
 
-	pl, err := filteredProcessList()
+	pl, err := se.procx.FilteredProcessList()
 	if err != nil {
 		return t, err
 	}
@@ -772,18 +759,16 @@ func (se *SumologicExtension) updateMetadataWithHTTPClient(ctx context.Context, 
 	td := map[string]any{}
 
 	if se.conf.DiscoverCollectorTags {
-		td, err = discoverTags()
+		td, err = se.discoverTags()
 		if err != nil {
 			return err
 		}
 	}
 
-	for k, v := range se.conf.CollectorFields {
-		td[k] = v
-	}
+	maps.Copy(td, se.conf.CollectorFields)
 
 	var buff bytes.Buffer
-	if err = json.NewEncoder(&buff).Encode(api.OpenMetadataRequestPayload{
+	err = json.NewEncoder(&buff).Encode(api.OpenMetadataRequestPayload{
 		HostDetails: api.OpenMetadataHostDetails{
 			Name:        hostname,
 			OsName:      info.OS,
@@ -791,13 +776,14 @@ func (se *SumologicExtension) updateMetadataWithHTTPClient(ctx context.Context, 
 			Environment: se.conf.CollectorEnvironment,
 		},
 		CollectorDetails: api.OpenMetadataCollectorDetails{
-			RunningVersion: se.buildVersion,
+			RunningVersion: cleanupBuildVersion(se.buildVersion),
 		},
 		NetworkDetails: api.OpenMetadataNetworkDetails{
 			HostIPAddress: ip,
 		},
 		TagDetails: td,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
@@ -833,7 +819,7 @@ func (se *SumologicExtension) updateMetadataWithHTTPClient(ctx context.Context, 
 			zap.String("body", buff.String()))
 
 		return fmt.Errorf("collector metadata request failed: %w",
-			ErrorAPI{
+			errorAPI{
 				status: res.StatusCode,
 				body:   buff.String(),
 			},
@@ -848,30 +834,62 @@ func (se *SumologicExtension) updateMetadataWithHTTPClient(ctx context.Context, 
 	return nil
 }
 
-func (se *SumologicExtension) updateMetadataWithBackoff(ctx context.Context) error {
-	se.backOff.Reset()
+// updateMetadataAsync retries metadata update in the background with exponential
+// backoff until the update succeeds or the collector shuts down. It is started
+// when the initial synchronous attempt in Start() fails so that startup is not
+// blocked by transient network unavailability (e.g. Windows boot race).
+func (se *SumologicExtension) updateMetadataAsync() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-se.closeChan:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = se.conf.BackOff.InitialInterval
+	bo.MaxElapsedTime = se.conf.BackOff.MaxElapsedTime
+	bo.MaxInterval = se.conf.BackOff.MaxInterval
+	bo.Reset()
+
 	for {
-		err := se.updateMetadataWithHTTPClient(ctx, se.httpClient)
-		if err == nil {
-			return nil
+		select {
+		case <-se.closeChan:
+			se.logger.Info("Async metadata update loop stopped: collector shutting down")
+			return
+		default:
 		}
 
-		se.logger.Warn(fmt.Sprintf("collector metadata update failed: %s", err))
+		err := se.updateMetadataWithHTTPClient(ctx, se.httpClient)
+		if err == nil {
+			se.logger.Info("Async metadata update succeeded")
+			return
+		}
 
-		nbo := se.backOff.NextBackOff()
+		se.logger.Warn("Async metadata update failed, will retry", zap.Error(err))
+
 		var backOffErr *backoff.PermanentError
-		// Return error if backoff reaches the limit or uncoverable error is spotted
-		if ok := errors.As(err, &backOffErr); nbo == se.backOff.Stop || ok {
-			return fmt.Errorf("collector metadata update failed: %w", err)
+		if errors.As(err, &backOffErr) {
+			se.logger.Error("Async metadata update encountered a permanent error, stopping retries", zap.Error(err))
+			return
+		}
+
+		nbo := bo.NextBackOff()
+		if nbo == bo.Stop {
+			se.logger.Warn("Async metadata update stopped: backoff elapsed time exceeded")
+			return
 		}
 
 		t := time.NewTimer(nbo)
-		defer t.Stop()
-
 		select {
 		case <-t.C:
-		case <-ctx.Done():
-			return fmt.Errorf("collector metadata update cancelled: %w", ctx.Err())
+		case <-se.closeChan:
+			t.Stop()
+			se.logger.Info("Async metadata update loop stopped: collector shutting down")
+			return
 		}
 	}
 }
@@ -965,19 +983,15 @@ func (se *SumologicExtension) RoundTripper(base http.RoundTripper) (http.RoundTr
 	}, nil
 }
 
-func (se *SumologicExtension) PerRPCCredentials() (grpccredentials.PerRPCCredentials, error) {
-	return nil, errGRPCNotSupported
-}
-
 func (se *SumologicExtension) addStickySessionCookie(req *http.Request) {
 	if !se.conf.StickySessionEnabled {
 		return
 	}
-	currectCookieValue := se.StickySessionCookie()
-	if currectCookieValue != "" {
+	currentCookieValue := se.StickySessionCookie()
+	if currentCookieValue != "" {
 		cookie := &http.Cookie{
 			Name:  stickySessionKey,
-			Value: currectCookieValue,
+			Value: currentCookieValue,
 		}
 		req.AddCookie(cookie)
 	}
@@ -1016,7 +1030,7 @@ func (rt roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-func addCollectorCredentials(req *http.Request, collectorCredentialID string, collectorCredentialKey string) {
+func addCollectorCredentials(req *http.Request, collectorCredentialID, collectorCredentialKey string) {
 	token := base64.StdEncoding.EncodeToString(
 		[]byte(collectorCredentialID + ":" + collectorCredentialKey),
 	)
@@ -1050,4 +1064,28 @@ func getHostname(logger *zap.Logger) (string, error) {
 	logger.Debug("failed to get fqdn", zap.Error(err))
 
 	return os.Hostname()
+}
+
+// cleanupBuildVersion adds a leading 'v' and removes the tailing build hash to make sure the
+// backend understand the build number. Note that only version strings with the following format will be
+// cleaned up. All other version formats will remain the same.
+// Cleaned up format: 0.108.0-sumo-2-4d57200692d5c5c39effad4ae3b29fef79209113
+func cleanupBuildVersion(version string) string {
+	pattern := "^v?([0-9]+\\.[0-9]+\\.[0-9]+-sumo-[0-9]+)(-[0-9a-f]{40}){0,1}(-fips){0,1}$"
+	re := regexp.MustCompile(pattern)
+
+	matches := re.FindAllStringSubmatch(version, 1)
+	if len(matches) != 1 {
+		return version
+	}
+	subMatches := matches[0]
+	if len(subMatches) > 1 {
+		ver := subMatches[1]
+		if len(subMatches) == 4 {
+			ver += subMatches[3]
+		}
+		return "v" + ver
+	}
+
+	return version
 }

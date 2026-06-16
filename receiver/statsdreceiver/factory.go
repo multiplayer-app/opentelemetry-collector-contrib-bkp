@@ -5,6 +5,7 @@ package statsdreceiver // import "github.com/open-telemetry/opentelemetry-collec
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -13,7 +14,7 @@ import (
 	"go.opentelemetry.io/collector/receiver"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/statsdreceiver/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/statsdreceiver/internal/protocol"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/statsdreceiver/protocol"
 )
 
 const (
@@ -21,11 +22,10 @@ const (
 	defaultAggregationInterval = 60 * time.Second
 	defaultEnableMetricType    = false
 	defaultIsMonotonicCounter  = false
+	defaultSocketPermissions   = os.FileMode(0o622)
 )
 
-var (
-	defaultTimerHistogramMapping = []protocol.TimerHistogramMapping{{StatsdType: "timer", ObserverType: "gauge"}, {StatsdType: "histogram", ObserverType: "gauge"}, {StatsdType: "distribution", ObserverType: "gauge"}}
-)
+var defaultTimerHistogramMapping = []protocol.TimerHistogramMapping{{StatsdType: "timer", ObserverType: "gauge"}, {StatsdType: "histogram", ObserverType: "gauge"}, {StatsdType: "distribution", ObserverType: "gauge"}}
 
 // NewFactory creates a factory for the StatsD receiver.
 func NewFactory() receiver.Factory {
@@ -45,7 +45,9 @@ func createDefaultConfig() component.Config {
 		AggregationInterval:   defaultAggregationInterval,
 		EnableMetricType:      defaultEnableMetricType,
 		IsMonotonicCounter:    defaultIsMonotonicCounter,
+		CounterType:           protocol.DefaultCounterType,
 		TimerHistogramMapping: defaultTimerHistogramMapping,
+		SocketPermissions:     defaultSocketPermissions,
 	}
 }
 

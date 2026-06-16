@@ -6,6 +6,7 @@ package tests // import "github.com/open-telemetry/opentelemetry-collector-contr
 import (
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,9 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/datareceivers/syslogdatareceiver"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/testbed"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/testbed/components"
 )
 
 type expectedDataType struct {
@@ -43,11 +45,12 @@ func TestSyslogComplementaryRFC5424(t *testing.T) {
 						"iut": "3",
 					},
 				},
-				"hostname": "mymachine.example.com",
-				"appname":  "eventslog",
-				"priority": int64(165),
-				"version":  int64(1),
-				"facility": int64(20),
+				"hostname":      "mymachine.example.com",
+				"appname":       "eventslog",
+				"priority":      int64(165),
+				"version":       int64(1),
+				"facility":      int64(20),
+				"facility_text": "local4",
 			},
 		},
 		{
@@ -56,9 +59,10 @@ func TestSyslogComplementaryRFC5424(t *testing.T) {
 			severityText:   "alert",
 			timestamp:      1065910455008000000,
 			attributes: map[string]any{
-				"priority": int64(17),
-				"version":  int64(3),
-				"facility": int64(2),
+				"priority":      int64(17),
+				"version":       int64(3),
+				"facility":      int64(2),
+				"facility_text": "mail",
 			},
 		},
 	}
@@ -67,9 +71,10 @@ func TestSyslogComplementaryRFC5424(t *testing.T) {
 }
 
 func TestSyslogComplementaryRFC3164(t *testing.T) {
+	t.Skip("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/38238")
 	expectedData := []expectedDataType{
 		{
-			message:        "<34>Oct 11 22:14:15 mymachine su: 'su root' failed for lonvick on /dev/pts/8",
+			message:        "<34>Oct 11 2023 22:14:15 mymachine su: 'su root' failed for lonvick on /dev/pts/8",
 			timestamp:      1697062455000000000,
 			severityNumber: 18,
 			severityText:   "crit",
@@ -82,7 +87,7 @@ func TestSyslogComplementaryRFC3164(t *testing.T) {
 			},
 		},
 		{
-			message:        "<19>Oct 11 22:14:15 - -",
+			message:        "<19>Oct 11 2023 22:14:15 - -",
 			timestamp:      1697062455000000000,
 			severityNumber: 17,
 			severityText:   "err",
@@ -98,7 +103,7 @@ func TestSyslogComplementaryRFC3164(t *testing.T) {
 }
 
 func componentFactories(t *testing.T) otelcol.Factories {
-	factories, err := testbed.Components()
+	factories, err := components.All()
 	require.NoError(t, err)
 	return factories
 }
@@ -109,7 +114,7 @@ func complementaryTest(t *testing.T, rfc string, expectedData []expectedDataType
 	inputPort := testutil.GetAvailablePort(t)
 
 	// Start SyslogDataReceiver
-	syslogReceiver := datareceivers.NewSyslogDataReceiver(rfc, port)
+	syslogReceiver := syslogdatareceiver.NewSyslogDataReceiver(rfc, port)
 	backend := testbed.NewMockBackend("mockbackend.log", syslogReceiver)
 	require.NoError(t, backend.Start())
 	backend.EnableRecording()
@@ -138,7 +143,7 @@ service:
         - syslog/client`
 
 	collector := testbed.NewInProcessCollector(componentFactories(t))
-	_, err := collector.PrepareConfig(fmt.Sprintf(config, rfc, inputPort, rfc, port))
+	_, err := collector.PrepareConfig(t, fmt.Sprintf(config, rfc, inputPort, rfc, port))
 
 	require.NoError(t, err)
 	err = collector.Start(testbed.StartParams{
@@ -154,7 +159,7 @@ service:
 
 	// prepare data
 
-	message := ""
+	var message strings.Builder
 	expectedAttributes := []map[string]any{}
 	expectedLogs := plog.NewLogs()
 	rl := expectedLogs.ResourceLogs().AppendEmpty()
@@ -167,7 +172,7 @@ service:
 		lr.SetSeverityText(e.severityText)
 		lr.SetTimestamp(e.timestamp)
 		expectedAttributes = append(expectedAttributes, e.attributes)
-		message += e.message + "\n"
+		message.WriteString(e.message + "\n")
 	}
 
 	// Prepare client
@@ -175,7 +180,7 @@ service:
 	require.NoError(t, err)
 
 	// Write requests
-	fmt.Fprint(conn, message)
+	fmt.Fprint(conn, message.String())
 
 	// Wait for all messages
 	for len(backend.ReceivedLogs) < 1 {

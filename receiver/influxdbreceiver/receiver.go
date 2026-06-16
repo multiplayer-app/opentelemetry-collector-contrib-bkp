@@ -41,7 +41,7 @@ type metricsReceiver struct {
 }
 
 func newMetricsReceiver(config *Config, settings receiver.Settings, nextConsumer consumer.Metrics) (*metricsReceiver, error) {
-	influxLogger := newZapInfluxLogger(settings.TelemetrySettings.Logger)
+	influxLogger := newZapInfluxLogger(settings.Logger)
 	converter, err := influx2otel.NewLineProtocolToOtelMetrics(influxLogger)
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func newMetricsReceiver(config *Config, settings receiver.Settings, nextConsumer
 func (r *metricsReceiver) Start(ctx context.Context, host component.Host) error {
 	ln, err := r.httpServerSettings.ToListener(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to bind to address %s: %w", r.httpServerSettings.Endpoint, err)
+		return fmt.Errorf("failed to bind to address %s: %w", r.httpServerSettings.NetAddr.Endpoint, err)
 	}
 
 	router := http.NewServeMux()
@@ -77,7 +77,7 @@ func (r *metricsReceiver) Start(ctx context.Context, host component.Host) error 
 	router.HandleFunc("/ping", r.handlePing)
 
 	r.wg.Add(1)
-	r.server, err = r.httpServerSettings.ToServer(ctx, host, r.settings, router)
+	r.server, err = r.httpServerSettings.ToServer(ctx, host.GetExtensions(), r.settings, router)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (r *metricsReceiver) handleWrite(w http.ResponseWriter, req *http.Request) 
 		err = batch.AddPoint(string(measurement), tags, fields, ts, common.InfluxMetricValueTypeUntyped)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = fmt.Fprintf(w, "failed to append to the batch")
+			_, _ = fmt.Fprintf(w, "failed to append to the batch: %v", err)
 			return
 		}
 	}
@@ -204,6 +204,6 @@ func (r *metricsReceiver) handleWrite(w http.ResponseWriter, req *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (r *metricsReceiver) handlePing(w http.ResponseWriter, _ *http.Request) {
+func (*metricsReceiver) handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }

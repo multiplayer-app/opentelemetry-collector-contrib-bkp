@@ -5,7 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/timeutils"
@@ -22,23 +22,20 @@ type TimeArguments[K any] struct {
 func NewTimeFactory[K any]() ottl.Factory[K] {
 	return ottl.NewFactory("Time", &TimeArguments[K]{}, createTimeFunction[K])
 }
+
 func createTimeFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[K], error) {
 	args, ok := oArgs.(*TimeArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("TimeFactory args must be of type *TimeArguments[K]")
+		return nil, errors.New("TimeFactory args must be of type *TimeArguments[K]")
 	}
 
 	return Time(args.Time, args.Format, args.Location, args.Locale)
 }
 
-func Time[K any](inputTime ottl.StringGetter[K], format string, location ottl.Optional[string], locale ottl.Optional[string]) (ottl.ExprFunc[K], error) {
+func Time[K any](inputTime ottl.StringGetter[K], format string, location, locale ottl.Optional[string]) (ottl.ExprFunc[K], error) {
 	if format == "" {
-		return nil, fmt.Errorf("format cannot be nil")
-	}
-	gotimeFormat, err := timeutils.StrptimeToGotime(format)
-	if err != nil {
-		return nil, err
+		return nil, errors.New("format cannot be nil")
 	}
 
 	var defaultLocation *string
@@ -55,10 +52,16 @@ func Time[K any](inputTime ottl.StringGetter[K], format string, location ottl.Op
 	var inputTimeLocale *string
 	if !locale.IsEmpty() {
 		l := locale.Get()
-		if err = timeutils.ValidateLocale(l); err != nil {
+		err = timeutils.ValidateLocale(l)
+		if err != nil {
 			return nil, err
 		}
 		inputTimeLocale = &l
+	}
+
+	parser, err := timeutils.NewStrptimeParser(format)
+	if err != nil {
+		return nil, err
 	}
 
 	return func(ctx context.Context, tCtx K) (any, error) {
@@ -67,13 +70,13 @@ func Time[K any](inputTime ottl.StringGetter[K], format string, location ottl.Op
 			return nil, err
 		}
 		if t == "" {
-			return nil, fmt.Errorf("time cannot be nil")
+			return nil, errors.New("time cannot be nil")
 		}
 		var timestamp time.Time
 		if inputTimeLocale != nil {
-			timestamp, err = timeutils.ParseLocalizedGotime(gotimeFormat, t, loc, *inputTimeLocale)
+			timestamp, err = parser.ParseLocalized(t, loc, *inputTimeLocale)
 		} else {
-			timestamp, err = timeutils.ParseGotime(gotimeFormat, t, loc)
+			timestamp, err = parser.Parse(t, loc)
 		}
 		if err != nil {
 			return nil, err

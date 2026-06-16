@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/aws/ec2"
@@ -33,7 +34,7 @@ func TestLoadConfig(t *testing.T) {
 	openshiftConfig.OpenShiftConfig = openshift.Config{
 		Address: "127.0.0.1:4444",
 		Token:   "some_token",
-		TLSSettings: configtls.ClientConfig{
+		TLSs: configtls.ClientConfig{
 			Insecure: true,
 		},
 		ResourceAttributes: openshift.CreateDefaultConfig().ResourceAttributes,
@@ -43,6 +44,8 @@ func TestLoadConfig(t *testing.T) {
 	ec2Config.EC2Config = ec2.Config{
 		Tags:               []string{"^tag1$", "^tag2$"},
 		ResourceAttributes: ec2.CreateDefaultConfig().ResourceAttributes,
+		MaxAttempts:        3,
+		MaxBackoff:         20 * time.Second,
 	}
 
 	systemConfig := detectorCreateDefaultConfig()
@@ -100,7 +103,6 @@ func TestLoadConfig(t *testing.T) {
 				DetectorConfig: systemConfig,
 				ClientConfig:   cfg,
 				Override:       false,
-				Attributes:     []string{"a", "b"},
 			},
 		},
 		{
@@ -131,6 +133,16 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
+			id: component.NewIDWithName(metadata.Type, "refresh"),
+			expected: &Config{
+				Detectors:       []string{"system"},
+				ClientConfig:    cfg,
+				Override:        false,
+				DetectorConfig:  detectorCreateDefaultConfig(),
+				RefreshInterval: 5 * time.Second,
+			},
+		},
+		{
 			id:           component.NewIDWithName(metadata.Type, "invalid"),
 			errorMessage: "hostname_sources contains invalid value: \"invalid_source\"",
 		},
@@ -148,10 +160,10 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, sub.Unmarshal(cfg))
 
 			if tt.expected == nil {
-				assert.EqualError(t, component.ValidateConfig(cfg), tt.errorMessage)
+				assert.ErrorContains(t, xconfmap.Validate(cfg), tt.errorMessage)
 				return
 			}
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.EqualExportedValues(t, *tt.expected.(*Config), *cfg.(*Config))
 		})
 	}
@@ -215,4 +227,75 @@ func TestGetConfigFromType(t *testing.T) {
 			assert.Equal(t, tt.expectedConfig, output)
 		})
 	}
+}
+
+// TestGetConfigFromType_AllDetectors tests GetConfigFromType for all detector types
+// to ensure complete coverage of the switch statement
+func TestGetConfigFromType_AllDetectors(t *testing.T) {
+	defaultConfig := detectorCreateDefaultConfig()
+
+	tests := []struct {
+		name         string
+		detectorType internal.DetectorType
+	}{
+		{"ECS", "ecs"},
+		{"EKS", "eks"},
+		{"ElasticBeanstalk", "elastic_beanstalk"},
+		{"Azure", "azure"},
+		{"AKS", "aks"},
+		{"Consul", "consul"},
+		{"DigitalOcean", "digitalocean"},
+		{"Docker", "docker"},
+		{"GCP", "gcp"},
+		{"Hetzner", "hetzner"},
+		{"OpenShift", "openshift"},
+		{"Nova", "nova"},
+		{"OracleCloud", "oraclecloud"},
+		{"K8sNode", "k8snode"},
+		{"Kubeadm", "kubeadm"},
+		{"Akamai", "akamai"},
+		{"Scaleway", "scaleway"},
+		{"Upcloud", "upcloud"},
+		{"Vultr", "vultr"},
+		{"AlibabaECS", "alibaba_ecs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := defaultConfig.GetConfigFromType(tt.detectorType)
+			assert.NotNil(t, config, "config should not be nil for %s detector", tt.detectorType)
+		})
+	}
+}
+
+// TestDetectorCreateDefaultConfig tests that detectorCreateDefaultConfig creates
+// valid default configurations for all detectors
+func TestDetectorCreateDefaultConfig(t *testing.T) {
+	config := detectorCreateDefaultConfig()
+
+	// Verify all detector configs are initialized
+	assert.NotNil(t, config.EC2Config)
+	assert.NotNil(t, config.ECSConfig)
+	assert.NotNil(t, config.EKSConfig)
+	assert.NotNil(t, config.ElasticbeanstalkConfig)
+	assert.NotNil(t, config.LambdaConfig)
+	assert.NotNil(t, config.AzureConfig)
+	assert.NotNil(t, config.AksConfig)
+	assert.NotNil(t, config.ConsulConfig)
+	assert.NotNil(t, config.DigitalOceanConfig)
+	assert.NotNil(t, config.DockerConfig)
+	assert.NotNil(t, config.GcpConfig)
+	assert.NotNil(t, config.HerokuConfig)
+	assert.NotNil(t, config.HetznerConfig)
+	assert.NotNil(t, config.SystemConfig)
+	assert.NotNil(t, config.OpenShiftConfig)
+	assert.NotNil(t, config.OpenStackNovaConfig)
+	assert.NotNil(t, config.OracleCloudConfig)
+	assert.NotNil(t, config.K8SNodeConfig)
+	assert.NotNil(t, config.KubeadmConfig)
+	assert.NotNil(t, config.AkamaiConfig)
+	assert.NotNil(t, config.ScalewayConfig)
+	assert.NotNil(t, config.UpcloudConfig)
+	assert.NotNil(t, config.VultrConfig)
+	assert.NotNil(t, config.AlibabaECSConfig)
 }

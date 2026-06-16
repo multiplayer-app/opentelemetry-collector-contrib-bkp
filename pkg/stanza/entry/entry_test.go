@@ -182,14 +182,14 @@ func TestCopyNil(t *testing.T) {
 	require.Equal(t, now, cp.ObservedTimestamp)
 	require.Equal(t, time.Time{}, cp.Timestamp)
 	require.Equal(t, Severity(0), cp.Severity)
-	require.Equal(t, "", cp.SeverityText)
+	require.Empty(t, cp.SeverityText)
 	require.Equal(t, map[string]any{}, cp.Attributes)
 	require.Equal(t, map[string]any{}, cp.Resource)
 	require.Nil(t, cp.Body)
 	require.Equal(t, []byte{}, cp.TraceID)
 	require.Equal(t, []byte{}, cp.SpanID)
 	require.Equal(t, []byte{}, cp.TraceFlags)
-	require.Equal(t, "", cp.ScopeName)
+	require.Empty(t, cp.ScopeName)
 }
 
 func TestFieldFromString(t *testing.T) {
@@ -200,46 +200,41 @@ func TestFieldFromString(t *testing.T) {
 		expectedError bool
 	}{
 		{
-			"Body",
-			"body",
-			Field{BodyField{[]string{}}},
-			false,
+			name:   "Body",
+			input:  "body",
+			output: Field{FieldInterface: BodyField{Keys: []string{}}},
 		},
 		{
-			"PrefixedBody",
-			"body.test",
-			Field{BodyField{[]string{"test"}}},
-			false,
+			name:   "PrefixedBody",
+			input:  "body.test",
+			output: Field{FieldInterface: BodyField{Keys: []string{"test"}}},
 		},
 		{
-			"NestedBody",
-			"body.test.foo.bar",
-			Field{BodyField{[]string{"test", "foo", "bar"}}},
-			false,
+			name:   "NestedBody",
+			input:  "body.test.foo.bar",
+			output: Field{FieldInterface: BodyField{Keys: []string{"test", "foo", "bar"}}},
 		},
 		{
-			"SimpleAttribute",
-			"attributes.test",
-			Field{AttributeField{[]string{"test"}}},
-			false,
+			name:   "SimpleAttribute",
+			input:  "attributes.test",
+			output: Field{FieldInterface: AttributeField{Keys: []string{"test"}}},
 		},
 		{
-			"NestedAttribute",
-			"attributes.test.foo.bar",
-			Field{AttributeField{[]string{"test", "foo", "bar"}}},
-			false,
+			name:   "NestedAttribute",
+			input:  "attributes.test.foo.bar",
+			output: Field{FieldInterface: AttributeField{Keys: []string{"test", "foo", "bar"}}},
 		},
 		{
-			"SimpleResource",
-			"resource.test",
-			Field{ResourceField{[]string{"test"}}},
-			false,
+			name:  "SimpleResource",
+			input: "resource.test",
+			output: Field{
+				FieldInterface: ResourceField{Keys: []string{"test"}},
+			},
 		},
 		{
-			"NestedResource",
-			"resource.test.foo.bar",
-			Field{ResourceField{[]string{"test", "foo", "bar"}}},
-			false,
+			name:   "NestedResource",
+			input:  "resource.test.foo.bar",
+			output: Field{FieldInterface: ResourceField{Keys: []string{"test", "foo", "bar"}}},
 		},
 	}
 

@@ -16,7 +16,8 @@ func addCPUMetrics(
 	s *stats.CPUStats,
 	currentTime pcommon.Timestamp,
 	r resources,
-	nodeCPULimit float64) {
+	nodeCPULimit float64,
+) {
 	if s == nil {
 		return
 	}
@@ -34,9 +35,8 @@ func addCPUUtilizationMetrics(
 	usageCores float64,
 	currentTime pcommon.Timestamp,
 	r resources,
-	nodeCPULimit float64) {
-	cpuMetrics.Utilization(mb, currentTime, usageCores)
-
+	nodeCPULimit float64,
+) {
 	if nodeCPULimit > 0 {
 		cpuMetrics.NodeUtilization(mb, currentTime, usageCores/nodeCPULimit)
 	}

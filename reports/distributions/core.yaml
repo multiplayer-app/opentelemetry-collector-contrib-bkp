@@ -5,9 +5,8 @@ components:
     exporter:
         - file
         - kafka
-        - opencensus
         - prometheus
-        - prometheusremotewrite
+        - prometheus_remote_write
         - zipkin
     extension:
         - health_check
@@ -19,9 +18,20 @@ components:
         - resource
         - span
     receiver:
-        - hostmetrics
+        - host_metrics
         - jaeger
         - kafka
-        - opencensus
         - prometheus
         - zipkin
+    scraper:
+        - cpu
+        - disk
+        - filesystem
+        - load
+        - memory
+        - network
+        - nfs
+        - paging
+        - process
+        - processes
+        - system

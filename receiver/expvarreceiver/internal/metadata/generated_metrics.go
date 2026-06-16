@@ -11,10 +11,131 @@ import (
 	"go.opentelemetry.io/collector/receiver"
 )
 
+const (
+	AggregationStrategySum = "sum"
+	AggregationStrategyAvg = "avg"
+	AggregationStrategyMin = "min"
+	AggregationStrategyMax = "max"
+)
+
+var MetricsInfo = metricsInfo{
+	ProcessRuntimeMemstatsBuckHashSys: metricInfo{
+		Name: "process.runtime.memstats.buck_hash_sys",
+	},
+	ProcessRuntimeMemstatsFrees: metricInfo{
+		Name: "process.runtime.memstats.frees",
+	},
+	ProcessRuntimeMemstatsGcCPUFraction: metricInfo{
+		Name: "process.runtime.memstats.gc_cpu_fraction",
+	},
+	ProcessRuntimeMemstatsGcSys: metricInfo{
+		Name: "process.runtime.memstats.gc_sys",
+	},
+	ProcessRuntimeMemstatsHeapAlloc: metricInfo{
+		Name: "process.runtime.memstats.heap_alloc",
+	},
+	ProcessRuntimeMemstatsHeapIdle: metricInfo{
+		Name: "process.runtime.memstats.heap_idle",
+	},
+	ProcessRuntimeMemstatsHeapInuse: metricInfo{
+		Name: "process.runtime.memstats.heap_inuse",
+	},
+	ProcessRuntimeMemstatsHeapObjects: metricInfo{
+		Name: "process.runtime.memstats.heap_objects",
+	},
+	ProcessRuntimeMemstatsHeapReleased: metricInfo{
+		Name: "process.runtime.memstats.heap_released",
+	},
+	ProcessRuntimeMemstatsHeapSys: metricInfo{
+		Name: "process.runtime.memstats.heap_sys",
+	},
+	ProcessRuntimeMemstatsLastPause: metricInfo{
+		Name: "process.runtime.memstats.last_pause",
+	},
+	ProcessRuntimeMemstatsLookups: metricInfo{
+		Name: "process.runtime.memstats.lookups",
+	},
+	ProcessRuntimeMemstatsMallocs: metricInfo{
+		Name: "process.runtime.memstats.mallocs",
+	},
+	ProcessRuntimeMemstatsMcacheInuse: metricInfo{
+		Name: "process.runtime.memstats.mcache_inuse",
+	},
+	ProcessRuntimeMemstatsMcacheSys: metricInfo{
+		Name: "process.runtime.memstats.mcache_sys",
+	},
+	ProcessRuntimeMemstatsMspanInuse: metricInfo{
+		Name: "process.runtime.memstats.mspan_inuse",
+	},
+	ProcessRuntimeMemstatsMspanSys: metricInfo{
+		Name: "process.runtime.memstats.mspan_sys",
+	},
+	ProcessRuntimeMemstatsNextGc: metricInfo{
+		Name: "process.runtime.memstats.next_gc",
+	},
+	ProcessRuntimeMemstatsNumForcedGc: metricInfo{
+		Name: "process.runtime.memstats.num_forced_gc",
+	},
+	ProcessRuntimeMemstatsNumGc: metricInfo{
+		Name: "process.runtime.memstats.num_gc",
+	},
+	ProcessRuntimeMemstatsOtherSys: metricInfo{
+		Name: "process.runtime.memstats.other_sys",
+	},
+	ProcessRuntimeMemstatsPauseTotal: metricInfo{
+		Name: "process.runtime.memstats.pause_total",
+	},
+	ProcessRuntimeMemstatsStackInuse: metricInfo{
+		Name: "process.runtime.memstats.stack_inuse",
+	},
+	ProcessRuntimeMemstatsStackSys: metricInfo{
+		Name: "process.runtime.memstats.stack_sys",
+	},
+	ProcessRuntimeMemstatsSys: metricInfo{
+		Name: "process.runtime.memstats.sys",
+	},
+	ProcessRuntimeMemstatsTotalAlloc: metricInfo{
+		Name: "process.runtime.memstats.total_alloc",
+	},
+}
+
+type metricsInfo struct {
+	ProcessRuntimeMemstatsBuckHashSys   metricInfo
+	ProcessRuntimeMemstatsFrees         metricInfo
+	ProcessRuntimeMemstatsGcCPUFraction metricInfo
+	ProcessRuntimeMemstatsGcSys         metricInfo
+	ProcessRuntimeMemstatsHeapAlloc     metricInfo
+	ProcessRuntimeMemstatsHeapIdle      metricInfo
+	ProcessRuntimeMemstatsHeapInuse     metricInfo
+	ProcessRuntimeMemstatsHeapObjects   metricInfo
+	ProcessRuntimeMemstatsHeapReleased  metricInfo
+	ProcessRuntimeMemstatsHeapSys       metricInfo
+	ProcessRuntimeMemstatsLastPause     metricInfo
+	ProcessRuntimeMemstatsLookups       metricInfo
+	ProcessRuntimeMemstatsMallocs       metricInfo
+	ProcessRuntimeMemstatsMcacheInuse   metricInfo
+	ProcessRuntimeMemstatsMcacheSys     metricInfo
+	ProcessRuntimeMemstatsMspanInuse    metricInfo
+	ProcessRuntimeMemstatsMspanSys      metricInfo
+	ProcessRuntimeMemstatsNextGc        metricInfo
+	ProcessRuntimeMemstatsNumForcedGc   metricInfo
+	ProcessRuntimeMemstatsNumGc         metricInfo
+	ProcessRuntimeMemstatsOtherSys      metricInfo
+	ProcessRuntimeMemstatsPauseTotal    metricInfo
+	ProcessRuntimeMemstatsStackInuse    metricInfo
+	ProcessRuntimeMemstatsStackSys      metricInfo
+	ProcessRuntimeMemstatsSys           metricInfo
+	ProcessRuntimeMemstatsTotalAlloc    metricInfo
+}
+
+type metricInfo struct {
+	Name string
+}
+
 type metricProcessRuntimeMemstatsBuckHashSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsBuckHashSysMetricConfig // metric config provided by user.
+	capacity int                                           // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.buck_hash_sys metric with initial data.
@@ -53,8 +174,9 @@ func (m *metricProcessRuntimeMemstatsBuckHashSys) emit(metrics pmetric.MetricSli
 	}
 }
 
-func newMetricProcessRuntimeMemstatsBuckHashSys(cfg MetricConfig) metricProcessRuntimeMemstatsBuckHashSys {
+func newMetricProcessRuntimeMemstatsBuckHashSys(cfg ProcessRuntimeMemstatsBuckHashSysMetricConfig) metricProcessRuntimeMemstatsBuckHashSys {
 	m := metricProcessRuntimeMemstatsBuckHashSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -63,9 +185,9 @@ func newMetricProcessRuntimeMemstatsBuckHashSys(cfg MetricConfig) metricProcessR
 }
 
 type metricProcessRuntimeMemstatsFrees struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                          // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsFreesMetricConfig // metric config provided by user.
+	capacity int                                     // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.frees metric with initial data.
@@ -104,8 +226,9 @@ func (m *metricProcessRuntimeMemstatsFrees) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricProcessRuntimeMemstatsFrees(cfg MetricConfig) metricProcessRuntimeMemstatsFrees {
+func newMetricProcessRuntimeMemstatsFrees(cfg ProcessRuntimeMemstatsFreesMetricConfig) metricProcessRuntimeMemstatsFrees {
 	m := metricProcessRuntimeMemstatsFrees{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -114,9 +237,9 @@ func newMetricProcessRuntimeMemstatsFrees(cfg MetricConfig) metricProcessRuntime
 }
 
 type metricProcessRuntimeMemstatsGcCPUFraction struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                  // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsGcCPUFractionMetricConfig // metric config provided by user.
+	capacity int                                             // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.gc_cpu_fraction metric with initial data.
@@ -153,8 +276,9 @@ func (m *metricProcessRuntimeMemstatsGcCPUFraction) emit(metrics pmetric.MetricS
 	}
 }
 
-func newMetricProcessRuntimeMemstatsGcCPUFraction(cfg MetricConfig) metricProcessRuntimeMemstatsGcCPUFraction {
+func newMetricProcessRuntimeMemstatsGcCPUFraction(cfg ProcessRuntimeMemstatsGcCPUFractionMetricConfig) metricProcessRuntimeMemstatsGcCPUFraction {
 	m := metricProcessRuntimeMemstatsGcCPUFraction{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -163,9 +287,9 @@ func newMetricProcessRuntimeMemstatsGcCPUFraction(cfg MetricConfig) metricProces
 }
 
 type metricProcessRuntimeMemstatsGcSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                          // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsGcSysMetricConfig // metric config provided by user.
+	capacity int                                     // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.gc_sys metric with initial data.
@@ -204,8 +328,9 @@ func (m *metricProcessRuntimeMemstatsGcSys) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricProcessRuntimeMemstatsGcSys(cfg MetricConfig) metricProcessRuntimeMemstatsGcSys {
+func newMetricProcessRuntimeMemstatsGcSys(cfg ProcessRuntimeMemstatsGcSysMetricConfig) metricProcessRuntimeMemstatsGcSys {
 	m := metricProcessRuntimeMemstatsGcSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -214,9 +339,9 @@ func newMetricProcessRuntimeMemstatsGcSys(cfg MetricConfig) metricProcessRuntime
 }
 
 type metricProcessRuntimeMemstatsHeapAlloc struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                              // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapAllocMetricConfig // metric config provided by user.
+	capacity int                                         // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_alloc metric with initial data.
@@ -255,8 +380,9 @@ func (m *metricProcessRuntimeMemstatsHeapAlloc) emit(metrics pmetric.MetricSlice
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapAlloc(cfg MetricConfig) metricProcessRuntimeMemstatsHeapAlloc {
+func newMetricProcessRuntimeMemstatsHeapAlloc(cfg ProcessRuntimeMemstatsHeapAllocMetricConfig) metricProcessRuntimeMemstatsHeapAlloc {
 	m := metricProcessRuntimeMemstatsHeapAlloc{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -265,9 +391,9 @@ func newMetricProcessRuntimeMemstatsHeapAlloc(cfg MetricConfig) metricProcessRun
 }
 
 type metricProcessRuntimeMemstatsHeapIdle struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                             // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapIdleMetricConfig // metric config provided by user.
+	capacity int                                        // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_idle metric with initial data.
@@ -306,8 +432,9 @@ func (m *metricProcessRuntimeMemstatsHeapIdle) emit(metrics pmetric.MetricSlice)
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapIdle(cfg MetricConfig) metricProcessRuntimeMemstatsHeapIdle {
+func newMetricProcessRuntimeMemstatsHeapIdle(cfg ProcessRuntimeMemstatsHeapIdleMetricConfig) metricProcessRuntimeMemstatsHeapIdle {
 	m := metricProcessRuntimeMemstatsHeapIdle{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -316,9 +443,9 @@ func newMetricProcessRuntimeMemstatsHeapIdle(cfg MetricConfig) metricProcessRunt
 }
 
 type metricProcessRuntimeMemstatsHeapInuse struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                              // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapInuseMetricConfig // metric config provided by user.
+	capacity int                                         // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_inuse metric with initial data.
@@ -357,8 +484,9 @@ func (m *metricProcessRuntimeMemstatsHeapInuse) emit(metrics pmetric.MetricSlice
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapInuse(cfg MetricConfig) metricProcessRuntimeMemstatsHeapInuse {
+func newMetricProcessRuntimeMemstatsHeapInuse(cfg ProcessRuntimeMemstatsHeapInuseMetricConfig) metricProcessRuntimeMemstatsHeapInuse {
 	m := metricProcessRuntimeMemstatsHeapInuse{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -367,9 +495,9 @@ func newMetricProcessRuntimeMemstatsHeapInuse(cfg MetricConfig) metricProcessRun
 }
 
 type metricProcessRuntimeMemstatsHeapObjects struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapObjectsMetricConfig // metric config provided by user.
+	capacity int                                           // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_objects metric with initial data.
@@ -408,8 +536,9 @@ func (m *metricProcessRuntimeMemstatsHeapObjects) emit(metrics pmetric.MetricSli
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapObjects(cfg MetricConfig) metricProcessRuntimeMemstatsHeapObjects {
+func newMetricProcessRuntimeMemstatsHeapObjects(cfg ProcessRuntimeMemstatsHeapObjectsMetricConfig) metricProcessRuntimeMemstatsHeapObjects {
 	m := metricProcessRuntimeMemstatsHeapObjects{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -418,9 +547,9 @@ func newMetricProcessRuntimeMemstatsHeapObjects(cfg MetricConfig) metricProcessR
 }
 
 type metricProcessRuntimeMemstatsHeapReleased struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                 // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapReleasedMetricConfig // metric config provided by user.
+	capacity int                                            // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_released metric with initial data.
@@ -459,8 +588,9 @@ func (m *metricProcessRuntimeMemstatsHeapReleased) emit(metrics pmetric.MetricSl
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapReleased(cfg MetricConfig) metricProcessRuntimeMemstatsHeapReleased {
+func newMetricProcessRuntimeMemstatsHeapReleased(cfg ProcessRuntimeMemstatsHeapReleasedMetricConfig) metricProcessRuntimeMemstatsHeapReleased {
 	m := metricProcessRuntimeMemstatsHeapReleased{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -469,9 +599,9 @@ func newMetricProcessRuntimeMemstatsHeapReleased(cfg MetricConfig) metricProcess
 }
 
 type metricProcessRuntimeMemstatsHeapSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                            // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsHeapSysMetricConfig // metric config provided by user.
+	capacity int                                       // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.heap_sys metric with initial data.
@@ -510,8 +640,9 @@ func (m *metricProcessRuntimeMemstatsHeapSys) emit(metrics pmetric.MetricSlice) 
 	}
 }
 
-func newMetricProcessRuntimeMemstatsHeapSys(cfg MetricConfig) metricProcessRuntimeMemstatsHeapSys {
+func newMetricProcessRuntimeMemstatsHeapSys(cfg ProcessRuntimeMemstatsHeapSysMetricConfig) metricProcessRuntimeMemstatsHeapSys {
 	m := metricProcessRuntimeMemstatsHeapSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -520,9 +651,9 @@ func newMetricProcessRuntimeMemstatsHeapSys(cfg MetricConfig) metricProcessRunti
 }
 
 type metricProcessRuntimeMemstatsLastPause struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                              // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsLastPauseMetricConfig // metric config provided by user.
+	capacity int                                         // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.last_pause metric with initial data.
@@ -559,8 +690,9 @@ func (m *metricProcessRuntimeMemstatsLastPause) emit(metrics pmetric.MetricSlice
 	}
 }
 
-func newMetricProcessRuntimeMemstatsLastPause(cfg MetricConfig) metricProcessRuntimeMemstatsLastPause {
+func newMetricProcessRuntimeMemstatsLastPause(cfg ProcessRuntimeMemstatsLastPauseMetricConfig) metricProcessRuntimeMemstatsLastPause {
 	m := metricProcessRuntimeMemstatsLastPause{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -569,9 +701,9 @@ func newMetricProcessRuntimeMemstatsLastPause(cfg MetricConfig) metricProcessRun
 }
 
 type metricProcessRuntimeMemstatsLookups struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                            // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsLookupsMetricConfig // metric config provided by user.
+	capacity int                                       // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.lookups metric with initial data.
@@ -610,8 +742,9 @@ func (m *metricProcessRuntimeMemstatsLookups) emit(metrics pmetric.MetricSlice) 
 	}
 }
 
-func newMetricProcessRuntimeMemstatsLookups(cfg MetricConfig) metricProcessRuntimeMemstatsLookups {
+func newMetricProcessRuntimeMemstatsLookups(cfg ProcessRuntimeMemstatsLookupsMetricConfig) metricProcessRuntimeMemstatsLookups {
 	m := metricProcessRuntimeMemstatsLookups{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -620,9 +753,9 @@ func newMetricProcessRuntimeMemstatsLookups(cfg MetricConfig) metricProcessRunti
 }
 
 type metricProcessRuntimeMemstatsMallocs struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                            // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsMallocsMetricConfig // metric config provided by user.
+	capacity int                                       // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.mallocs metric with initial data.
@@ -661,8 +794,9 @@ func (m *metricProcessRuntimeMemstatsMallocs) emit(metrics pmetric.MetricSlice) 
 	}
 }
 
-func newMetricProcessRuntimeMemstatsMallocs(cfg MetricConfig) metricProcessRuntimeMemstatsMallocs {
+func newMetricProcessRuntimeMemstatsMallocs(cfg ProcessRuntimeMemstatsMallocsMetricConfig) metricProcessRuntimeMemstatsMallocs {
 	m := metricProcessRuntimeMemstatsMallocs{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -671,9 +805,9 @@ func newMetricProcessRuntimeMemstatsMallocs(cfg MetricConfig) metricProcessRunti
 }
 
 type metricProcessRuntimeMemstatsMcacheInuse struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsMcacheInuseMetricConfig // metric config provided by user.
+	capacity int                                           // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.mcache_inuse metric with initial data.
@@ -712,8 +846,9 @@ func (m *metricProcessRuntimeMemstatsMcacheInuse) emit(metrics pmetric.MetricSli
 	}
 }
 
-func newMetricProcessRuntimeMemstatsMcacheInuse(cfg MetricConfig) metricProcessRuntimeMemstatsMcacheInuse {
+func newMetricProcessRuntimeMemstatsMcacheInuse(cfg ProcessRuntimeMemstatsMcacheInuseMetricConfig) metricProcessRuntimeMemstatsMcacheInuse {
 	m := metricProcessRuntimeMemstatsMcacheInuse{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -722,9 +857,9 @@ func newMetricProcessRuntimeMemstatsMcacheInuse(cfg MetricConfig) metricProcessR
 }
 
 type metricProcessRuntimeMemstatsMcacheSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                              // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsMcacheSysMetricConfig // metric config provided by user.
+	capacity int                                         // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.mcache_sys metric with initial data.
@@ -763,8 +898,9 @@ func (m *metricProcessRuntimeMemstatsMcacheSys) emit(metrics pmetric.MetricSlice
 	}
 }
 
-func newMetricProcessRuntimeMemstatsMcacheSys(cfg MetricConfig) metricProcessRuntimeMemstatsMcacheSys {
+func newMetricProcessRuntimeMemstatsMcacheSys(cfg ProcessRuntimeMemstatsMcacheSysMetricConfig) metricProcessRuntimeMemstatsMcacheSys {
 	m := metricProcessRuntimeMemstatsMcacheSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -773,9 +909,9 @@ func newMetricProcessRuntimeMemstatsMcacheSys(cfg MetricConfig) metricProcessRun
 }
 
 type metricProcessRuntimeMemstatsMspanInuse struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                               // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsMspanInuseMetricConfig // metric config provided by user.
+	capacity int                                          // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.mspan_inuse metric with initial data.
@@ -814,8 +950,9 @@ func (m *metricProcessRuntimeMemstatsMspanInuse) emit(metrics pmetric.MetricSlic
 	}
 }
 
-func newMetricProcessRuntimeMemstatsMspanInuse(cfg MetricConfig) metricProcessRuntimeMemstatsMspanInuse {
+func newMetricProcessRuntimeMemstatsMspanInuse(cfg ProcessRuntimeMemstatsMspanInuseMetricConfig) metricProcessRuntimeMemstatsMspanInuse {
 	m := metricProcessRuntimeMemstatsMspanInuse{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -824,9 +961,9 @@ func newMetricProcessRuntimeMemstatsMspanInuse(cfg MetricConfig) metricProcessRu
 }
 
 type metricProcessRuntimeMemstatsMspanSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                             // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsMspanSysMetricConfig // metric config provided by user.
+	capacity int                                        // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.mspan_sys metric with initial data.
@@ -865,8 +1002,9 @@ func (m *metricProcessRuntimeMemstatsMspanSys) emit(metrics pmetric.MetricSlice)
 	}
 }
 
-func newMetricProcessRuntimeMemstatsMspanSys(cfg MetricConfig) metricProcessRuntimeMemstatsMspanSys {
+func newMetricProcessRuntimeMemstatsMspanSys(cfg ProcessRuntimeMemstatsMspanSysMetricConfig) metricProcessRuntimeMemstatsMspanSys {
 	m := metricProcessRuntimeMemstatsMspanSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -875,9 +1013,9 @@ func newMetricProcessRuntimeMemstatsMspanSys(cfg MetricConfig) metricProcessRunt
 }
 
 type metricProcessRuntimeMemstatsNextGc struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                           // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsNextGcMetricConfig // metric config provided by user.
+	capacity int                                      // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.next_gc metric with initial data.
@@ -916,8 +1054,9 @@ func (m *metricProcessRuntimeMemstatsNextGc) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricProcessRuntimeMemstatsNextGc(cfg MetricConfig) metricProcessRuntimeMemstatsNextGc {
+func newMetricProcessRuntimeMemstatsNextGc(cfg ProcessRuntimeMemstatsNextGcMetricConfig) metricProcessRuntimeMemstatsNextGc {
 	m := metricProcessRuntimeMemstatsNextGc{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -926,9 +1065,9 @@ func newMetricProcessRuntimeMemstatsNextGc(cfg MetricConfig) metricProcessRuntim
 }
 
 type metricProcessRuntimeMemstatsNumForcedGc struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                                // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsNumForcedGcMetricConfig // metric config provided by user.
+	capacity int                                           // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.num_forced_gc metric with initial data.
@@ -967,8 +1106,9 @@ func (m *metricProcessRuntimeMemstatsNumForcedGc) emit(metrics pmetric.MetricSli
 	}
 }
 
-func newMetricProcessRuntimeMemstatsNumForcedGc(cfg MetricConfig) metricProcessRuntimeMemstatsNumForcedGc {
+func newMetricProcessRuntimeMemstatsNumForcedGc(cfg ProcessRuntimeMemstatsNumForcedGcMetricConfig) metricProcessRuntimeMemstatsNumForcedGc {
 	m := metricProcessRuntimeMemstatsNumForcedGc{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -977,9 +1117,9 @@ func newMetricProcessRuntimeMemstatsNumForcedGc(cfg MetricConfig) metricProcessR
 }
 
 type metricProcessRuntimeMemstatsNumGc struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                          // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsNumGcMetricConfig // metric config provided by user.
+	capacity int                                     // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.num_gc metric with initial data.
@@ -1018,8 +1158,9 @@ func (m *metricProcessRuntimeMemstatsNumGc) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricProcessRuntimeMemstatsNumGc(cfg MetricConfig) metricProcessRuntimeMemstatsNumGc {
+func newMetricProcessRuntimeMemstatsNumGc(cfg ProcessRuntimeMemstatsNumGcMetricConfig) metricProcessRuntimeMemstatsNumGc {
 	m := metricProcessRuntimeMemstatsNumGc{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1028,9 +1169,9 @@ func newMetricProcessRuntimeMemstatsNumGc(cfg MetricConfig) metricProcessRuntime
 }
 
 type metricProcessRuntimeMemstatsOtherSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                             // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsOtherSysMetricConfig // metric config provided by user.
+	capacity int                                        // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.other_sys metric with initial data.
@@ -1069,8 +1210,9 @@ func (m *metricProcessRuntimeMemstatsOtherSys) emit(metrics pmetric.MetricSlice)
 	}
 }
 
-func newMetricProcessRuntimeMemstatsOtherSys(cfg MetricConfig) metricProcessRuntimeMemstatsOtherSys {
+func newMetricProcessRuntimeMemstatsOtherSys(cfg ProcessRuntimeMemstatsOtherSysMetricConfig) metricProcessRuntimeMemstatsOtherSys {
 	m := metricProcessRuntimeMemstatsOtherSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1079,9 +1221,9 @@ func newMetricProcessRuntimeMemstatsOtherSys(cfg MetricConfig) metricProcessRunt
 }
 
 type metricProcessRuntimeMemstatsPauseTotal struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                               // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsPauseTotalMetricConfig // metric config provided by user.
+	capacity int                                          // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.pause_total metric with initial data.
@@ -1120,8 +1262,9 @@ func (m *metricProcessRuntimeMemstatsPauseTotal) emit(metrics pmetric.MetricSlic
 	}
 }
 
-func newMetricProcessRuntimeMemstatsPauseTotal(cfg MetricConfig) metricProcessRuntimeMemstatsPauseTotal {
+func newMetricProcessRuntimeMemstatsPauseTotal(cfg ProcessRuntimeMemstatsPauseTotalMetricConfig) metricProcessRuntimeMemstatsPauseTotal {
 	m := metricProcessRuntimeMemstatsPauseTotal{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1130,9 +1273,9 @@ func newMetricProcessRuntimeMemstatsPauseTotal(cfg MetricConfig) metricProcessRu
 }
 
 type metricProcessRuntimeMemstatsStackInuse struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                               // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsStackInuseMetricConfig // metric config provided by user.
+	capacity int                                          // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.stack_inuse metric with initial data.
@@ -1171,8 +1314,9 @@ func (m *metricProcessRuntimeMemstatsStackInuse) emit(metrics pmetric.MetricSlic
 	}
 }
 
-func newMetricProcessRuntimeMemstatsStackInuse(cfg MetricConfig) metricProcessRuntimeMemstatsStackInuse {
+func newMetricProcessRuntimeMemstatsStackInuse(cfg ProcessRuntimeMemstatsStackInuseMetricConfig) metricProcessRuntimeMemstatsStackInuse {
 	m := metricProcessRuntimeMemstatsStackInuse{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1181,9 +1325,9 @@ func newMetricProcessRuntimeMemstatsStackInuse(cfg MetricConfig) metricProcessRu
 }
 
 type metricProcessRuntimeMemstatsStackSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                             // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsStackSysMetricConfig // metric config provided by user.
+	capacity int                                        // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.stack_sys metric with initial data.
@@ -1222,8 +1366,9 @@ func (m *metricProcessRuntimeMemstatsStackSys) emit(metrics pmetric.MetricSlice)
 	}
 }
 
-func newMetricProcessRuntimeMemstatsStackSys(cfg MetricConfig) metricProcessRuntimeMemstatsStackSys {
+func newMetricProcessRuntimeMemstatsStackSys(cfg ProcessRuntimeMemstatsStackSysMetricConfig) metricProcessRuntimeMemstatsStackSys {
 	m := metricProcessRuntimeMemstatsStackSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1232,9 +1377,9 @@ func newMetricProcessRuntimeMemstatsStackSys(cfg MetricConfig) metricProcessRunt
 }
 
 type metricProcessRuntimeMemstatsSys struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                        // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsSysMetricConfig // metric config provided by user.
+	capacity int                                   // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.sys metric with initial data.
@@ -1273,8 +1418,9 @@ func (m *metricProcessRuntimeMemstatsSys) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricProcessRuntimeMemstatsSys(cfg MetricConfig) metricProcessRuntimeMemstatsSys {
+func newMetricProcessRuntimeMemstatsSys(cfg ProcessRuntimeMemstatsSysMetricConfig) metricProcessRuntimeMemstatsSys {
 	m := metricProcessRuntimeMemstatsSys{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1283,9 +1429,9 @@ func newMetricProcessRuntimeMemstatsSys(cfg MetricConfig) metricProcessRuntimeMe
 }
 
 type metricProcessRuntimeMemstatsTotalAlloc struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                               // data buffer for generated metric.
+	config   ProcessRuntimeMemstatsTotalAllocMetricConfig // metric config provided by user.
+	capacity int                                          // max observed number of data points added to the metric.
 }
 
 // init fills process.runtime.memstats.total_alloc metric with initial data.
@@ -1324,8 +1470,9 @@ func (m *metricProcessRuntimeMemstatsTotalAlloc) emit(metrics pmetric.MetricSlic
 	}
 }
 
-func newMetricProcessRuntimeMemstatsTotalAlloc(cfg MetricConfig) metricProcessRuntimeMemstatsTotalAlloc {
+func newMetricProcessRuntimeMemstatsTotalAlloc(cfg ProcessRuntimeMemstatsTotalAllocMetricConfig) metricProcessRuntimeMemstatsTotalAlloc {
 	m := metricProcessRuntimeMemstatsTotalAlloc{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1386,7 +1533,6 @@ func WithStartTime(startTime pcommon.Timestamp) MetricBuilderOption {
 		mb.startTime = startTime
 	})
 }
-
 func NewMetricsBuilder(mbc MetricsBuilderConfig, settings receiver.Settings, options ...MetricBuilderOption) *MetricsBuilder {
 	mb := &MetricsBuilder{
 		config:                                  mbc,
@@ -1481,7 +1627,7 @@ func WithStartTimeOverride(start pcommon.Timestamp) ResourceMetricsOption {
 func (mb *MetricsBuilder) EmitForResource(options ...ResourceMetricsOption) {
 	rm := pmetric.NewResourceMetrics()
 	ils := rm.ScopeMetrics().AppendEmpty()
-	ils.Scope().SetName("github.com/open-telemetry/opentelemetry-collector-contrib/receiver/expvarreceiver")
+	ils.Scope().SetName(ScopeName)
 	ils.Scope().SetVersion(mb.buildInfo.Version)
 	ils.Metrics().EnsureCapacity(mb.metricsCapacity)
 	mb.metricProcessRuntimeMemstatsBuckHashSys.emit(ils.Metrics())

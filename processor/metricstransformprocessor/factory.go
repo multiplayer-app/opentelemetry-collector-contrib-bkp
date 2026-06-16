@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processorhelper"
+	"go.opentelemetry.io/collector/processor/xprocessor"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/aggregateutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor/internal/metadata"
@@ -22,10 +23,11 @@ var consumerCapabilities = consumer.Capabilities{MutatesData: true}
 
 // NewFactory returns a new factory for the Metrics transform processor.
 func NewFactory() processor.Factory {
-	return processor.NewFactory(
+	return xprocessor.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		processor.WithMetrics(createMetricsProcessor, metadata.MetricsStability))
+		xprocessor.WithMetrics(createMetricsProcessor, metadata.MetricsStability),
+		xprocessor.WithDeprecatedTypeAlias(metadata.DeprecatedType))
 }
 
 func createDefaultConfig() component.Config {
@@ -61,7 +63,8 @@ func createMetricsProcessor(
 // validateConfiguration validates the input configuration has all of the required fields for the processor
 // An error is returned if there are any invalid inputs.
 func validateConfiguration(config *Config) error {
-	for _, transform := range config.Transforms {
+	for i := range config.Transforms {
+		transform := &config.Transforms[i]
 		if transform.MetricIncludeFilter.Include == "" {
 			return fmt.Errorf("missing required field %q", includeFieldName)
 		}
@@ -97,7 +100,8 @@ func validateConfiguration(config *Config) error {
 			return fmt.Errorf("%q must be in %q", submatchCaseFieldName, submatchCases)
 		}
 
-		for i, op := range transform.Operations {
+		for i := range transform.Operations {
+			op := &transform.Operations[i]
 			if !op.Action.isValid() {
 				return fmt.Errorf("operation %v: %q must be in %q", i+1, actionFieldName, operationActions)
 			}
@@ -126,8 +130,8 @@ func validateConfiguration(config *Config) error {
 // buildHelperConfig constructs the maps that will be useful for the operations
 func buildHelperConfig(config *Config, version string) ([]internalTransform, error) {
 	helperDataTransforms := make([]internalTransform, len(config.Transforms))
-	for i, t := range config.Transforms {
-
+	for i := range config.Transforms {
+		t := &config.Transforms[i]
 		if t.MetricIncludeFilter.MatchType == "" {
 			t.MetricIncludeFilter.MatchType = strictMatchType
 		}
@@ -146,7 +150,8 @@ func buildHelperConfig(config *Config, version string) ([]internalTransform, err
 			Operations:          make([]internalOperation, len(t.Operations)),
 		}
 
-		for j, op := range t.Operations {
+		for j := range t.Operations {
+			op := &t.Operations[j]
 			op.NewValue = strings.ReplaceAll(op.NewValue, "{{version}}", version)
 
 			mtpOp := internalOperation{
@@ -155,9 +160,10 @@ func buildHelperConfig(config *Config, version string) ([]internalTransform, err
 			if len(op.ValueActions) > 0 {
 				mtpOp.valueActionsMapping = createLabelValueMapping(op.ValueActions, version)
 			}
-			if op.Action == aggregateLabels {
+			switch op.Action {
+			case aggregateLabels:
 				mtpOp.labelSetMap = sliceToSet(op.LabelSet)
-			} else if op.Action == aggregateLabelValues {
+			case aggregateLabelValues:
 				mtpOp.aggregatedValuesSet = sliceToSet(op.AggregatedValues)
 			}
 			helperT.Operations[j] = mtpOp
@@ -167,7 +173,7 @@ func buildHelperConfig(config *Config, version string) ([]internalTransform, err
 	return helperDataTransforms, nil
 }
 
-func createFilter(filterConfig FilterConfig) (internalFilter, error) {
+func createFilter(filterConfig filterConfig) (internalFilter, error) {
 	switch filterConfig.MatchType {
 	case strictMatchType:
 		matchers, err := getMatcherMap(filterConfig.MatchLabels, func(str string) (StringMatcher, error) { return strictMatcher(str), nil })
@@ -187,9 +193,9 @@ func createFilter(filterConfig FilterConfig) (internalFilter, error) {
 }
 
 // createLabelValueMapping creates the labelValue rename mappings based on the valueActions
-func createLabelValueMapping(valueActions []ValueAction, version string) map[string]string {
+func createLabelValueMapping(valueActions []valueAction, version string) map[string]string {
 	mapping := make(map[string]string)
-	for i := 0; i < len(valueActions); i++ {
+	for i := range valueActions {
 		valueActions[i].NewValue = strings.ReplaceAll(valueActions[i].NewValue, "{{version}}", version)
 		mapping[valueActions[i].Value] = valueActions[i].NewValue
 	}

@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/redisreceiver/internal/metadata"
@@ -33,12 +34,16 @@ type redisScraper struct {
 
 const redisMaxDbs = 16 // Maximum possible number of redis databases
 
-func newRedisScraper(cfg *Config, settings receiver.Settings) (scraperhelper.Scraper, error) {
+func newRedisScraper(cfg *Config, settings receiver.Settings) (scraper.Metrics, error) {
 	opts := &redis.Options{
 		Addr:     cfg.Endpoint,
 		Username: cfg.Username,
 		Password: string(cfg.Password),
 		Network:  string(cfg.Transport),
+		// Avoid background goroutines that trigger goleak in tests and on shutdown races.
+		MaintNotificationsConfig: &maintnotifications.Config{
+			Mode: maintnotifications.ModeDisabled,
+		},
 	}
 
 	var err error
@@ -48,7 +53,7 @@ func newRedisScraper(cfg *Config, settings receiver.Settings) (scraperhelper.Scr
 	return newRedisScraperWithClient(newRedisClient(opts), settings, cfg)
 }
 
-func newRedisScraperWithClient(client client, settings receiver.Settings, cfg *Config) (scraperhelper.Scraper, error) {
+func newRedisScraperWithClient(client client, settings receiver.Settings, cfg *Config) (scraper.Metrics, error) {
 	configInfo, err := newConfigInfo(cfg)
 	if err != nil {
 		return nil, err
@@ -60,10 +65,9 @@ func newRedisScraperWithClient(client client, settings receiver.Settings, cfg *C
 		mb:         metadata.NewMetricsBuilder(cfg.MetricsBuilderConfig, settings),
 		configInfo: configInfo,
 	}
-	return scraperhelper.NewScraper(
-		metadata.Type,
+	return scraper.NewMetrics(
 		rs.Scrape,
-		scraperhelper.WithShutdown(rs.shutdown),
+		scraper.WithShutdown(rs.shutdown),
 	)
 }
 
@@ -96,10 +100,14 @@ func (rs *redisScraper) Scrape(context.Context) (pmetric.Metrics, error) {
 	}
 	rs.uptime = currentUptime
 
-	rs.recordCommonMetrics(now, inf)
+	mode := rs.getRedisMode(inf)
+
+	rs.recordCommonMetrics(now, inf, rs.dataPointRecorders())
+	rs.recordCommonMetrics(now, inf, rs.sentinelDataPointRecorders())
 	rs.recordKeyspaceMetrics(now, inf)
 	rs.recordRoleMetrics(now, inf)
 	rs.recordCmdMetrics(now, inf)
+	rs.recordModeMetrics(now, mode)
 	rb := rs.mb.NewResourceBuilder()
 	rb.SetRedisVersion(rs.getRedisVersion(inf))
 	rb.SetServerAddress(rs.configInfo.Address)
@@ -108,8 +116,7 @@ func (rs *redisScraper) Scrape(context.Context) (pmetric.Metrics, error) {
 }
 
 // recordCommonMetrics records metrics from Redis info key-value pairs.
-func (rs *redisScraper) recordCommonMetrics(ts pcommon.Timestamp, inf info) {
-	recorders := rs.dataPointRecorders()
+func (rs *redisScraper) recordCommonMetrics(ts pcommon.Timestamp, inf info, recorders map[string]any) {
 	for infoKey, infoVal := range inf {
 		recorder, ok := recorders[infoKey]
 		if !ok {
@@ -122,15 +129,35 @@ func (rs *redisScraper) recordCommonMetrics(ts pcommon.Timestamp, inf info) {
 			if err != nil {
 				rs.settings.Logger.Warn("failed to parse info int val", zap.String("key", infoKey),
 					zap.String("val", infoVal), zap.Error(err))
+				continue
 			}
 			recordDataPoint(ts, val)
+
 		case func(pcommon.Timestamp, float64):
 			val, err := strconv.ParseFloat(infoVal, 64)
 			if err != nil {
 				rs.settings.Logger.Warn("failed to parse info float val", zap.String("key", infoKey),
 					zap.String("val", infoVal), zap.Error(err))
+				continue
 			}
 			recordDataPoint(ts, val)
+
+		case func(pcommon.Timestamp, int64, metadata.AttributeClusterState):
+			val, err := strconv.ParseInt(infoVal, 10, 64)
+			if err != nil {
+				rs.settings.Logger.Warn("failed to parse info int val", zap.String("key", infoKey),
+					zap.String("val", infoVal), zap.Error(err))
+				continue
+			}
+			var state metadata.AttributeClusterState
+			if infoKey == "cluster_state" {
+				if infoVal == "ok" {
+					state = metadata.AttributeClusterStateOk
+				} else {
+					state = metadata.AttributeClusterStateFail
+				}
+			}
+			recordDataPoint(ts, val, state)
 		}
 	}
 }
@@ -138,11 +165,11 @@ func (rs *redisScraper) recordCommonMetrics(ts pcommon.Timestamp, inf info) {
 // recordKeyspaceMetrics records metrics from 'keyspace' Redis info key-value pairs,
 // e.g. "db0: keys=1,expires=2,avg_ttl=3".
 func (rs *redisScraper) recordKeyspaceMetrics(ts pcommon.Timestamp, inf info) {
-	for db := 0; db < redisMaxDbs; db++ {
+	for db := range redisMaxDbs {
 		key := "db" + strconv.Itoa(db)
 		str, ok := inf[key]
 		if !ok {
-			break
+			continue
 		}
 		keyspace, parsingError := parseKeyspaceString(db, str)
 		if parsingError != nil {
@@ -158,11 +185,33 @@ func (rs *redisScraper) recordKeyspaceMetrics(ts pcommon.Timestamp, inf info) {
 
 // getRedisVersion retrieves version string from 'redis_version' Redis info key-value pairs
 // e.g. "redis_version:5.0.7"
-func (rs *redisScraper) getRedisVersion(inf info) string {
+func (*redisScraper) getRedisVersion(inf info) string {
 	if str, ok := inf["redis_version"]; ok {
 		return str
 	}
 	return "unknown"
+}
+
+// getRedisMode retrieves mode string from 'redis_mode' Redis info key-value pairs
+// e.g. "redis_mode:standalone"
+func (*redisScraper) getRedisMode(inf info) string {
+	if str, ok := inf["redis_mode"]; ok {
+		return str
+	}
+	return "unknown"
+}
+
+// recordModeMetrics records metrics from 'redis_mode' Redis info key-value pairs
+// e.g. "redis_mode:standalone"
+func (rs *redisScraper) recordModeMetrics(ts pcommon.Timestamp, mode string) {
+	switch mode {
+	case "cluster":
+		rs.mb.RecordRedisModeDataPoint(ts, 1, metadata.AttributeModeCluster)
+	case "sentinel":
+		rs.mb.RecordRedisModeDataPoint(ts, 1, metadata.AttributeModeSentinel)
+	case "standalone":
+		rs.mb.RecordRedisModeDataPoint(ts, 1, metadata.AttributeModeStandalone)
+	}
 }
 
 // recordRoleMetrics records metrics from 'role' Redis info key-value pairs
@@ -196,12 +245,11 @@ func (rs *redisScraper) recordCmdMetrics(ts pcommon.Timestamp, inf info) {
 	}
 }
 
-// recordCmdStatsMetrics records metrics for a particlar Redis command.
+// recordCmdStatsMetrics records metrics for a particular Redis command.
 // Only 'calls' and 'usec' are recorded at the moment.
 // 'cmd' is the Redis command, 'val' is the values string (e.g. "calls=1685,usec=6032,usec_per_call=3.58,rejected_calls=0,failed_calls=0").
 func (rs *redisScraper) recordCmdStatsMetrics(ts pcommon.Timestamp, cmd, val string) {
-	parts := strings.Split(strings.TrimSpace(val), ",")
-	for _, element := range parts {
+	for element := range strings.SplitSeq(strings.TrimSpace(val), ",") {
 		subParts := strings.Split(element, "=")
 		if len(subParts) == 1 {
 			continue
@@ -210,9 +258,10 @@ func (rs *redisScraper) recordCmdStatsMetrics(ts pcommon.Timestamp, cmd, val str
 		if err != nil { // skip bad items
 			continue
 		}
-		if subParts[0] == "calls" {
+		switch subParts[0] {
+		case "calls":
 			rs.mb.RecordRedisCmdCallsDataPoint(ts, parsed, cmd)
-		} else if subParts[0] == "usec" {
+		case "usec":
 			rs.mb.RecordRedisCmdUsecDataPoint(ts, parsed, cmd)
 		}
 	}
@@ -232,5 +281,17 @@ func (rs *redisScraper) recordCmdLatencyMetrics(ts pcommon.Timestamp, cmd, val s
 			latency := usecs / 1e6 // metric is in seconds
 			rs.mb.RecordRedisCmdLatencyDataPoint(ts, latency, cmd, percentileAttr)
 		}
+	}
+}
+
+// sentinelDataPointRecorders returns the map of supported Sentinel metrics.
+func (rs *redisScraper) sentinelDataPointRecorders() map[string]any {
+	return map[string]any{
+		"sentinel_masters":                rs.mb.RecordRedisSentinelMastersDataPoint,
+		"sentinel_tilt_since_seconds":     rs.mb.RecordRedisSentinelTiltSinceSecondsDataPoint,
+		"sentinel_total_tilt":             rs.mb.RecordRedisSentinelTotalTiltDataPoint,
+		"sentinel_running_scripts":        rs.mb.RecordRedisSentinelRunningScriptsDataPoint,
+		"sentinel_scripts_queue_length":   rs.mb.RecordRedisSentinelScriptsQueueLengthDataPoint,
+		"sentinel_simulate_failure_flags": rs.mb.RecordRedisSentinelSimulateFailureFlagsDataPoint,
 	}
 }

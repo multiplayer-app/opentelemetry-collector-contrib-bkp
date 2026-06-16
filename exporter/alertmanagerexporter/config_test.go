@@ -4,27 +4,27 @@
 package alertmanagerexporter
 
 import (
-	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/alertmanagerexporter/internal/metadata"
 )
 
 func TestLoadConfig(t *testing.T) {
-	defaultTransport := http.DefaultTransport.(*http.Transport)
 	t.Parallel()
 
 	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
@@ -37,7 +37,6 @@ func TestLoadConfig(t *testing.T) {
 		id       component.ID
 		expected component.Config
 	}{
-
 		{
 			id:       component.NewIDWithName(metadata.Type, ""),
 			expected: defaultCfg,
@@ -48,6 +47,8 @@ func TestLoadConfig(t *testing.T) {
 				GeneratorURL:      "opentelemetry-collector",
 				DefaultSeverity:   "info",
 				SeverityAttribute: "foo",
+				APIVersion:        "v2",
+				EventLabels:       []string{"attr1", "attr2"},
 				TimeoutSettings: exporterhelper.TimeoutConfig{
 					Timeout: 10 * time.Second,
 				},
@@ -59,31 +60,30 @@ func TestLoadConfig(t *testing.T) {
 					RandomizationFactor: backoff.DefaultRandomizationFactor,
 					Multiplier:          backoff.DefaultMultiplier,
 				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
-				},
-				ClientConfig: confighttp.ClientConfig{
-					Headers: map[string]configopaque.String{
-						"can you have a . here?": "F0000000-0000-0000-0000-000000000000",
-						"header1":                "234",
-						"another":                "somevalue",
-					},
-					Endpoint: "a.new.alertmanager.target:9093",
-					TLSSetting: configtls.ClientConfig{
+				QueueSettings: func() configoptional.Optional[exporterhelper.QueueBatchConfig] {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 2
+					queue.QueueSize = 10
+					return configoptional.Some(queue)
+				}(),
+				ClientConfig: func() confighttp.ClientConfig {
+					client := confighttp.NewDefaultClientConfig()
+					client.Headers = configopaque.MapList{
+						{Name: "another", Value: "somevalue"},
+						{Name: "can you have a . here?", Value: "F0000000-0000-0000-0000-000000000000"},
+						{Name: "header1", Value: "234"},
+					}
+					client.Endpoint = "a.new.alertmanager.target:9093"
+					client.TLS = configtls.ClientConfig{
 						Config: configtls.Config{
 							CAFile: "/var/lib/mycert.pem",
 						},
-					},
-					ReadBufferSize:      0,
-					WriteBufferSize:     524288,
-					Timeout:             time.Second * 10,
-					MaxIdleConns:        &defaultTransport.MaxIdleConns,
-					MaxIdleConnsPerHost: &defaultTransport.MaxIdleConnsPerHost,
-					MaxConnsPerHost:     &defaultTransport.MaxConnsPerHost,
-					IdleConnTimeout:     &defaultTransport.IdleConnTimeout,
-				},
+					}
+					client.ReadBufferSize = 0
+					client.WriteBufferSize = 524288
+					client.Timeout = time.Second * 10
+					return client
+				}(),
 			},
 		},
 	}
@@ -97,7 +97,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
@@ -113,7 +113,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "NoEndpoint",
 			cfg: func() *Config {
 				cfg := createDefaultConfig().(*Config)
-				cfg.ClientConfig.Endpoint = ""
+				cfg.Endpoint = ""
 				return cfg
 			}(),
 			wantErr: "endpoint must be non-empty",

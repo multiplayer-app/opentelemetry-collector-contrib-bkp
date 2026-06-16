@@ -5,7 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
@@ -13,7 +13,7 @@ import (
 
 type SplitArguments[K any] struct {
 	Target    ottl.StringGetter[K]
-	Delimiter string
+	Delimiter ottl.StringGetter[K]
 }
 
 func NewSplitFactory[K any]() ottl.Factory[K] {
@@ -24,18 +24,22 @@ func createSplitFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (o
 	args, ok := oArgs.(*SplitArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("SplitFactory args must be of type *SplitArguments[K]")
+		return nil, errors.New("SplitFactory args must be of type *SplitArguments[K]")
 	}
 
 	return split(args.Target, args.Delimiter), nil
 }
 
-func split[K any](target ottl.StringGetter[K], delimiter string) ottl.ExprFunc[K] {
+func split[K any](target, delimiter ottl.StringGetter[K]) ottl.ExprFunc[K] {
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
 		if err != nil {
 			return nil, err
 		}
-		return strings.Split(val, delimiter), nil
+		delimiterVal, err := delimiter.Get(ctx, tCtx)
+		if err != nil {
+			return nil, err
+		}
+		return strings.Split(val, delimiterVal), nil
 	}
 }

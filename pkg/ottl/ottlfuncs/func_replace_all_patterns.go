@@ -5,8 +5,8 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
@@ -19,9 +19,9 @@ const (
 )
 
 type ReplaceAllPatternsArguments[K any] struct {
-	Target            ottl.PMapGetter[K]
+	Target            ottl.PMapGetSetter[K]
 	Mode              string
-	RegexPattern      string
+	RegexPattern      ottl.StringGetter[K]
 	Replacement       ottl.StringGetter[K]
 	Function          ottl.Optional[ottl.FunctionGetter[K]]
 	ReplacementFormat ottl.Optional[ottl.StringGetter[K]]
@@ -35,16 +35,16 @@ func createReplaceAllPatternsFunction[K any](_ ottl.FunctionContext, oArgs ottl.
 	args, ok := oArgs.(*ReplaceAllPatternsArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("ReplaceAllPatternsFactory args must be of type *ReplaceAllPatternsArguments[K]")
+		return nil, errors.New("ReplaceAllPatternsFactory args must be of type *ReplaceAllPatternsArguments[K]")
 	}
 
 	return replaceAllPatterns(args.Target, args.Mode, args.RegexPattern, args.Replacement, args.Function, args.ReplacementFormat)
 }
 
-func replaceAllPatterns[K any](target ottl.PMapGetter[K], mode string, regexPattern string, replacement ottl.StringGetter[K], fn ottl.Optional[ottl.FunctionGetter[K]], replacementFormat ottl.Optional[ottl.StringGetter[K]]) (ottl.ExprFunc[K], error) {
-	compiledPattern, err := regexp.Compile(regexPattern)
+func replaceAllPatterns[K any](target ottl.PMapGetSetter[K], mode string, regexPattern, replacement ottl.StringGetter[K], fn ottl.Optional[ottl.FunctionGetter[K]], replacementFormat ottl.Optional[ottl.StringGetter[K]]) (ottl.ExprFunc[K], error) {
+	compiledPattern, err := newDynamicRegex("replace_all_patterns", regexPattern)
 	if err != nil {
-		return nil, fmt.Errorf("the regex pattern supplied to replace_all_patterns is not a valid pattern: %w", err)
+		return nil, err
 	}
 	if mode != modeValue && mode != modeKey {
 		return nil, fmt.Errorf("invalid mode %v, must be either 'key' or 'value'", mode)
@@ -52,52 +52,60 @@ func replaceAllPatterns[K any](target ottl.PMapGetter[K], mode string, regexPatt
 
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
-		var replacementVal string
 		if err != nil {
 			return nil, err
 		}
+
+		var replacementVal string
 		replacementVal, err = replacement.Get(ctx, tCtx)
 		if err != nil {
 			return nil, err
 		}
-		updated := pcommon.NewMap()
-		updated.EnsureCapacity(val.Len())
-		val.Range(func(key string, originalValue pcommon.Value) bool {
-			switch mode {
-			case modeValue:
-				if compiledPattern.MatchString(originalValue.Str()) {
-					if !fn.IsEmpty() {
-						updatedString, err := applyOptReplaceFunction(ctx, tCtx, compiledPattern, fn, originalValue.Str(), replacementVal, replacementFormat)
-						if err != nil {
-							return false
-						}
-						updated.PutStr(key, updatedString)
-					} else {
-						updatedString := compiledPattern.ReplaceAllString(originalValue.Str(), replacementVal)
-						updated.PutStr(key, updatedString)
-					}
-				} else {
-					originalValue.CopyTo(updated.PutEmpty(key))
+
+		cp, err := compiledPattern.compile(ctx, tCtx)
+		if err != nil {
+			return nil, err
+		}
+
+		switch mode {
+		case modeValue:
+			for _, value := range val.All() {
+				if value.Type() != pcommon.ValueTypeStr || !cp.MatchString(value.Str()) {
+					continue
 				}
-			case modeKey:
-				if compiledPattern.MatchString(key) {
-					if !fn.IsEmpty() {
-						updatedString, err := applyOptReplaceFunction(ctx, tCtx, compiledPattern, fn, key, replacementVal, replacementFormat)
-						if err != nil {
-							return false
-						}
-						updated.PutStr(key, updatedString)
-					} else {
-						updatedKey := compiledPattern.ReplaceAllString(key, replacementVal)
-						originalValue.CopyTo(updated.PutEmpty(updatedKey))
+				if !fn.IsEmpty() {
+					updatedString, err := applyOptReplaceFunction(ctx, tCtx, cp, fn, value.Str(), replacementVal, replacementFormat)
+					if err != nil {
+						continue
 					}
+					value.SetStr(updatedString)
 				} else {
-					originalValue.CopyTo(updated.PutEmpty(key))
+					value.SetStr(cp.ReplaceAllString(value.Str(), replacementVal))
 				}
 			}
-			return true
-		})
-		updated.MoveTo(val)
-		return nil, nil
+		case modeKey:
+			// Because we are changing the keys we cannot do in-place update, but we can move values to the
+			// updated map and then move back the updated map to the initial map to avoid a copy in the target.Set,
+			// because the pcommon.Map.CopyTo will not do a copy if it is the same object in this case val.
+			updated := pcommon.NewMap()
+			updated.EnsureCapacity(val.Len())
+			for key, value := range val.All() {
+				if !cp.MatchString(key) {
+					value.MoveTo(updated.PutEmpty(key))
+					continue
+				}
+				if !fn.IsEmpty() {
+					updatedKey, err := applyOptReplaceFunction(ctx, tCtx, cp, fn, key, replacementVal, replacementFormat)
+					if err != nil {
+						continue
+					}
+					value.MoveTo(updated.PutEmpty(updatedKey))
+				} else {
+					value.MoveTo(updated.PutEmpty(cp.ReplaceAllString(key, replacementVal)))
+				}
+			}
+			updated.MoveTo(val)
+		}
+		return nil, target.Set(ctx, tCtx, val)
 	}, nil
 }

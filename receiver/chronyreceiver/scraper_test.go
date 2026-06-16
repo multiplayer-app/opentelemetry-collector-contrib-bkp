@@ -43,7 +43,7 @@ func TestChronyScraper(t *testing.T) {
 		{
 			scenario: "Successfully read default tracking information",
 			conf: &Config{
-				MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 			},
 			mockTracking: &chrony.Tracking{
 				SkewPPM:           1000.300,
@@ -95,7 +95,7 @@ func TestChronyScraper(t *testing.T) {
 		{
 			scenario: "client failed to connect to chronyd",
 			conf: &Config{
-				MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 			},
 			mockTracking: nil,
 			mockErr:      errInvalidValue,
@@ -114,14 +114,14 @@ func TestChronyScraper(t *testing.T) {
 
 			chronym.On("GetTrackingData").Return(tc.mockTracking, tc.mockErr)
 
-			ctx := clockwork.AddToContext(context.Background(), clck)
-			scraper := newScraper(ctx, tc.conf, receivertest.NewNopSettings())
+			ctx := clockwork.AddToContext(t.Context(), clck)
+			scraper := newScraper(ctx, tc.conf, receivertest.NewNopSettings(metadata.Type))
 			scraper.client = chronym
 
 			metrics, err := scraper.scrape(ctx)
 
 			assert.ErrorIs(t, err, tc.err, "Must match the expected error")
-			assert.EqualValues(t, tc.metrics, metrics, "Must match the expected metrics")
+			assert.Equal(t, tc.metrics, metrics, "Must match the expected metrics")
 			chronym.AssertExpectations(t)
 		})
 	}

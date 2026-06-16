@@ -4,11 +4,11 @@
 package k8sattributesprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
 
 import (
-	"fmt"
 	"os"
 	"regexp"
+	"time"
 
-	conventions "go.opentelemetry.io/collector/semconv/v1.6.1"
+	conventions "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"k8s.io/apimachinery/pkg/selection"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
@@ -21,15 +21,7 @@ const (
 	filterOPNotEquals    = "not-equals"
 	filterOPExists       = "exists"
 	filterOPDoesNotExist = "does-not-exist"
-	metadataPodIP        = "k8s.pod.ip"
-	metadataPodStartTime = "k8s.pod.start_time"
-	specPodHostName      = "k8s.pod.hostname"
-	// TODO: use k8s.cluster.uid, container.image.repo_digests
-	// from semconv when available,
-	//   replace clusterUID with conventions.AttributeK8SClusterUID
-	//   replace containerRepoDigests with conventions.AttributeContainerImageRepoDigests
-	clusterUID                = "k8s.cluster.uid"
-	containerImageRepoDigests = "container.image.repo_digests"
+	containerImageTag    = "container.image.tag"
 )
 
 // option represents a configuration option that can be passes.
@@ -58,81 +50,101 @@ func withPassthrough() option {
 func enabledAttributes() (attributes []string) {
 	defaultConfig := metadata.DefaultResourceAttributesConfig()
 	if defaultConfig.K8sClusterUID.Enabled {
-		attributes = append(attributes, clusterUID)
+		attributes = append(attributes, string(conventions.K8SClusterUIDKey))
 	}
 	if defaultConfig.ContainerID.Enabled {
-		attributes = append(attributes, conventions.AttributeContainerID)
+		attributes = append(attributes, string(conventions.ContainerIDKey))
 	}
 	if defaultConfig.ContainerImageName.Enabled {
-		attributes = append(attributes, conventions.AttributeContainerImageName)
+		attributes = append(attributes, string(conventions.ContainerImageNameKey))
 	}
 	if defaultConfig.ContainerImageRepoDigests.Enabled {
-		attributes = append(attributes, containerImageRepoDigests)
+		attributes = append(attributes, string(conventions.ContainerImageRepoDigestsKey))
 	}
-	if defaultConfig.ContainerImageTag.Enabled {
-		attributes = append(attributes, conventions.AttributeContainerImageTag)
+	enableStable := metadata.ProcessorK8sattributesEmitV1K8sConventionsFeatureGate.IsEnabled()
+	disableLegacy := metadata.ProcessorK8sattributesDontEmitV0K8sConventionsFeatureGate.IsEnabled()
+	if !disableLegacy && defaultConfig.ContainerImageTag.Enabled {
+		attributes = append(attributes, containerImageTag)
+	}
+	if enableStable && defaultConfig.ContainerImageTags.Enabled {
+		attributes = append(attributes, string(conventions.ContainerImageTagsKey))
 	}
 	if defaultConfig.K8sContainerName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SContainerName)
+		attributes = append(attributes, string(conventions.K8SContainerNameKey))
 	}
 	if defaultConfig.K8sCronjobName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SCronJobName)
+		attributes = append(attributes, string(conventions.K8SCronJobNameKey))
+	}
+	if defaultConfig.K8sCronjobUID.Enabled {
+		attributes = append(attributes, string(conventions.K8SCronJobUIDKey))
 	}
 	if defaultConfig.K8sDaemonsetName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SDaemonSetName)
+		attributes = append(attributes, string(conventions.K8SDaemonSetNameKey))
 	}
 	if defaultConfig.K8sDaemonsetUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SDaemonSetUID)
+		attributes = append(attributes, string(conventions.K8SDaemonSetUIDKey))
 	}
 	if defaultConfig.K8sDeploymentName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SDeploymentName)
+		attributes = append(attributes, string(conventions.K8SDeploymentNameKey))
 	}
 	if defaultConfig.K8sDeploymentUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SDeploymentUID)
+		attributes = append(attributes, string(conventions.K8SDeploymentUIDKey))
 	}
 	if defaultConfig.K8sJobName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SJobName)
+		attributes = append(attributes, string(conventions.K8SJobNameKey))
 	}
 	if defaultConfig.K8sJobUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SJobUID)
+		attributes = append(attributes, string(conventions.K8SJobUIDKey))
 	}
 	if defaultConfig.K8sNamespaceName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SNamespaceName)
+		attributes = append(attributes, string(conventions.K8SNamespaceNameKey))
 	}
 	if defaultConfig.K8sNodeName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SNodeName)
+		attributes = append(attributes, string(conventions.K8SNodeNameKey))
 	}
 	if defaultConfig.K8sNodeUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SNodeUID)
+		attributes = append(attributes, string(conventions.K8SNodeUIDKey))
 	}
 	if defaultConfig.K8sPodHostname.Enabled {
-		attributes = append(attributes, specPodHostName)
+		attributes = append(attributes, string(conventions.K8SPodHostnameKey))
 	}
 	if defaultConfig.K8sPodName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SPodName)
+		attributes = append(attributes, string(conventions.K8SPodNameKey))
 	}
 	if defaultConfig.K8sPodStartTime.Enabled {
-		attributes = append(attributes, metadataPodStartTime)
+		attributes = append(attributes, string(conventions.K8SPodStartTimeKey))
 	}
 	if defaultConfig.K8sPodUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SPodUID)
+		attributes = append(attributes, string(conventions.K8SPodUIDKey))
 	}
 	if defaultConfig.K8sPodIP.Enabled {
-		attributes = append(attributes, metadataPodIP)
+		attributes = append(attributes, string(conventions.K8SPodIPKey))
 	}
 	if defaultConfig.K8sReplicasetName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SReplicaSetName)
+		attributes = append(attributes, string(conventions.K8SReplicaSetNameKey))
 	}
 	if defaultConfig.K8sReplicasetUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SReplicaSetUID)
+		attributes = append(attributes, string(conventions.K8SReplicaSetUIDKey))
 	}
 	if defaultConfig.K8sStatefulsetName.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SStatefulSetName)
+		attributes = append(attributes, string(conventions.K8SStatefulSetNameKey))
 	}
 	if defaultConfig.K8sStatefulsetUID.Enabled {
-		attributes = append(attributes, conventions.AttributeK8SStatefulSetUID)
+		attributes = append(attributes, string(conventions.K8SStatefulSetUIDKey))
 	}
-	return
+	if defaultConfig.ServiceNamespace.Enabled {
+		attributes = append(attributes, string(conventions.ServiceNamespaceKey))
+	}
+	if defaultConfig.ServiceName.Enabled {
+		attributes = append(attributes, string(conventions.ServiceNameKey))
+	}
+	if defaultConfig.ServiceVersion.Enabled {
+		attributes = append(attributes, string(conventions.ServiceVersionKey))
+	}
+	if defaultConfig.ServiceInstanceID.Enabled {
+		attributes = append(attributes, string(conventions.ServiceInstanceIDKey))
+	}
+	return attributes
 }
 
 // withExtractMetadata allows specifying options to control extraction of pod metadata.
@@ -141,58 +153,89 @@ func withExtractMetadata(fields ...string) option {
 	return func(p *kubernetesprocessor) error {
 		for _, field := range fields {
 			switch field {
-			case conventions.AttributeK8SNamespaceName:
+			case string(conventions.K8SNamespaceNameKey):
 				p.rules.Namespace = true
-			case conventions.AttributeK8SPodName:
+			case string(conventions.K8SPodNameKey):
 				p.rules.PodName = true
-			case conventions.AttributeK8SPodUID:
+			case string(conventions.K8SPodUIDKey):
 				p.rules.PodUID = true
-			case specPodHostName:
+			case string(conventions.K8SPodHostnameKey):
 				p.rules.PodHostName = true
-			case metadataPodStartTime:
+			case string(conventions.K8SPodStartTimeKey):
 				p.rules.StartTime = true
-			case metadataPodIP:
+			case string(conventions.K8SPodIPKey):
 				p.rules.PodIP = true
-			case conventions.AttributeK8SDeploymentName:
+			case string(conventions.K8SDeploymentNameKey):
 				p.rules.DeploymentName = true
-			case conventions.AttributeK8SDeploymentUID:
+			case string(conventions.K8SDeploymentUIDKey):
 				p.rules.DeploymentUID = true
-			case conventions.AttributeK8SReplicaSetName:
+			case string(conventions.K8SReplicaSetNameKey):
 				p.rules.ReplicaSetName = true
-			case conventions.AttributeK8SReplicaSetUID:
+			case string(conventions.K8SReplicaSetUIDKey):
 				p.rules.ReplicaSetID = true
-			case conventions.AttributeK8SDaemonSetName:
+			case string(conventions.K8SDaemonSetNameKey):
 				p.rules.DaemonSetName = true
-			case conventions.AttributeK8SDaemonSetUID:
+			case string(conventions.K8SDaemonSetUIDKey):
 				p.rules.DaemonSetUID = true
-			case conventions.AttributeK8SStatefulSetName:
+			case string(conventions.K8SStatefulSetNameKey):
 				p.rules.StatefulSetName = true
-			case conventions.AttributeK8SStatefulSetUID:
+			case string(conventions.K8SStatefulSetUIDKey):
 				p.rules.StatefulSetUID = true
-			case conventions.AttributeK8SContainerName:
+			case string(conventions.K8SContainerNameKey):
 				p.rules.ContainerName = true
-			case conventions.AttributeK8SJobName:
+			case string(conventions.K8SJobNameKey):
 				p.rules.JobName = true
-			case conventions.AttributeK8SJobUID:
+			case string(conventions.K8SJobUIDKey):
 				p.rules.JobUID = true
-			case conventions.AttributeK8SCronJobName:
+			case string(conventions.K8SCronJobNameKey):
 				p.rules.CronJobName = true
-			case conventions.AttributeK8SNodeName:
+			case string(conventions.K8SCronJobUIDKey):
+				p.rules.CronJobUID = true
+			case string(conventions.K8SNodeNameKey):
 				p.rules.Node = true
-			case conventions.AttributeK8SNodeUID:
+			case string(conventions.K8SNodeUIDKey):
 				p.rules.NodeUID = true
-			case conventions.AttributeContainerID:
+			case string(conventions.ContainerIDKey):
 				p.rules.ContainerID = true
-			case conventions.AttributeContainerImageName:
+			case string(conventions.ContainerImageNameKey):
 				p.rules.ContainerImageName = true
-			case containerImageRepoDigests:
+			case string(conventions.ContainerImageRepoDigestsKey):
 				p.rules.ContainerImageRepoDigests = true
-			case conventions.AttributeContainerImageTag:
+			case containerImageTag:
 				p.rules.ContainerImageTag = true
-			case clusterUID:
+			case string(conventions.ContainerImageTagsKey):
+				p.rules.ContainerImageTags = true
+			case string(conventions.K8SClusterUIDKey):
 				p.rules.ClusterUID = true
+			case string(conventions.ServiceNamespaceKey):
+				p.rules.ServiceNamespace = true
+			case string(conventions.ServiceNameKey):
+				p.rules.ServiceName = true
+			case string(conventions.ServiceVersionKey):
+				p.rules.ServiceVersion = true
+			case string(conventions.ServiceInstanceIDKey):
+				p.rules.ServiceInstanceID = true
 			}
 		}
+		return nil
+	}
+}
+
+func withOtelAnnotations(enabled bool) option {
+	return func(p *kubernetesprocessor) error {
+		if enabled {
+			p.rules.Annotations = append(p.rules.Annotations, kube.OtelAnnotations())
+		}
+		return nil
+	}
+}
+
+func withDeploymentNameFromReplicaSet(enabled bool) option {
+	return func(p *kubernetesprocessor) error {
+		if !enabled && p.logger != nil {
+			p.logger.Warn("`deployment_name_from_replicaset: false` is deprecated and will be removed in future releases")
+		}
+		p.rules.DeploymentNameFromReplicaSet = enabled
 		return nil
 	}
 }
@@ -200,7 +243,7 @@ func withExtractMetadata(fields ...string) option {
 // withExtractLabels allows specifying options to control extraction of pod labels.
 func withExtractLabels(labels ...FieldExtractConfig) option {
 	return func(p *kubernetesprocessor) error {
-		labels, err := extractFieldRules("labels", labels...)
+		labels, err := extractFieldRules(labels...)
 		if err != nil {
 			return err
 		}
@@ -212,7 +255,7 @@ func withExtractLabels(labels ...FieldExtractConfig) option {
 // withExtractAnnotations allows specifying options to control extraction of pod annotations tags.
 func withExtractAnnotations(annotations ...FieldExtractConfig) option {
 	return func(p *kubernetesprocessor) error {
-		annotations, err := extractFieldRules("annotations", annotations...)
+		annotations, err := extractFieldRules(annotations...)
 		if err != nil {
 			return err
 		}
@@ -221,27 +264,13 @@ func withExtractAnnotations(annotations ...FieldExtractConfig) option {
 	}
 }
 
-func extractFieldRules(fieldType string, fields ...FieldExtractConfig) ([]kube.FieldExtractionRule, error) {
+func extractFieldRules(fields ...FieldExtractConfig) ([]kube.FieldExtractionRule, error) {
 	var rules []kube.FieldExtractionRule
 	for _, a := range fields {
 		name := a.TagName
 
 		if a.From == "" {
 			a.From = kube.MetadataFromPod
-		}
-
-		if name == "" && a.Key != "" {
-			// name for KeyRegex case is set at extraction time/runtime, skipped here
-			name = fmt.Sprintf("k8s.%v.%v.%v", a.From, fieldType, a.Key)
-		}
-
-		var r *regexp.Regexp
-		if a.Regex != "" {
-			var err error
-			r, err = regexp.Compile(a.Regex)
-			if err != nil {
-				return rules, err
-			}
 		}
 
 		var keyRegex *regexp.Regexp
@@ -259,7 +288,7 @@ func extractFieldRules(fieldType string, fields ...FieldExtractConfig) ([]kube.F
 		}
 
 		rules = append(rules, kube.FieldExtractionRule{
-			Name: name, Key: a.Key, KeyRegex: keyRegex, HasKeyRegexReference: hasKeyRegexReference, Regex: r, From: a.From,
+			Name: name, Key: a.Key, KeyRegex: keyRegex, HasKeyRegexReference: hasKeyRegexReference, From: a.From,
 		})
 	}
 	return rules, nil
@@ -288,7 +317,7 @@ func withFilterNamespace(ns string) option {
 // withFilterLabels allows specifying options to control filtering pods by pod labels.
 func withFilterLabels(filters ...FieldFilterConfig) option {
 	return func(p *kubernetesprocessor) error {
-		var labels []kube.FieldFilter
+		var labels []kube.LabelFilter
 		for _, f := range filters {
 			var op selection.Operator
 			switch f.Op {
@@ -301,7 +330,7 @@ func withFilterLabels(filters ...FieldFilterConfig) option {
 			default:
 				op = selection.Equals
 			}
-			labels = append(labels, kube.FieldFilter{
+			labels = append(labels, kube.LabelFilter{
 				Key:   f.Key,
 				Value: f.Value,
 				Op:    op,
@@ -378,6 +407,38 @@ func withExcludes(podExclude ExcludeConfig) option {
 			ignoredNames.Pods = append(ignoredNames.Pods, kube.ExcludePods{Name: regexp.MustCompile(name.Name)})
 		}
 		p.podIgnore = ignoredNames
+		return nil
+	}
+}
+
+// withWaitForMetadata allows specifying whether to wait for pod metadata to be synced.
+func withWaitForMetadata(wait bool) option {
+	return func(p *kubernetesprocessor) error {
+		p.waitForMetadata = wait
+		return nil
+	}
+}
+
+// withWaitForMetadataTimeout allows specifying the timeout for waiting for pod metadata to be synced.
+func withWaitForMetadataTimeout(timeout time.Duration) option {
+	return func(p *kubernetesprocessor) error {
+		p.waitForMetadataTimeout = timeout
+		return nil
+	}
+}
+
+// withWatchSyncPeriod allows specifying the resync period for informer.
+func withWatchSyncPeriod(duration time.Duration) option {
+	return func(p *kubernetesprocessor) error {
+		p.watchSyncPeriod = duration
+		return nil
+	}
+}
+
+// withPodDeleteGracePeriod allows specifying the grace period for pod deletion.
+func withPodDeleteGracePeriod(duration time.Duration) option {
+	return func(p *kubernetesprocessor) error {
+		p.podDeleteGracePeriod = duration
 		return nil
 	}
 }

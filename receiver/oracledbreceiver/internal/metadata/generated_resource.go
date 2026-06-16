@@ -21,10 +21,59 @@ func NewResourceBuilder(rac ResourceAttributesConfig) *ResourceBuilder {
 	}
 }
 
+// SetHostName sets provided value as "host.name" attribute.
+func (rb *ResourceBuilder) SetHostName(val string) {
+	if rb.config.HostName.Enabled {
+		rb.res.Attributes().PutStr("host.name", val)
+	}
+}
+
+// SetOracleDbHostingType sets provided value as "oracle.db.hosting_type" attribute.
+func (rb *ResourceBuilder) SetOracleDbHostingType(val string) {
+	if rb.config.OracleDbHostingType.Enabled {
+		rb.res.Attributes().PutStr("oracle.db.hosting_type", val)
+	}
+}
+
+// SetOracleDbOpenMode sets provided value as "oracle.db.open_mode" attribute.
+func (rb *ResourceBuilder) SetOracleDbOpenMode(val string) {
+	if rb.config.OracleDbOpenMode.Enabled {
+		rb.res.Attributes().PutStr("oracle.db.open_mode", val)
+	}
+}
+
+// SetOracleDbPdb sets provided value as "oracle.db.pdb" attribute.
+func (rb *ResourceBuilder) SetOracleDbPdb(val string) {
+	if rb.config.OracleDbPdb.Enabled {
+		rb.res.Attributes().PutStr("oracle.db.pdb", val)
+	}
+}
+
+// SetOracleDbRole sets provided value as "oracle.db.role" attribute.
+func (rb *ResourceBuilder) SetOracleDbRole(val string) {
+	if rb.config.OracleDbRole.Enabled {
+		rb.res.Attributes().PutStr("oracle.db.role", val)
+	}
+}
+
+// SetOracleDbVersion sets provided value as "oracle.db.version" attribute.
+func (rb *ResourceBuilder) SetOracleDbVersion(val string) {
+	if rb.config.OracleDbVersion.Enabled {
+		rb.res.Attributes().PutStr("oracle.db.version", val)
+	}
+}
+
 // SetOracledbInstanceName sets provided value as "oracledb.instance.name" attribute.
 func (rb *ResourceBuilder) SetOracledbInstanceName(val string) {
 	if rb.config.OracledbInstanceName.Enabled {
 		rb.res.Attributes().PutStr("oracledb.instance.name", val)
+	}
+}
+
+// SetServiceInstanceID sets provided value as "service.instance.id" attribute.
+func (rb *ResourceBuilder) SetServiceInstanceID(val string) {
+	if rb.config.ServiceInstanceID.Enabled {
+		rb.res.Attributes().PutStr("service.instance.id", val)
 	}
 }
 

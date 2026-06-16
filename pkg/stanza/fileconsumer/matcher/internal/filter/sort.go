@@ -4,6 +4,7 @@
 package filter // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/matcher/internal/filter"
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -27,7 +28,7 @@ type regexSortOption struct {
 
 func newRegexSortOption(regexKey string, parseFunc parseFunc, compareFunc compareFunc) (Option, error) {
 	if regexKey == "" {
-		return nil, fmt.Errorf("regex key must be specified")
+		return nil, errors.New("regex key must be specified")
 	}
 	return regexSortOption{
 		regexKey:    regexKey,
@@ -108,12 +109,16 @@ func SortAlphabetical(regexKey string, ascending bool) (Option, error) {
 	)
 }
 
-func SortTemporal(regexKey string, ascending bool, layout string, location string) (Option, error) {
+func SortTemporal(regexKey string, ascending bool, layout, location string) (Option, error) {
 	if layout == "" {
-		return nil, fmt.Errorf("layout must be specified")
+		return nil, errors.New("layout must be specified")
 	}
 	if location == "" {
 		location = "UTC"
+	}
+	parser, err := timeutils.NewStrptimeParser(layout)
+	if err != nil {
+		return nil, err
 	}
 	loc, err := timeutils.GetLocation(&location, &layout)
 	if err != nil {
@@ -121,7 +126,7 @@ func SortTemporal(regexKey string, ascending bool, layout string, location strin
 	}
 	return newRegexSortOption(regexKey,
 		func(s string) (any, error) {
-			return timeutils.ParseStrptime(layout, s, loc)
+			return parser.Parse(s, loc)
 		},
 		func(a, b any) bool {
 			if ascending {

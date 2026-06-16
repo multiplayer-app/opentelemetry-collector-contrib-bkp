@@ -13,36 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/splunk"
+	translator "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/splunk"
 )
 
 var defaultTestingHecConfig = &Config{
-	HecToOtelAttrs: splunk.HecToOtelAttrs{
+	HecToOtelAttrs: translator.HecToOtelAttrs{
 		Source:     splunk.DefaultSourceLabel,
 		SourceType: splunk.DefaultSourceTypeLabel,
 		Index:      splunk.DefaultIndexLabel,
-		Host:       conventions.AttributeHostName,
+		Host:       "host.name",
 	},
 }
 
 func Test_SplunkHecToLogData(t *testing.T) {
-
 	time := 0.123
 	nanoseconds := 123000000
 
 	tests := []struct {
 		name      string
-		events    []*splunk.Event
+		events    []*translator.Event
 		output    plog.ResourceLogsSlice
 		hecConfig *Config
 		wantErr   error
 	}{
 		{
 			name: "happy_path",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Time:       time,
 					Host:       "localhost",
@@ -63,7 +62,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "double",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Time:       time,
 					Host:       "localhost",
@@ -86,7 +85,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "array",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Time:       time,
 					Host:       "localhost",
@@ -113,7 +112,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "complex_structure",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Time:       time,
 					Host:       "localhost",
@@ -145,7 +144,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "nil_timestamp",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Host:       "localhost",
 					Source:     "mysource",
@@ -165,7 +164,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "custom_config_mapping",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Host:       "localhost",
 					Source:     "mysource",
@@ -178,7 +177,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 				},
 			},
 			hecConfig: &Config{
-				HecToOtelAttrs: splunk.HecToOtelAttrs{
+				HecToOtelAttrs: translator.HecToOtelAttrs{
 					Source:     "mysource",
 					SourceType: "mysourcetype",
 					Index:      "myindex",
@@ -205,7 +204,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 		},
 		{
 			name: "group_events_by_resource_attributes",
-			events: []*splunk.Event{
+			events: []*translator.Event{
 				{
 					Time:       time,
 					Host:       "1",
@@ -331,7 +330,7 @@ func Test_SplunkHecToLogData(t *testing.T) {
 	n := len(tests)
 	for _, tt := range tests[n-1:] {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := splunkHecToLogData(zap.NewNop(), tt.events, func(_ pcommon.Resource) {}, tt.hecConfig)
+			result, err := splunkHecToLogData(zap.NewNop(), tt.events, func(pcommon.Resource) {}, tt.hecConfig)
 			assert.Equal(t, tt.wantErr, err)
 			require.Equal(t, tt.output.Len(), result.ResourceLogs().Len())
 			for i := 0; i < result.ResourceLogs().Len(); i++ {
@@ -346,7 +345,7 @@ func Test_SplunkHecRawToLogData(t *testing.T) {
 		testTimestampVal = 1695146885
 	)
 	hecConfig := &Config{
-		HecToOtelAttrs: splunk.HecToOtelAttrs{
+		HecToOtelAttrs: translator.HecToOtelAttrs{
 			Source:     "mysource",
 			SourceType: "mysourcetype",
 			Index:      "myindex",
@@ -547,13 +546,13 @@ func TestConvertToValueArray(t *testing.T) {
 }
 
 func TestConvertToValueInvalid(t *testing.T) {
-	assert.Error(t, convertToValue(zap.NewNop(), splunk.Event{}, pcommon.NewValueEmpty()))
+	assert.Error(t, convertToValue(zap.NewNop(), translator.Event{}, pcommon.NewValueEmpty()))
 }
 
 func TestConvertToValueInvalidInMap(t *testing.T) {
-	assert.Error(t, convertToValue(zap.NewNop(), map[string]any{"foo": splunk.Event{}}, pcommon.NewValueEmpty()))
+	assert.Error(t, convertToValue(zap.NewNop(), map[string]any{"foo": translator.Event{}}, pcommon.NewValueEmpty()))
 }
 
 func TestConvertToValueInvalidInArray(t *testing.T) {
-	assert.Error(t, convertToValue(zap.NewNop(), []any{splunk.Event{}}, pcommon.NewValueEmpty()))
+	assert.Error(t, convertToValue(zap.NewNop(), []any{translator.Event{}}, pcommon.NewValueEmpty()))
 }

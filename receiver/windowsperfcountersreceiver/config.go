@@ -4,9 +4,11 @@
 package windowsperfcountersreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowsperfcountersreceiver"
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 	"go.uber.org/multierr"
 )
 
@@ -26,8 +28,7 @@ type MetricConfig struct {
 	Sum         SumMetric   `mapstructure:"sum"`
 }
 
-type GaugeMetric struct {
-}
+type GaugeMetric struct{}
 
 type SumMetric struct {
 	Aggregation string `mapstructure:"aggregation"`
@@ -57,11 +58,11 @@ func (c *Config) Validate() error {
 	var errs error
 
 	if c.CollectionInterval <= 0 {
-		errs = multierr.Append(errs, fmt.Errorf("collection_interval must be a positive duration"))
+		errs = multierr.Append(errs, errors.New("collection_interval must be a positive duration"))
 	}
 
 	if len(c.PerfCounters) == 0 {
-		errs = multierr.Append(errs, fmt.Errorf("must specify at least one perf counter"))
+		errs = multierr.Append(errs, errors.New("must specify at least one perf counter"))
 	}
 
 	for name, metric := range c.MetricMetaData {
@@ -107,16 +108,13 @@ func (c *Config) Validate() error {
 			}
 		}
 
-		for _, instance := range pc.Instances {
-			if instance == "" {
-				errs = multierr.Append(errs, fmt.Errorf("perf counter for object %q includes an empty instance", pc.Object))
-				break
-			}
+		if slices.Contains(pc.Instances, "") {
+			errs = multierr.Append(errs, fmt.Errorf("perf counter for object %q includes an empty instance", pc.Object))
 		}
 	}
 
 	if perfCounterMissingObjectName {
-		errs = multierr.Append(errs, fmt.Errorf("must specify object name for all perf counters"))
+		errs = multierr.Append(errs, errors.New("must specify object name for all perf counters"))
 	}
 
 	return errs

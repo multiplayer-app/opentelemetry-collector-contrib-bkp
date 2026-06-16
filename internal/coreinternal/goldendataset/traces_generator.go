@@ -4,20 +4,33 @@
 package goldendataset // import "github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/goldendataset"
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/internal/metadata"
 )
 
 // GenerateTraces generates a slice of OTLP ResourceSpans objects based on the PICT-generated pairwise
 // parameters defined in the parameters file specified by the tracePairsFile parameter. The pairs to generate
-// spans for for defined in the file specified by the spanPairsFile parameter.
+// spans for defined in the file specified by the spanPairsFile parameter.
 // The slice of ResourceSpans are returned. If an err is returned, the slice elements will be nil.
-func GenerateTraces(tracePairsFile string, spanPairsFile string) ([]ptrace.Traces, error) {
-	random := io.Reader(rand.New(rand.NewSource(42)))
+func GenerateTraces(tracePairsFile, spanPairsFile string) ([]ptrace.Traces, error) {
+	if metadata.InternalCoreinternalGoldendatasetDontEmitV0NetworkConventionsFeatureGate.IsEnabled() && !metadata.InternalCoreinternalGoldendatasetEmitV1NetworkConventionsFeatureGate.IsEnabled() {
+		return nil, errors.New("internal.coreinternal.goldendataset.DontEmitV0NetworkConventions cannot be enabled without enabling internal.coreinternal.goldendataset.EmitV1NetworkConventions")
+	}
+	if metadata.InternalCoreinternalGoldendatasetDontEmitV0DatabaseConventionsFeatureGate.IsEnabled() && !metadata.InternalCoreinternalGoldendatasetEmitV1DatabaseConventionsFeatureGate.IsEnabled() {
+		return nil, errors.New("internal.coreinternal.goldendataset.DontEmitV0DatabaseConventions cannot be enabled without enabling internal.coreinternal.goldendataset.EmitV1DatabaseConventions")
+	}
+	if metadata.InternalCoreinternalGoldendatasetDontEmitV0RPCConventionsFeatureGate.IsEnabled() && !metadata.InternalCoreinternalGoldendatasetEmitV1RPCConventionsFeatureGate.IsEnabled() {
+		return nil, errors.New("internal.coreinternal.goldendataset.DontEmitV0RPCConventions cannot be enabled without enabling internal.coreinternal.goldendataset.EmitV1RPCConventions")
+	}
+	random := (*randReader)(rand.New(rand.NewPCG(42, 0)))
 	pairsData, err := loadPictOutputFile(tracePairsFile)
 	if err != nil {
 		return nil, err
@@ -42,6 +55,23 @@ func GenerateTraces(tracePairsFile string, spanPairsFile string) ([]ptrace.Trace
 	return traces, err
 }
 
+// TODO: use math/rand/v2.ChaCha8.Read when we upgrade to go1.23.
+type randReader rand.Rand
+
+func (r *randReader) Read(p []byte) (n int, err error) {
+	for len(p) >= 8 {
+		binary.BigEndian.PutUint64(p[:8], (*rand.Rand)(r).Uint64())
+		p = p[8:]
+		n += 8
+	}
+	if len(p) > 0 {
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], (*rand.Rand)(r).Uint64())
+		n += copy(p, buf[:])
+	}
+	return n, err
+}
+
 // generateResourceSpan generates a single PData ResourceSpans populated based on the provided inputs. They are:
 //
 //	tracingInputs - the pairwise combination of field value variations for this ResourceSpans
@@ -50,7 +80,8 @@ func GenerateTraces(tracePairsFile string, spanPairsFile string) ([]ptrace.Trace
 //
 // The generated resource spans. If err is not nil, some or all of the resource spans fields will be nil.
 func appendResourceSpan(tracingInputs *PICTTracingInputs, spanPairsFile string,
-	random io.Reader, resourceSpansSlice ptrace.ResourceSpansSlice) error {
+	random io.Reader, resourceSpansSlice ptrace.ResourceSpansSlice,
+) error {
 	resourceSpan := resourceSpansSlice.AppendEmpty()
 	err := appendScopeSpans(tracingInputs, spanPairsFile, random, resourceSpan.ScopeSpans())
 	if err != nil {
@@ -61,7 +92,8 @@ func appendResourceSpan(tracingInputs *PICTTracingInputs, spanPairsFile string,
 }
 
 func appendScopeSpans(tracingInputs *PICTTracingInputs, spanPairsFile string,
-	random io.Reader, scopeSpansSlice ptrace.ScopeSpansSlice) error {
+	random io.Reader, scopeSpansSlice ptrace.ScopeSpansSlice,
+) error {
 	var count int
 	switch tracingInputs.InstrumentationLibrary {
 	case LibraryNone:

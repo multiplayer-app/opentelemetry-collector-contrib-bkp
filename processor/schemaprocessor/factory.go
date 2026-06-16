@@ -1,12 +1,13 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package schemaprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/schemaprocessor"
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
@@ -22,11 +23,13 @@ var processorCapabilities = consumer.Capabilities{MutatesData: true}
 // factory will store any of the precompiled schemas in future
 type factory struct{}
 
-// newDefaultConfiguration returns the configuration for schema transformer processor
+// newDefaultConfiguration returns the configuration for schema processor
 // with the default values being used throughout it
 func newDefaultConfiguration() component.Config {
 	return &Config{
-		ClientConfig: confighttp.NewDefaultClientConfig(),
+		ClientConfig:    confighttp.NewDefaultClientConfig(),
+		CacheCooldown:   5 * time.Minute,
+		CacheRetryLimit: 5,
 	}
 }
 
@@ -41,13 +44,13 @@ func NewFactory() processor.Factory {
 	)
 }
 
-func (f factory) createLogsProcessor(
+func (factory) createLogsProcessor(
 	ctx context.Context,
 	set processor.Settings,
 	cfg component.Config,
 	next consumer.Logs,
 ) (processor.Logs, error) {
-	transformer, err := newTransformer(ctx, cfg, set)
+	schemaProcessor, err := newSchemaProcessor(ctx, cfg, set)
 	if err != nil {
 		return nil, err
 	}
@@ -56,19 +59,20 @@ func (f factory) createLogsProcessor(
 		set,
 		cfg,
 		next,
-		transformer.processLogs,
+		schemaProcessor.processLogs,
 		processorhelper.WithCapabilities(processorCapabilities),
-		processorhelper.WithStart(transformer.start),
+		processorhelper.WithStart(schemaProcessor.start),
+		processorhelper.WithShutdown(schemaProcessor.shutdown),
 	)
 }
 
-func (f factory) createMetricsProcessor(
+func (factory) createMetricsProcessor(
 	ctx context.Context,
 	set processor.Settings,
 	cfg component.Config,
 	next consumer.Metrics,
 ) (processor.Metrics, error) {
-	transformer, err := newTransformer(ctx, cfg, set)
+	schemaProcessor, err := newSchemaProcessor(ctx, cfg, set)
 	if err != nil {
 		return nil, err
 	}
@@ -77,19 +81,20 @@ func (f factory) createMetricsProcessor(
 		set,
 		cfg,
 		next,
-		transformer.processMetrics,
+		schemaProcessor.processMetrics,
 		processorhelper.WithCapabilities(processorCapabilities),
-		processorhelper.WithStart(transformer.start),
+		processorhelper.WithStart(schemaProcessor.start),
+		processorhelper.WithShutdown(schemaProcessor.shutdown),
 	)
 }
 
-func (f factory) createTracesProcessor(
+func (factory) createTracesProcessor(
 	ctx context.Context,
 	set processor.Settings,
 	cfg component.Config,
 	next consumer.Traces,
 ) (processor.Traces, error) {
-	transformer, err := newTransformer(ctx, cfg, set)
+	schemaProcessor, err := newSchemaProcessor(ctx, cfg, set)
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +103,9 @@ func (f factory) createTracesProcessor(
 		set,
 		cfg,
 		next,
-		transformer.processTraces,
+		schemaProcessor.processTraces,
 		processorhelper.WithCapabilities(processorCapabilities),
-		processorhelper.WithStart(transformer.start),
+		processorhelper.WithStart(schemaProcessor.start),
+		processorhelper.WithShutdown(schemaProcessor.shutdown),
 	)
 }

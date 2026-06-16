@@ -30,10 +30,9 @@
   <strong>
     <a href="https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/vision.md">Vision</a>
     &nbsp;&nbsp;&bull;&nbsp;&nbsp;
-    <a href="https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/monitoring.md">Monitoring</a>
+    <a href="https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/observability.md">Observability</a>
     &nbsp;&nbsp;&bull;&nbsp;&nbsp;
     <a href="https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/security-best-practices.md">Security</a>
-    &nbsp;&nbsp;&bull;&nbsp;&nbsp;
   </strong>
 </p>
 
@@ -59,7 +58,7 @@ Some features are hidden behind feature gates before they are part of the main c
 
 Each component is supported either by the community of OpenTelemetry Collector Contrib maintainers, as defined by the GitHub group [@open-telemetry/collector-contrib-maintainer](https://github.com/orgs/open-telemetry/teams/collector-contrib-maintainer), or by specific vendors. See the individual README files for information about the specific components.
 
-The OpenTelemetry Collector Contrib maintainers may at any time downgrade specific components, including vendor-specific ones, if they are deemed unmaintained or if they pose a risk to the repository and/or binary distribution.
+The OpenTelemetry Collector Contrib maintainers may at any time downgrade specific components if they are deemed unmaintained or if they pose a risk to the repository and/or binary distribution.
 
 Even though the OpenTelemetry Collector Contrib maintainers are ultimately responsible for the components hosted here, actual support will likely be provided by individual contributors, typically a code owner for the specific component.
 
@@ -67,57 +66,77 @@ Even though the OpenTelemetry Collector Contrib maintainers are ultimately respo
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Triagers ([@open-telemetry/collector-contrib-triagers](https://github.com/orgs/open-telemetry/teams/collector-contrib-triagers))
-
-- [Benedikt Bongartz](https://github.com/frzifus), Red Hat
-- [Christos Markou](https://github.com/ChrsMark), Elastic
-- [Jared Tan](https://github.com/JaredTan95), DaoCloud
-- [Murphy Chen](https://github.com/Frapschen), DaoCloud
-- [Paulo Janotti](https://github.com/pjanotti), Splunk
-- Actively seeking contributors to triage issues
-
-Emeritus Triagers:
-
-- [Alolita Sharma](https://github.com/alolita), Apple
-- [Gabriel Aszalos](https://github.com/gbbr), DataDog
-- [Goutham Veeramachaneni](https://github.com/gouthamve), Grafana
-- [Punya Biswal](https://github.com/punya), Google
-- [Steve Flanders](https://github.com/flands), Splunk
-
-Approvers ([@open-telemetry/collector-contrib-approvers](https://github.com/orgs/open-telemetry/teams/collector-contrib-approvers)):
-
-- [Antoine Toulme](https://github.com/atoulme), Splunk
-- [Curtis Robert](https://github.com/crobert-1), Splunk (on leave)
-- [David Ashpole](https://github.com/dashpole), Google
-- [Matt Wear](https://github.com/mwear), Lightstep
-- [Yang Song](https://github.com/songy23), DataDog
-- [Ziqi Zhao](https://github.com/fatsheep9146), Alibaba
-
-Emeritus Approvers:
-
-- [Anthony Mirabella](https://github.com/Aneurysm9), AWS
-- [Bryan Aguilar](https://github.com/bryan-aguilar), AWS
-- [Przemek Maciolek](https://github.com/pmm-sumo)
-- [Ruslan Kovalov](https://github.com/kovrus)
-
-Maintainers ([@open-telemetry/collector-contrib-maintainer](https://github.com/orgs/open-telemetry/teams/collector-contrib-maintainer)):
+### Maintainers
 
 - [Alex Boten](https://github.com/codeboten), Honeycomb
 - [Andrzej Stencel](https://github.com/andrzej-stencel), Elastic
+- [Antoine Toulme](https://github.com/atoulme), Splunk
 - [Bogdan Drutu](https://github.com/bogdandrutu), Snowflake
-- [Daniel Jaglowski](https://github.com/djaglowski), observIQ
+- [Christos Markou](https://github.com/ChrsMark), Elastic
 - [Dmitrii Anoshin](https://github.com/dmitryax), Splunk
+- [Edmo Vamerlatti Costa](https://github.com/edmocosta), Elastic
 - [Evan Bradley](https://github.com/evan-bradley), Dynatrace
-- [Juraci Paixão Kröhling](https://github.com/jpkrohling), Grafana Labs
 - [Pablo Baeyens](https://github.com/mx-psi), DataDog
 - [Sean Marciniak](https://github.com/MovieStoreGuy), Splunk
-- [Tyler Helmuth](https://github.com/TylerHelmuth), Honeycomb
+- [Tyler Helmuth](https://github.com/TylerHelmuth), Grafana Labs
+- [Yang Song](https://github.com/songy23), DataDog
 
-Emeritus Maintainers
+For more information about the maintainer role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#maintainer).
 
-- [Tigran Najaryan](https://github.com/tigrannajaryan), Splunk
+### Approvers
 
-Learn more about roles in the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md).
+- [Andrew Wilkins](https://github.com/axw), Elastic
+- [Arthur Silva Sens](https://github.com/ArthurSens), Grafana Labs
+- [Braydon Kains](https://github.com/braydonk), Google
+- [Curtis Robert](https://github.com/crobert-1), Splunk
+- [David Ashpole](https://github.com/dashpole), Google
+- [Israel Blancas](https://github.com/iblancasa), Coralogix
+- [Joshua MacDonald](https://github.com/jmacd), Microsoft
+- [Paulo Janotti](https://github.com/pjanotti), Splunk
+- [Sam DeHaan](https://github.com/dehaansa), Grafana Labs
+- [Vihas Makwana](https://github.com/VihasMakwana), Elastic
+
+For more information about the approver role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#approver).
+
+### Triagers
+
+- [Benedikt Bongartz](https://github.com/frzifus), Red Hat
+- [Bogdan Stancu](https://github.com/bogdan-st), Adobe
+- [Constança Manteigas](https://github.com/constanca-m), Elastic
+- [Douglas Camata](https://github.com/douglascamata), Coralogix
+- [James Moessis](https://github.com/jamesmoessis), Atlassian
+- [Jared Tan](https://github.com/JaredTan95), DaoCloud
+- [Murphy Chen](https://github.com/Frapschen), DaoCloud
+- [Ondrej Dubaj](https://github.com/odubajDT), Dynatrace
+- [Paulo Dias](https://github.com/paulojmdias), Five9
+- [Roger Coll](https://github.com/rogercoll), Elastic
+- Actively seeking contributors to triage issues
+
+For more information about the triager role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#triager).
+
+### Emeritus
+
+- [Alolita Sharma](https://github.com/alolita), Triager
+- [Anthony Mirabella](https://github.com/Aneurysm9), Approver
+- [Bryan Aguilar](https://github.com/bryan-aguilar), Approver
+- [Daniel Jaglowski](https://github.com/djaglowski), Maintainer
+- [Florian Bacher](https://github.com/bacherfl), Triager
+- [Gabriel Aszalos](https://github.com/gbbr), Triager
+- [Goutham Veeramachaneni](https://github.com/gouthamve), Triager
+- [Juraci Paixão Kröhling](https://github.com/jpkrohling), Maintainer
+- [Matt Wear](https://github.com/mwear), Approver
+- [Przemek Maciolek](https://github.com/pmm-sumo), Approver
+- [Punya Biswal](https://github.com/punya), Triager
+- [Ruslan Kovalov](https://github.com/kovrus), Approver
+- [Steve Flanders](https://github.com/flands), Triager
+- [Tigran Najaryan](https://github.com/tigrannajaryan), Maintainer
+- [Ziqi Zhao](https://github.com/fatsheep9146), Approver
+
+For more information about the emeritus role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#emeritus-maintainerapprovertriager).
+
+### No Over-Representation
+
+A community member cannot be promoted to be a Collector contrib maintainer if, after their promotion, the resulting maintainers group has more than one-fourth (25%) of the members affiliated with the same employer. Job changes and similar events might result in over-representation, and no new maintainers from the same company can be promoted until representation is balanced again. In the event of confusion or concern, the OpenTelemetry Collector SIG will defer to the CNCF definition of "same employer".
 
 ## PRs and Reviews
 
@@ -138,4 +157,7 @@ is a maintainer they are responsible for merging the PR as well.
 The facilitator is not required to perform a thorough review, but they are encouraged to
 enforce Collector best practices and consistency across the codebase and component
 behavior. The facilitators will typically rely on codeowner's detailed review of the code
-when making the final approval decision. 
+when making the final approval decision.
+
+Marking the PR with the `ready to merge` label should only happen (by triagers/approvers/maintainers)
+once there is at least one approval from an approver, as per the description above. 

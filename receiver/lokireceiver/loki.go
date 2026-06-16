@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sync"
 
@@ -21,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/errorutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/loki"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver/internal"
 )
@@ -40,6 +42,8 @@ type lokiReceiver struct {
 	serverHTTP   *http.Server
 	serverGRPC   *grpc.Server
 	shutdownWG   sync.WaitGroup
+	httpAddr     string
+	grpcAddr     string
 
 	obsrepGRPC *receiverhelper.ObsReport
 	obsrepHTTP *receiverhelper.ObsReport
@@ -77,7 +81,8 @@ func newLokiReceiver(conf *Config, nextConsumer consumer.Logs, settings receiver
 				handleUnmatchedMethod(resp)
 				return
 			}
-			switch req.Header.Get("Content-Type") {
+			reqContentType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+			switch reqContentType {
 			case jsonContentType, pbContentType:
 				handleLogs(resp, req, r)
 			default:
@@ -92,7 +97,7 @@ func newLokiReceiver(conf *Config, nextConsumer consumer.Logs, settings receiver
 func (r *lokiReceiver) startProtocolsServers(ctx context.Context, host component.Host) error {
 	var err error
 	if r.conf.HTTP != nil {
-		r.serverHTTP, err = r.conf.HTTP.ToServer(ctx, host, r.settings.TelemetrySettings, r.httpMux, confighttp.WithDecoder("snappy", func(body io.ReadCloser) (io.ReadCloser, error) { return body, nil }))
+		r.serverHTTP, err = r.conf.HTTP.ToServer(ctx, host.GetExtensions(), r.settings.TelemetrySettings, r.httpMux, confighttp.WithDecoder("snappy", func(body io.ReadCloser) (io.ReadCloser, error) { return body, nil }))
 		if err != nil {
 			return fmt.Errorf("failed create http server error: %w", err)
 		}
@@ -103,7 +108,7 @@ func (r *lokiReceiver) startProtocolsServers(ctx context.Context, host component
 	}
 
 	if r.conf.GRPC != nil {
-		r.serverGRPC, err = r.conf.GRPC.ToServer(ctx, host, r.settings.TelemetrySettings)
+		r.serverGRPC, err = r.conf.GRPC.ToServer(ctx, host.GetExtensions(), r.settings.TelemetrySettings)
 		if err != nil {
 			return fmt.Errorf("failed create grpc server error: %w", err)
 		}
@@ -120,19 +125,17 @@ func (r *lokiReceiver) startProtocolsServers(ctx context.Context, host component
 }
 
 func (r *lokiReceiver) startHTTPServer(ctx context.Context, host component.Host) error {
-	r.settings.Logger.Info("Starting HTTP server", zap.String("endpoint", r.conf.HTTP.Endpoint))
+	r.settings.Logger.Info("Starting HTTP server", zap.String("endpoint", r.conf.HTTP.NetAddr.Endpoint))
 	listener, err := r.conf.HTTP.ToListener(ctx)
 	if err != nil {
 		return err
 	}
-	r.shutdownWG.Add(1)
-
-	go func() {
-		defer r.shutdownWG.Done()
+	r.httpAddr = listener.Addr().String()
+	r.shutdownWG.Go(func() {
 		if errHTTP := r.serverHTTP.Serve(listener); !errors.Is(errHTTP, http.ErrServerClosed) && errHTTP != nil {
 			componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(errHTTP))
 		}
-	}()
+	})
 	return nil
 }
 
@@ -142,14 +145,12 @@ func (r *lokiReceiver) startGRPCServer(ctx context.Context, host component.Host)
 	if err != nil {
 		return err
 	}
-	r.shutdownWG.Add(1)
-
-	go func() {
-		defer r.shutdownWG.Done()
+	r.grpcAddr = listener.Addr().String()
+	r.shutdownWG.Go(func() {
 		if errGRPC := r.serverGRPC.Serve(listener); !errors.Is(errGRPC, grpc.ErrServerStopped) && errGRPC != nil {
 			componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(errGRPC))
 		}
-	}()
+	})
 	return nil
 }
 
@@ -163,6 +164,9 @@ func (r *lokiReceiver) Push(ctx context.Context, pushRequest *push.PushRequest) 
 	logRecordCount := logs.LogRecordCount()
 	err = r.nextConsumer.ConsumeLogs(ctx, logs)
 	r.obsrepGRPC.EndLogsOp(ctx, "protobuf", logRecordCount, err)
+	if err != nil {
+		return &push.PushResponse{}, errorutil.GrpcError(err)
+	}
 	return &push.PushResponse{}, nil
 }
 
@@ -187,12 +191,12 @@ func (r *lokiReceiver) Shutdown(ctx context.Context) error {
 
 func handleUnmatchedMethod(resp http.ResponseWriter) {
 	status := http.StatusMethodNotAllowed
-	writeResponse(resp, "text/plain", status, []byte(fmt.Sprintf("%v method not allowed, supported: [POST]", status)))
+	writeResponse(resp, "text/plain", status, fmt.Appendf(nil, "%v method not allowed, supported: [POST]", status))
 }
 
 func handleUnmatchedContentType(resp http.ResponseWriter) {
 	status := http.StatusUnsupportedMediaType
-	writeResponse(resp, "text/plain", status, []byte(fmt.Sprintf("%v unsupported media type, supported: [%s, %s]", status, jsonContentType, pbContentType)))
+	writeResponse(resp, "text/plain", status, fmt.Appendf(nil, "%v unsupported media type, supported: [%s, %s]", status, jsonContentType, pbContentType))
 }
 
 func writeResponse(w http.ResponseWriter, contentType string, statusCode int, msg []byte) {
@@ -219,6 +223,10 @@ func handleLogs(resp http.ResponseWriter, req *http.Request, r *lokiReceiver) {
 	logRecordCount := logs.LogRecordCount()
 	err = r.nextConsumer.ConsumeLogs(ctx, logs)
 	r.obsrepHTTP.EndLogsOp(ctx, "json", logRecordCount, err)
+	if err != nil {
+		errorutil.HTTPError(resp, err)
+		return
+	}
 
 	resp.WriteHeader(http.StatusNoContent)
 }

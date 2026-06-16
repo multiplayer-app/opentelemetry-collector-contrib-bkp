@@ -4,41 +4,42 @@
 package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 
 import (
-	"context"
+	"encoding/hex"
 	"errors"
-	"fmt"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
+const traceIDFuncName = "TraceID"
+
 type TraceIDArguments[K any] struct {
-	Bytes []byte
+	Target ottl.ByteSliceLikeGetter[K]
 }
 
 func NewTraceIDFactory[K any]() ottl.Factory[K] {
-	return ottl.NewFactory("TraceID", &TraceIDArguments[K]{}, createTraceIDFunction[K])
+	return ottl.NewFactory(traceIDFuncName, &TraceIDArguments[K]{}, createTraceIDFunction[K])
 }
 
 func createTraceIDFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (ottl.ExprFunc[K], error) {
 	args, ok := oArgs.(*TraceIDArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("TraceIDFactory args must be of type *TraceIDArguments[K]")
+		return nil, errors.New("TraceIDFactory args must be of type *TraceIDArguments[K]")
 	}
 
-	return traceID[K](args.Bytes)
+	return traceID[K](args.Target)
 }
 
-func traceID[K any](bytes []byte) (ottl.ExprFunc[K], error) {
-	if len(bytes) != 16 {
-		return nil, errors.New("traces ids must be 16 bytes")
+func traceID[K any](target ottl.ByteSliceLikeGetter[K]) (ottl.ExprFunc[K], error) {
+	return newIDExprFunc(traceIDFuncName, target, decodeHexToTraceID)
+}
+
+func decodeHexToTraceID(b []byte) (pcommon.TraceID, error) {
+	var id pcommon.TraceID
+	if _, err := hex.Decode(id[:], b); err != nil {
+		return pcommon.TraceID{}, err
 	}
-	var idArr [16]byte
-	copy(idArr[:16], bytes)
-	id := pcommon.TraceID(idArr)
-	return func(context.Context, K) (any, error) {
-		return id, nil
-	}, nil
+	return id, nil
 }

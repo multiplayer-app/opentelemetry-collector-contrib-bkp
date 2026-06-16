@@ -1,12 +1,33 @@
+display_name: Datadog Receiver
 type: datadog
+
+description: |
+  The Datadog receiver enables translation between Datadog and OpenTelemetry-compatible backends. It currently has
+  support for Datadog's APM traces, metrics, and logs.
 
 status:
   class: receiver
   stability:
-    alpha: [traces, metrics]
+    alpha: [traces, metrics, logs]
   distributions: [contrib]
   codeowners:
-    active: [boostchicken, gouthamve, jpkrohling, MovieStoreGuy]
+    active: [boostchicken, MovieStoreGuy]
+    emeritus: [gouthamve]
+
+feature_gates:
+  - id: receiver.datadogreceiver.Enable128BitTraceID
+    stage: alpha
+    description: When enabled, adds support for 128bits TraceIDs for spans coming from Datadog instrumented services.
+    from_version: v0.125.0
+    reference_url: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/36926
+    skip_strict_validation: true
+
+  - id: receiver.datadogreceiver.EnableMultiTagParsing
+    stage: alpha
+    description: When enabled, parses `key:value` tags with duplicate keys into a slice attribute.
+    from_version: v0.142.0
+    reference_url: https://github.com/open-telemetry/opentelemetry-collector-contrib/pull/44747
+    skip_strict_validation: true
 
 tests:
   skip_lifecycle: true # Skip lifecycle tests since there are multiple receivers that run on the same port

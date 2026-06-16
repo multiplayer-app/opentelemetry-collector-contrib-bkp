@@ -2,24 +2,32 @@ name: build
 on:
   push:
 env:
-  AWS_REGION: us-east-1
-  OCTOPUS_HOST: https://multiplayer.octopus.app
-  OCTOPUS_SPACE: multiplayer
-  DOCKER_IMAGE_NAME: multiplayer-staging-opentelemetry-collector
+  DOCKER_IMAGE_NAME: multiplayer-opentelemetry-collector-contrib
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  SERVICE_NAME: opentelemetry-collector
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
+
+permissions:
+  id-token: write
+  attestations: write
+  contents: read
+  packages: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.21.9"
-          cache: false
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          chmod +x ./.github/workflows/scripts/free-disk-space.sh
+          ./.github/workflows/scripts/free-disk-space.sh
+
       - name: Docker meta
         id: docker_meta
         uses: docker/metadata-action@v4
@@ -29,29 +37,31 @@ jobs:
           tags: |
             type=sha,prefix={{branch}}-
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1-node16
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          aws-region: ${{ env.AWS_REGION }}
-          aws-access-key-id: ${{ vars.STAGING_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.STAGING_AWS_SECRET_ACCESS_KEY }}
+          username: ${{ vars.DOCKERHUB_ORGANIZATION }}
+          password: ${{ secrets.DOCKERHUB_OAT }}
 
-      - name: Login to AWS ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v1
-      
-      - id: release_meta
-        env:
-          DOCKER_META_TAGS: ${{ steps.docker_meta.outputs.tags }}
+      - name: Set env variables
         run: |
-          RELEASE_TAG=${DOCKER_META_TAGS//app:/}
-          echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          SERVICE_VERSION=${BRANCH_NAME//\//-}-${GITHUB_SHA::7}
+          echo "SERVICE_VERSION=${SERVICE_VERSION}" >> $GITHUB_ENV
 
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+          DOCKER_IMAGE=${{ vars.DOCKERHUB_ORGANIZATION }}/${{ env.DOCKER_IMAGE_NAME }}
+          echo "DOCKER_IMAGE=${DOCKER_IMAGE}" >> $GITHUB_ENV
+
+          DOCKER_TAGS="${DOCKER_IMAGE}:${SERVICE_VERSION}"
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            DOCKER_TAGS="$DOCKER_TAGS,${DOCKER_IMAGE}:latest"
+          fi
+          echo "DOCKER_TAGS=$DOCKER_TAGS" >> $GITHUB_ENV
+
+      - name: Setup Go (tools)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: "1.22.8"
-          cache: false
+          go-version-file: "internal/tools/go.mod"
+
       - name: Cache Go
         id: go-cache
         timeout-minutes: 5
@@ -60,55 +70,79 @@ jobs:
           path: |
             ~/go/bin
             ~/go/pkg/mod
-            ./.tools
+            ~/.cache/go/build
           key: go-cache-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+
       - name: Install dependencies
         if: steps.go-cache.outputs.cache-hit != 'true'
         run: make -j2 gomoddownload
-      - name: Install Tools
-        if: steps.go-cache.outputs.cache-hit != 'true'
-        run: make install-tools
+
+      - name: Generate otelcontribcol sources
+        run: make genotelcontribcol
+
+      - name: Setup Go oldstable (avoids Go 1.25 linker bug with generics)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "oldstable"
+          cache: false
 
       - name: Build Docker Image
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          make genotelcontribcol
-          make docker-otelcontribcol
-          docker tag otelcontribcol:latest ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG
+          # Patch the generated go.mod to match the installed oldstable Go version.
+          # The upstream uses oldstable (Go 1.24) to avoid a Go 1.25.0 linker bug
+          # where generic function instantiations across module boundaries are lost.
+          GO_VER=$(go version | grep -oE 'go[0-9]+\.[0-9]+\.[0-9]+' | sed 's/go//')
+          sed -i "s/^go 1\.25\.0$/go ${GO_VER}/" cmd/otelcontribcol/go.mod
+
+          # Build binary (mirrors the otelcontribcol Makefile target, without re-running genotelcontribcol)
+          cd cmd/otelcontribcol && GOOS=linux GOARCH=amd64 GO111MODULE=on CGO_ENABLED=0 \
+            go build -trimpath -o ../../bin/otelcontribcol_linux_amd64 -tags "" .
+          cd ../..
+
+          # Build Docker image (mirrors docker-component Makefile target)
+          cp bin/otelcontribcol_linux_amd64 cmd/otelcontribcol/otelcontribcol
+          docker build --platform linux/amd64 -t otelcontribcol ./cmd/otelcontribcol/
+          rm cmd/otelcontribcol/otelcontribcol
+
+          # Tag with all required tags
+          IFS=',' read -ra TAGS <<< "$DOCKER_TAGS"
+          for TAG in "${TAGS[@]}"; do
+            docker tag otelcontribcol:latest "$TAG"
+          done
 
       - name: Validate Docker Image
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          docker run ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG --version
+          docker run $DOCKER_IMAGE:$SERVICE_VERSION --version
 
       - name: Push Docker Image
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-          DOCKER_IMAGE_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          docker push ${DOCKER_IMAGE_REGISTRY}/${DOCKER_IMAGE_NAME}:$RELEASE_TAG
+          IFS=',' read -ra TAGS <<< "$DOCKER_TAGS"
+          for TAG in "${TAGS[@]}"; do
+            docker push "$TAG"
+          done
 
-      - name: Get short commit hash
-        id: commit
-        uses: pr-mpt/actions-commit-hash@v2
+      # - name: Login to Octopus Deploy
+      #   uses: OctopusDeploy/login@v1
+      #   with:
+      #     server: ${{ secrets.OCTOPUS_HOST }}
+      #     service_account_id: ${{ secrets.OCTOPUS_SERVICE_ACCOUNT_ID }}
 
-      - name: Create octopus release
-        env:
-          OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
-          OCTOPUS_HOST: ${{ env.OCTOPUS_HOST }}
-          OCTOPUS_SPACE: ${{ env.OCTOPUS_SPACE }}
-          OCTOPUS_SERVICE_NAME: opentelemetry-collector
-          COMMIT_SHORT: ${{ steps.commit.outputs.short }}
-          COMMIT_SHA: ${{ github.sha }}
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-        run: |
-          RELEASE_NOTES="[GitHub commit: ${COMMIT_SHORT}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${COMMIT_SHA}) / [GitHub branch: ${BRANCH_NAME}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${BRANCH_NAME})"
-          SPACE_ID=$(curl --silent -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" "$OCTOPUS_HOST/api/spaces/all?partialName=$OCTOPUS_SPACE" | jq -r -c '.[].Id')
-          PROJECT_ID=$(curl --silent -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" "$OCTOPUS_HOST/api/projects/$OCTOPUS_SERVICE_NAME" | jq -r -c '.Id')
-          BODY='{"ProjectId":"'$PROJECT_ID'","SpaceId": "'$SPACE_ID'","Version":"'$RELEASE_TAG'","ReleaseNotes": "'$RELEASE_NOTES'"}'
-          curl -X POST --write-out %{http_code} --silent --output /dev/null -H "X-Octopus-ApiKey:$OCTOPUS_API_KEY" -H "Content-Type:application/json" -d "$BODY" "$OCTOPUS_HOST/api/releases"
+      # - name: Install OctopusCLI
+      #   uses: OctopusDeploy/install-octopus-cli-action@v3
+      #   with:
+      #     version: 1.2.0
+
+      # - name: Create a release in Octopus Deploy
+      #   uses: OctopusDeploy/create-release-action@v3
+      #   with:
+      #     project: ${{ env.SERVICE_NAME }}
+      #     server: ${{ secrets.OCTOPUS_HOST }}
+      #     space: ${{ secrets.OCTOPUS_SPACE }}
+      #     release_number: ${{ env.SERVICE_VERSION }}
+      #     release_notes: "[GitHub commit: ${{
+      #       steps.commit.outputs.sha_short}}](https://github.com/${{
+      #       github.event.repository.full_name }}/commit/${{
+      #       steps.commit.outputs.sha_short}}) / [GitHub branch: ${{
+      #       env.BRANCH_NAME }}](https://github.com/${{
+      #       github.event.repository.full_name }}/compare/${{ env.BRANCH_NAME
+      #       }})"

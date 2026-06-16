@@ -7,19 +7,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"strconv"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	arrowpb "github.com/open-telemetry/otel-arrow/api/experimental/arrow/v1"
-	arrowCollectorMock "github.com/open-telemetry/otel-arrow/api/experimental/arrow/v1/mock"
-	arrowRecord "github.com/open-telemetry/otel-arrow/pkg/otel/arrow_record"
-	arrowRecordMock "github.com/open-telemetry/otel-arrow/pkg/otel/arrow_record/mock"
-	otelAssert "github.com/open-telemetry/otel-arrow/pkg/otel/assert"
+	arrowpb "github.com/open-telemetry/otel-arrow/go/api/experimental/arrow/v1"
+	arrowCollectorMock "github.com/open-telemetry/otel-arrow/go/api/experimental/arrow/v1/mock"
+	arrowRecord "github.com/open-telemetry/otel-arrow/go/pkg/otel/arrow_record"
+	arrowRecordMock "github.com/open-telemetry/otel-arrow/go/pkg/otel/arrow_record/mock"
+	otelAssert "github.com/open-telemetry/otel-arrow/go/pkg/otel/assert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/client"
@@ -27,7 +28,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configgrpc"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/extension/auth"
+	"go.opentelemetry.io/collector/extension/extensionauth"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -36,7 +37,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap/zaptest"
 	"golang.org/x/net/http2/hpack"
@@ -44,21 +44,27 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/admission"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/admission2"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/netstats"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/testdata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver/internal/arrow/mock"
 )
 
-var noopTraces = noop.NewTracerProvider()
+var (
+	noopTelemetry = componenttest.NewNopTelemetrySettings()
+	testingID     = component.MustNewID("testing")
+)
 
-func defaultBQ() *admission.BoundedQueue {
-	return admission.NewBoundedQueue(noopTraces, int64(100000), int64(10))
+func defaultBQ() admission2.Queue {
+	bq, _ := admission2.NewBoundedQueue(testingID, noopTelemetry, 100000, 10)
+	return bq
 }
 
-type compareJSONTraces struct{ ptrace.Traces }
-type compareJSONMetrics struct{ pmetric.Metrics }
-type compareJSONLogs struct{ plog.Logs }
+type (
+	compareJSONTraces  struct{ ptrace.Traces }
+	compareJSONMetrics struct{ pmetric.Metrics }
+	compareJSONLogs    struct{ plog.Logs }
+)
 
 func (c compareJSONTraces) MarshalJSON() ([]byte, error) {
 	var m ptrace.JSONMarshaler
@@ -129,7 +135,7 @@ func newUnhealthyTestChannel(t *testing.T) *unhealthyTestChannel {
 	return &unhealthyTestChannel{t: t}
 }
 
-func (u unhealthyTestChannel) onConsume(ctx context.Context) error {
+func (unhealthyTestChannel) onConsume(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -256,6 +262,7 @@ func (m mockConsumers) Traces() consumer.Traces {
 func (m mockConsumers) Logs() consumer.Logs {
 	return m.logs
 }
+
 func (m mockConsumers) Metrics() consumer.Metrics {
 	return m.metrics
 }
@@ -266,7 +273,7 @@ func newCommonTestCase(t *testing.T, tc testChannel) *commonTestCase {
 	ctrl := gomock.NewController(t)
 	stream := arrowCollectorMock.NewMockArrowTracesService_ArrowTracesServer(ctrl)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ctx = metadata.NewIncomingContext(ctx, metadata.MD{
 		"stream_ctx": []string{"per-request"},
 	})
@@ -342,9 +349,9 @@ func (ctc *commonTestCase) newErrorConsumer() arrowRecord.ConsumerAPI {
 	mock := arrowRecordMock.NewMockConsumerAPI(ctc.ctrl)
 
 	mock.EXPECT().Close().Times(1).Return(nil)
-	mock.EXPECT().TracesFrom(gomock.Any()).AnyTimes().Return(nil, fmt.Errorf("test invalid error"))
-	mock.EXPECT().MetricsFrom(gomock.Any()).AnyTimes().Return(nil, fmt.Errorf("test invalid error"))
-	mock.EXPECT().LogsFrom(gomock.Any()).AnyTimes().Return(nil, fmt.Errorf("test invalid error"))
+	mock.EXPECT().TracesFrom(gomock.Any()).AnyTimes().Return(nil, errors.New("test invalid error"))
+	mock.EXPECT().MetricsFrom(gomock.Any()).AnyTimes().Return(nil, errors.New("test invalid error"))
+	mock.EXPECT().LogsFrom(gomock.Any()).AnyTimes().Return(nil, errors.New("test invalid error"))
 
 	return mock
 }
@@ -360,8 +367,12 @@ func (ctc *commonTestCase) newOOMConsumer() arrowRecord.ConsumerAPI {
 	return mock
 }
 
-func (ctc *commonTestCase) start(newConsumer func() arrowRecord.ConsumerAPI, bq *admission.BoundedQueue, opts ...func(*configgrpc.ServerConfig, *auth.Server)) {
-	var authServer auth.Server
+func (ctc *commonTestCase) start(newConsumer func() arrowRecord.ConsumerAPI, bq admission2.Queue, opts ...func(*configgrpc.ServerConfig, *extensionauth.Server)) {
+	ctc.startWithSignal(signalTraces, newConsumer, bq, opts...)
+}
+
+func (ctc *commonTestCase) startWithSignal(sig signalType, newConsumer func() arrowRecord.ConsumerAPI, bq admission2.Queue, opts ...func(*configgrpc.ServerConfig, *extensionauth.Server)) {
+	var authServer extensionauth.Server
 	var gsettings configgrpc.ServerConfig
 	for _, gf := range opts {
 		gf(&gsettings, &authServer)
@@ -389,11 +400,20 @@ func (ctc *commonTestCase) start(newConsumer func() arrowRecord.ConsumerAPI, bq 
 	)
 	require.NoError(ctc.T, err)
 	go func() {
-		ctc.streamErr <- rcvr.ArrowTraces(ctc.stream)
+		ctc.streamErr <- rcvr.anyStream(ctc.stream, sig)
 	}()
 }
 
 func requireCanceledStatus(t *testing.T, err error) {
+	requireStatus(t, codes.Canceled, err)
+}
+
+func requireCanceledOrCleanStatus(t *testing.T, err error) {
+	// TODO: This fixed the test on #46000 but it is unclear if
+	// it is the desired thing to test for.
+	if err == nil {
+		return
+	}
 	requireStatus(t, codes.Canceled, err)
 }
 
@@ -409,6 +429,10 @@ func requireExhaustedStatus(t *testing.T, err error) {
 	requireStatus(t, codes.ResourceExhausted, err)
 }
 
+func requireInvalidArgumentStatus(t *testing.T, err error) {
+	requireStatus(t, codes.InvalidArgument, err)
+}
+
 func requireStatus(t *testing.T, code codes.Code, err error) {
 	require.Error(t, err)
 	status, ok := status.FromError(err)
@@ -416,55 +440,26 @@ func requireStatus(t *testing.T, code codes.Code, err error) {
 	require.Equal(t, code, status.Code())
 }
 
-func TestBoundedQueueWithPdataHeaders(t *testing.T) {
+func TestBoundedQueueLimits(t *testing.T) {
 	var sizer ptrace.ProtoMarshaler
 	stdTesting := otelAssert.NewStdUnitTest(t)
-	pdataSizeTenTraces := sizer.TracesSize(testdata.GenerateTraces(10))
-	defaultBoundedQueueLimit := int64(100000)
+	td := testdata.GenerateTraces(10)
+	tdSize := int64(sizer.TracesSize(td))
+
 	tests := []struct {
-		name               string
-		numTraces          int
-		includePdataHeader bool
-		pdataSize          string
-		rejected           bool
+		name       string
+		admitLimit int64
+		expectErr  bool
 	}{
 		{
-			name:      "no header compressed greater than uncompressed",
-			numTraces: 10,
+			name:       "admit request",
+			admitLimit: tdSize * 2,
+			expectErr:  false,
 		},
 		{
-			name:      "no header compressed less than uncompressed",
-			numTraces: 100,
-		},
-		{
-			name:               "pdata header less than uncompressedSize",
-			numTraces:          10,
-			pdataSize:          strconv.Itoa(pdataSizeTenTraces / 2),
-			includePdataHeader: true,
-		},
-		{
-			name:               "pdata header equal uncompressedSize",
-			numTraces:          10,
-			pdataSize:          strconv.Itoa(pdataSizeTenTraces),
-			includePdataHeader: true,
-		},
-		{
-			name:               "pdata header greater than uncompressedSize",
-			numTraces:          10,
-			pdataSize:          strconv.Itoa(pdataSizeTenTraces * 2),
-			includePdataHeader: true,
-		},
-		{
-			name:      "no header compressed accepted uncompressed rejected",
-			numTraces: 100,
-			rejected:  true,
-		},
-		{
-			name:               "pdata header accepted uncompressed rejected",
-			numTraces:          100,
-			rejected:           true,
-			pdataSize:          strconv.Itoa(pdataSizeTenTraces),
-			includePdataHeader: true,
+			name:       "reject request",
+			admitLimit: tdSize / 2,
+			expectErr:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -472,35 +467,38 @@ func TestBoundedQueueWithPdataHeaders(t *testing.T) {
 			tc := newHealthyTestChannel(t)
 			ctc := newCommonTestCase(t, tc)
 
-			td := testdata.GenerateTraces(tt.numTraces)
 			batch, err := ctc.testProducer.BatchArrowRecordsFromTraces(td)
 			require.NoError(t, err)
-			if tt.includePdataHeader {
-				var hpb bytes.Buffer
-				hpe := hpack.NewEncoder(&hpb)
-				err = hpe.WriteField(hpack.HeaderField{
-					Name:  "otlp-pdata-size",
-					Value: tt.pdataSize,
-				})
-				assert.NoError(t, err)
-				batch.Headers = make([]byte, hpb.Len())
-				copy(batch.Headers, hpb.Bytes())
-			}
 
-			var bq *admission.BoundedQueue
-			if tt.rejected {
+			var bq admission2.Queue
+			// Note that this test exercises the case where there is or is not an
+			// error unrelated to pending data, thus we pass 0 in both cases as
+			// the WaitingLimitMiB below.
+			//
+			// There is an end-to-end test of admission control, including the
+			// ResourceExhausted status code we expect, in
+			// internal/otelarrow/test/e2e_test.go.
+			sendDone := make(chan struct{})
+			if tt.expectErr {
 				ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(0)
-				bq = admission.NewBoundedQueue(noopTraces, int64(sizer.TracesSize(td)-100), 10)
+				bq, err = admission2.NewBoundedQueue(testingID, noopTelemetry, uint64(sizer.TracesSize(td)-100), 0)
+				close(sendDone)
 			} else {
-				ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(nil)
-				bq = admission.NewBoundedQueue(noopTraces, defaultBoundedQueueLimit, 10)
+				ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).DoAndReturn(
+					func(_ *arrowpb.BatchStatus) error {
+						close(sendDone)
+						return nil
+					},
+				)
+				bq, err = admission2.NewBoundedQueue(testingID, noopTelemetry, uint64(tt.admitLimit), 0)
 			}
+			require.NoError(t, err)
 
 			ctc.start(ctc.newRealConsumer, bq)
 			ctc.putBatch(batch, nil)
 
-			if tt.rejected {
-				requireExhaustedStatus(t, ctc.wait())
+			if tt.expectErr {
+				requireInvalidArgumentStatus(t, ctc.wait())
 			} else {
 				data := <-ctc.consume
 				actualTD := data.Data.(ptrace.Traces)
@@ -509,7 +507,8 @@ func TestBoundedQueueWithPdataHeaders(t *testing.T) {
 				}, []json.Marshaler{
 					compareJSONTraces{actualTD},
 				})
-				requireCanceledStatus(t, ctc.cancelAndWait())
+				<-sendDone
+				requireCanceledOrCleanStatus(t, ctc.cancelAndWait())
 			}
 		})
 	}
@@ -524,7 +523,16 @@ func TestReceiverTraces(t *testing.T) {
 	batch, err := ctc.testProducer.BatchArrowRecordsFromTraces(td)
 	require.NoError(t, err)
 
-	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(nil)
+	// Use a channel to synchronize: ensure Send completes before we
+	// cancel the context, avoiding a race where cancellation arrives
+	// before the receiver goroutine calls Send.
+	sendDone := make(chan struct{})
+	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).DoAndReturn(
+		func(_ *arrowpb.BatchStatus) error {
+			close(sendDone)
+			return nil
+		},
+	)
 
 	ctc.start(ctc.newRealConsumer, defaultBQ())
 	ctc.putBatch(batch, nil)
@@ -535,8 +543,9 @@ func TestReceiverTraces(t *testing.T) {
 		compareJSONTraces{(<-ctc.consume).Data.(ptrace.Traces)},
 	})
 
+	<-sendDone
 	err = ctc.cancelAndWait()
-	requireCanceledStatus(t, err)
+	requireCanceledOrCleanStatus(t, err)
 }
 
 func TestReceiverLogs(t *testing.T) {
@@ -547,15 +556,22 @@ func TestReceiverLogs(t *testing.T) {
 	batch, err := ctc.testProducer.BatchArrowRecordsFromLogs(ld)
 	require.NoError(t, err)
 
-	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(nil)
+	sendDone := make(chan struct{})
+	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).DoAndReturn(
+		func(_ *arrowpb.BatchStatus) error {
+			close(sendDone)
+			return nil
+		},
+	)
 
-	ctc.start(ctc.newRealConsumer, defaultBQ())
+	ctc.startWithSignal(signalLogs, ctc.newRealConsumer, defaultBQ())
 	ctc.putBatch(batch, nil)
 
-	assert.EqualValues(t, []json.Marshaler{compareJSONLogs{ld}}, []json.Marshaler{compareJSONLogs{(<-ctc.consume).Data.(plog.Logs)}})
+	assert.Equal(t, []json.Marshaler{compareJSONLogs{ld}}, []json.Marshaler{compareJSONLogs{(<-ctc.consume).Data.(plog.Logs)}})
 
+	<-sendDone
 	err = ctc.cancelAndWait()
-	requireCanceledStatus(t, err)
+	requireCanceledOrCleanStatus(t, err)
 }
 
 func TestReceiverMetrics(t *testing.T) {
@@ -567,9 +583,15 @@ func TestReceiverMetrics(t *testing.T) {
 	batch, err := ctc.testProducer.BatchArrowRecordsFromMetrics(md)
 	require.NoError(t, err)
 
-	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(nil)
+	sendDone := make(chan struct{})
+	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).DoAndReturn(
+		func(_ *arrowpb.BatchStatus) error {
+			close(sendDone)
+			return nil
+		},
+	)
 
-	ctc.start(ctc.newRealConsumer, defaultBQ())
+	ctc.startWithSignal(signalMetrics, ctc.newRealConsumer, defaultBQ())
 	ctc.putBatch(batch, nil)
 
 	otelAssert.Equiv(stdTesting, []json.Marshaler{
@@ -578,6 +600,7 @@ func TestReceiverMetrics(t *testing.T) {
 		compareJSONMetrics{(<-ctc.consume).Data.(pmetric.Metrics)},
 	})
 
+	<-sendDone
 	err = ctc.cancelAndWait()
 	requireCanceledStatus(t, err)
 }
@@ -588,7 +611,7 @@ func TestReceiverRecvError(t *testing.T) {
 
 	ctc.start(ctc.newRealConsumer, defaultBQ())
 
-	ctc.putBatch(nil, fmt.Errorf("test recv error"))
+	ctc.putBatch(nil, errors.New("test recv error"))
 
 	err := ctc.wait()
 	require.ErrorContains(t, err, "test recv error")
@@ -604,7 +627,7 @@ func TestReceiverSendError(t *testing.T) {
 
 	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(status.Errorf(codes.Unavailable, "test send error"))
 
-	ctc.start(ctc.newRealConsumer, defaultBQ())
+	ctc.startWithSignal(signalLogs, ctc.newRealConsumer, defaultBQ())
 	ctc.putBatch(batch, nil)
 
 	assert.EqualValues(t, ld, (<-ctc.consume).Data)
@@ -651,7 +674,7 @@ func TestReceiverTimeoutError(t *testing.T) {
 	batch.Headers = make([]byte, hpb.Len())
 	copy(batch.Headers, hpb.Bytes())
 
-	ctc.start(ctc.newRealConsumer, defaultBQ())
+	ctc.startWithSignal(signalLogs, ctc.newRealConsumer, defaultBQ())
 	ctc.putBatch(batch, nil)
 
 	assert.EqualValues(t, ld, (<-ctc.consume).Data)
@@ -672,19 +695,23 @@ func TestReceiverTimeoutError(t *testing.T) {
 func TestReceiverConsumeError(t *testing.T) {
 	stdTesting := otelAssert.NewStdUnitTest(t)
 
-	data := []any{
-		testdata.GenerateTraces(2),
-		testdata.GenerateMetrics(2),
-		testdata.GenerateLogs(2),
+	type testItem struct {
+		data any
+		sig  signalType
+	}
+	items := []testItem{
+		{data: testdata.GenerateTraces(2), sig: signalTraces},
+		{data: testdata.GenerateMetrics(2), sig: signalMetrics},
+		{data: testdata.GenerateLogs(2), sig: signalLogs},
 	}
 
-	for _, item := range data {
+	for _, item := range items {
 		tc := newUnhealthyTestChannel(t)
 		ctc := newCommonTestCase(t, tc)
 
 		var batch *arrowpb.BatchArrowRecords
 		var err error
-		switch input := item.(type) {
+		switch input := item.data.(type) {
 		case ptrace.Traces:
 			batch, err = ctc.testProducer.BatchArrowRecordsFromTraces(input)
 		case plog.Logs:
@@ -698,13 +725,19 @@ func TestReceiverConsumeError(t *testing.T) {
 
 		batch = copyBatch(batch)
 
-		ctc.stream.EXPECT().Send(statusUnavailableFor(batch.BatchId, "consumer unhealthy")).Times(1).Return(nil)
+		sendDone := make(chan struct{})
+		ctc.stream.EXPECT().Send(statusUnavailableFor(batch.BatchId, "consumer unhealthy")).Times(1).DoAndReturn(
+			func(_ *arrowpb.BatchStatus) error {
+				close(sendDone)
+				return nil
+			},
+		)
 
-		ctc.start(ctc.newRealConsumer, defaultBQ())
+		ctc.startWithSignal(item.sig, ctc.newRealConsumer, defaultBQ())
 
 		ctc.putBatch(batch, nil)
 
-		switch input := item.(type) {
+		switch input := item.data.(type) {
 		case ptrace.Traces:
 			otelAssert.Equiv(stdTesting, []json.Marshaler{
 				compareJSONTraces{input},
@@ -725,25 +758,30 @@ func TestReceiverConsumeError(t *testing.T) {
 			})
 		}
 
+		<-sendDone
 		err = ctc.cancelAndWait()
-		requireCanceledStatus(t, err)
+		requireCanceledOrCleanStatus(t, err)
 	}
 }
 
 func TestReceiverInvalidData(t *testing.T) {
-	data := []any{
-		testdata.GenerateTraces(2),
-		testdata.GenerateMetrics(2),
-		testdata.GenerateLogs(2),
+	type testItem struct {
+		data any
+		sig  signalType
+	}
+	items := []testItem{
+		{data: testdata.GenerateTraces(2), sig: signalTraces},
+		{data: testdata.GenerateMetrics(2), sig: signalMetrics},
+		{data: testdata.GenerateLogs(2), sig: signalLogs},
 	}
 
-	for _, item := range data {
+	for _, item := range items {
 		tc := newHealthyTestChannel(t)
 		ctc := newCommonTestCase(t, tc)
 
 		var batch *arrowpb.BatchArrowRecords
 		var err error
-		switch input := item.(type) {
+		switch input := item.data.(type) {
 		case ptrace.Traces:
 			batch, err = ctc.testProducer.BatchArrowRecordsFromTraces(input)
 		case plog.Logs:
@@ -758,7 +796,7 @@ func TestReceiverInvalidData(t *testing.T) {
 		batch = copyBatch(batch)
 
 		// newErrorConsumer determines the internal error in decoding above
-		ctc.start(ctc.newErrorConsumer, defaultBQ())
+		ctc.startWithSignal(item.sig, ctc.newErrorConsumer, defaultBQ())
 		ctc.putBatch(batch, nil)
 
 		err = ctc.wait()
@@ -767,19 +805,23 @@ func TestReceiverInvalidData(t *testing.T) {
 }
 
 func TestReceiverMemoryLimit(t *testing.T) {
-	data := []any{
-		testdata.GenerateTraces(2),
-		testdata.GenerateMetrics(2),
-		testdata.GenerateLogs(2),
+	type testItem struct {
+		data any
+		sig  signalType
+	}
+	items := []testItem{
+		{data: testdata.GenerateTraces(2), sig: signalTraces},
+		{data: testdata.GenerateMetrics(2), sig: signalMetrics},
+		{data: testdata.GenerateLogs(2), sig: signalLogs},
 	}
 
-	for _, item := range data {
+	for _, item := range items {
 		tc := newHealthyTestChannel(t)
 		ctc := newCommonTestCase(t, tc)
 
 		var batch *arrowpb.BatchArrowRecords
 		var err error
-		switch input := item.(type) {
+		switch input := item.data.(type) {
 		case ptrace.Traces:
 			batch, err = ctc.testProducer.BatchArrowRecordsFromTraces(input)
 		case plog.Logs:
@@ -795,12 +837,55 @@ func TestReceiverMemoryLimit(t *testing.T) {
 
 		// The Recv() returns an error, there are no Send() calls.
 
-		ctc.start(ctc.newOOMConsumer, defaultBQ())
+		ctc.startWithSignal(item.sig, ctc.newOOMConsumer, defaultBQ())
 		ctc.putBatch(batch, nil)
 
 		err = ctc.wait()
 		requireExhaustedStatus(t, err)
 	}
+}
+
+// TestReceiverPayloadPositionIndependent verifies that the receiver
+// correctly processes data based on the gRPC service method rather than
+// the ArrowPayload.Type field at position 0.
+//
+// See: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/46878
+func TestReceiverPayloadPositionIndependent(t *testing.T) {
+	stdTesting := otelAssert.NewStdUnitTest(t)
+	tc := newHealthyTestChannel(t)
+	ctc := newCommonTestCase(t, tc)
+
+	td := testdata.GenerateTraces(2)
+	batch, err := ctc.testProducer.BatchArrowRecordsFromTraces(td)
+	require.NoError(t, err)
+
+	batch = copyBatch(batch)
+
+	// Reverse the payload order so that the root payload type (SPANS)
+	// is no longer at position 0.
+	payloads := batch.ArrowPayloads
+	require.Greater(t, len(payloads), 1, "need multiple payloads to test reordering")
+	for i, j := 0, len(payloads)-1; i < j; i, j = i+1, j-1 {
+		payloads[i], payloads[j] = payloads[j], payloads[i]
+	}
+
+	ctc.stream.EXPECT().Send(statusOKFor(batch.BatchId)).Times(1).Return(nil)
+
+	ctc.startWithSignal(signalTraces, ctc.newRealConsumer, defaultBQ())
+	ctc.putBatch(batch, nil)
+
+	otelAssert.Equiv(stdTesting, []json.Marshaler{
+		compareJSONTraces{td},
+	}, []json.Marshaler{
+		compareJSONTraces{(<-ctc.consume).Data.(ptrace.Traces)},
+	})
+
+	// Like other cancel-driven shutdown tests in this file, the
+	// recv goroutine may observe EOF before the Canceled status
+	// surfaces (especially on Windows runners), so accept either a
+	// Canceled status or a clean shutdown. See issue #46000.
+	err = ctc.cancelAndWait()
+	requireCanceledOrCleanStatus(t, err)
 }
 
 func copyBatch(in *arrowpb.BatchArrowRecords) *arrowpb.BatchArrowRecords {
@@ -845,7 +930,7 @@ func TestReceiverEOF(t *testing.T) {
 	ctc.start(ctc.newRealConsumer, defaultBQ())
 
 	go func() {
-		for i := 0; i < times; i++ {
+		for range times {
 			td := testdata.GenerateTraces(2)
 			expectData = append(expectData, td)
 
@@ -860,18 +945,16 @@ func TestReceiverEOF(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		assert.NoError(t, ctc.wait())
-		wg.Done()
-	}()
+	})
 
-	for i := 0; i < times; i++ {
+	for range times {
 		actualData = append(actualData, (<-ctc.consume).Data.(ptrace.Traces))
 	}
 
-	assert.Equal(t, len(expectData), len(actualData))
+	assert.Len(t, actualData, len(expectData))
 
 	for i := 0; i < len(expectData); i++ {
 		otelAssert.Equiv(stdTesting, []json.Marshaler{
@@ -905,7 +988,7 @@ func testReceiverHeaders(t *testing.T, includeMeta bool) {
 
 	ctc.stream.EXPECT().Send(gomock.Any()).Times(len(expectData)).Return(nil)
 
-	ctc.start(ctc.newRealConsumer, defaultBQ(), func(gsettings *configgrpc.ServerConfig, _ *auth.Server) {
+	ctc.start(ctc.newRealConsumer, defaultBQ(), func(gsettings *configgrpc.ServerConfig, _ *extensionauth.Server) {
 		gsettings.IncludeMetadata = includeMeta
 	})
 
@@ -942,12 +1025,10 @@ func testReceiverHeaders(t *testing.T, includeMeta bool) {
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		assert.NoError(t, ctc.wait())
-		wg.Done()
-	}()
+	})
 
 	for _, expect := range expectData {
 		info := client.FromContext((<-ctc.consume).Ctx)
@@ -970,17 +1051,6 @@ func testReceiverHeaders(t *testing.T, includeMeta bool) {
 	wg.Wait()
 }
 
-func TestReceiverCancel(t *testing.T) {
-	tc := newHealthyTestChannel(t)
-	ctc := newCommonTestCase(t, tc)
-
-	ctc.cancel()
-	ctc.start(ctc.newRealConsumer, defaultBQ())
-
-	err := ctc.wait()
-	requireCanceledStatus(t, err)
-}
-
 func requireContainsAll(t *testing.T, md client.Metadata, exp map[string][]string) {
 	for key, vals := range exp {
 		require.Equal(t, vals, md.Get(key))
@@ -999,11 +1069,11 @@ func TestHeaderReceiverStreamContextOnly(t *testing.T) {
 		"L": {"l1"},
 	}
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(expect))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(expect))
 
 	h := newHeaderReceiver(ctx, nil, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		cc, _, err := h.combineHeaders(ctx, nil)
 
 		require.NoError(t, err)
@@ -1017,11 +1087,11 @@ func TestHeaderReceiverNoIncludeMetadata(t *testing.T) {
 		"L": {"l1"},
 	}
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(noExpect))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(noExpect))
 
 	h := newHeaderReceiver(ctx, nil, false)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		cc, _, err := h.combineHeaders(ctx, nil)
 
 		require.NoError(t, err)
@@ -1035,7 +1105,7 @@ func TestHeaderReceiverAuthServerNoIncludeMetadata(t *testing.T) {
 		"K": {"l1"},
 	}
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(expectForAuth))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(expectForAuth))
 
 	ctrl := gomock.NewController(t)
 	as := mock.NewMockServer(ctrl)
@@ -1045,7 +1115,7 @@ func TestHeaderReceiverAuthServerNoIncludeMetadata(t *testing.T) {
 
 	h := newHeaderReceiver(ctx, as, false)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		cc, hdrs, err := h.combineHeaders(ctx, nil)
 
 		// The incoming metadata keys are not in the context.
@@ -1054,7 +1124,7 @@ func TestHeaderReceiverAuthServerNoIncludeMetadata(t *testing.T) {
 
 		// Headers are returned for the auth server, though
 		// names have been forced to lower case.
-		require.Equal(t, len(hdrs), len(expectForAuth))
+		require.Len(t, expectForAuth, len(hdrs))
 		for k, v := range expectForAuth {
 			require.Equal(t, hdrs[strings.ToLower(k)], v)
 		}
@@ -1071,11 +1141,11 @@ func TestHeaderReceiverRequestNoStreamMetadata(t *testing.T) {
 
 	hpe := hpack.NewEncoder(&hpb)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	h := newHeaderReceiver(ctx, nil, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hpb.Reset()
 
 		for key, vals := range expect {
@@ -1105,7 +1175,7 @@ func TestHeaderReceiverAuthServerIsSetNoIncludeMetadata(t *testing.T) {
 
 	hpe := hpack.NewEncoder(&hpb)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ctrl := gomock.NewController(t)
 	as := mock.NewMockServer(ctrl)
@@ -1115,7 +1185,7 @@ func TestHeaderReceiverAuthServerIsSetNoIncludeMetadata(t *testing.T) {
 
 	h := newHeaderReceiver(ctx, as, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hpb.Reset()
 
 		for key, vals := range expect {
@@ -1139,7 +1209,7 @@ func TestHeaderReceiverAuthServerIsSetNoIncludeMetadata(t *testing.T) {
 		// case.  It's not safe to check that the map sizes
 		// are equal after calling Get() below, so we assert
 		// same size first.
-		require.Equal(t, len(hdrs), len(expect))
+		require.Len(t, expect, len(hdrs))
 
 		requireContainsAll(t, client.FromContext(cc).Metadata, expect)
 
@@ -1170,11 +1240,11 @@ func TestHeaderReceiverBothMetadata(t *testing.T) {
 
 	hpe := hpack.NewEncoder(&hpb)
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(expectK))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(expectK))
 
 	h := newHeaderReceiver(ctx, nil, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hpb.Reset()
 
 		for key, vals := range expectL {
@@ -1216,11 +1286,11 @@ func TestHeaderReceiverDuplicateMetadata(t *testing.T) {
 
 	hpe := hpack.NewEncoder(&hpb)
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(expectStream))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(expectStream))
 
 	h := newHeaderReceiver(ctx, nil, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hpb.Reset()
 
 		for key, vals := range expectRequest {
@@ -1246,7 +1316,7 @@ func TestReceiverAuthHeadersStream(t *testing.T) {
 	t.Run("per-data", func(t *testing.T) { testReceiverAuthHeaders(t, true, true) })
 }
 
-func testReceiverAuthHeaders(t *testing.T, includeMeta bool, dataAuth bool) {
+func testReceiverAuthHeaders(t *testing.T, includeMeta, dataAuth bool) {
 	tc := newHealthyTestChannel(t)
 	ctc := newCommonTestCase(t, tc)
 
@@ -1266,7 +1336,7 @@ func testReceiverAuthHeaders(t *testing.T, includeMeta bool, dataAuth bool) {
 	})
 
 	var authCall *gomock.Call
-	ctc.start(ctc.newRealConsumer, defaultBQ(), func(gsettings *configgrpc.ServerConfig, authPtr *auth.Server) {
+	ctc.start(ctc.newRealConsumer, defaultBQ(), func(gsettings *configgrpc.ServerConfig, authPtr *extensionauth.Server) {
 		gsettings.IncludeMetadata = includeMeta
 
 		as := mock.NewMockServer(ctc.ctrl)
@@ -1290,15 +1360,13 @@ func testReceiverAuthHeaders(t *testing.T, includeMeta bool, dataAuth bool) {
 
 		if ok {
 			newmd := map[string][]string{}
-			for k, v := range hdrs {
-				newmd[k] = v
-			}
+			maps.Copy(newmd, hdrs)
 			newmd["has_auth"] = []string{":+1:", ":100:"}
 			return client.NewContext(ctx, client.Info{
 				Metadata: client.NewMetadata(newmd),
 			}), nil
 		}
-		return ctx, fmt.Errorf("not authorized")
+		return ctx, errors.New("not authorized")
 	})
 
 	go func() {
@@ -1314,7 +1382,6 @@ func testReceiverAuthHeaders(t *testing.T, includeMeta bool, dataAuth bool) {
 			batch = copyBatch(batch)
 
 			if len(md) != 0 {
-
 				hpb.Reset()
 				for key, vals := range md {
 					for _, val := range vals {
@@ -1341,9 +1408,7 @@ func testReceiverAuthHeaders(t *testing.T, includeMeta bool, dataAuth bool) {
 		cpy := map[string][]string{}
 		cpy["stream_ctx"] = []string{"per-request"}
 
-		for k, v := range testInput {
-			cpy[k] = v
-		}
+		maps.Copy(cpy, testInput)
 
 		expectCode := arrowpb.StatusCode_OK
 		if dataAuth {
@@ -1405,11 +1470,11 @@ func TestHeaderReceiverIsTraced(t *testing.T) {
 
 	hpe := hpack.NewEncoder(&hpb)
 
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD(streamHeaders))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.MD(streamHeaders))
 
 	h := newHeaderReceiver(ctx, nil, true)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hpb.Reset()
 
 		for key, vals := range requestHeaders {

@@ -5,6 +5,7 @@ package tracking
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,16 +32,17 @@ func TestMetricTracker_Convert(t *testing.T) {
 	miSum.MetricValueType = pmetric.NumberDataPointValueTypeDouble
 
 	type subTest struct {
-		name    string
-		value   ValuePoint
-		wantOut DeltaValue
-		noOut   bool
+		name       string
+		value      ValuePoint
+		wantOut    DeltaValue
+		noOut      bool
+		wantReason string
 	}
 
 	future := time.Now().Add(1 * time.Hour)
 
 	keepSubsequentTest := subTest{
-		name: "keep subsequet value",
+		name: "keep subsequent value",
 		value: ValuePoint{
 			ObservedTimestamp: pcommon.NewTimestampFromTime(future.Add(time.Minute)),
 			FloatValue:        225,
@@ -87,7 +89,8 @@ func TestMetricTracker_Convert(t *testing.T) {
 						FloatValue:        100,
 						IntValue:          100,
 					},
-					noOut: true,
+					noOut:      true,
+					wantReason: ReasonInitial,
 				},
 				keepSubsequentTest,
 			},
@@ -102,7 +105,8 @@ func TestMetricTracker_Convert(t *testing.T) {
 						FloatValue:        100,
 						IntValue:          100,
 					},
-					noOut: true,
+					noOut:      true,
+					wantReason: ReasonInitial,
 				},
 				keepSubsequentTest,
 			},
@@ -118,7 +122,8 @@ func TestMetricTracker_Convert(t *testing.T) {
 						FloatValue:        100,
 						IntValue:          100,
 					},
-					noOut: true,
+					noOut:      true,
+					wantReason: ReasonInitial,
 				},
 				keepSubsequentTest,
 			},
@@ -160,7 +165,8 @@ func TestMetricTracker_Convert(t *testing.T) {
 						FloatValue:        75.0,
 						IntValue:          75,
 					},
-					noOut: true,
+					noOut:      true,
+					wantReason: ReasonReset,
 				},
 				{
 					name: "Convert delta above previous not Converted Value",
@@ -194,7 +200,7 @@ func TestMetricTracker_Convert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.initValue.String(), func(t *testing.T) {
-			m := NewMetricTracker(context.Background(), zap.NewNop(), 0, tt.initValue)
+			m := NewMetricTracker(t.Context(), zap.NewNop(), 0, tt.initValue)
 
 			miSum := miSum
 			miSum.StartTimestamp = tt.metricStartTime
@@ -212,14 +218,16 @@ func TestMetricTracker_Convert(t *testing.T) {
 						Value:    ttt.value,
 					}
 
-					gotOut, valid := m.Convert(floatPoint)
+					gotOut, valid, reason := m.Convert(floatPoint)
+					assert.Equal(t, ttt.wantReason, reason)
 					if !ttt.noOut {
 						require.True(t, valid)
 						assert.Equal(t, ttt.wantOut.StartTimestamp, gotOut.StartTimestamp)
 						assert.Equal(t, ttt.wantOut.FloatValue, gotOut.FloatValue)
 					}
 
-					gotOut, valid = m.Convert(intPoint)
+					gotOut, valid, reason = m.Convert(intPoint)
+					assert.Equal(t, ttt.wantReason, reason)
 					if !ttt.noOut {
 						require.True(t, valid)
 						assert.Equal(t, ttt.wantOut.StartTimestamp, gotOut.StartTimestamp)
@@ -231,10 +239,10 @@ func TestMetricTracker_Convert(t *testing.T) {
 	}
 
 	t.Run("Invalid metric identity", func(t *testing.T) {
-		m := NewMetricTracker(context.Background(), zap.NewNop(), 0, InitialValueAuto)
+		m := NewMetricTracker(t.Context(), zap.NewNop(), 0, InitialValueAuto)
 		invalidID := miIntSum
 		invalidID.MetricType = pmetric.MetricTypeGauge
-		_, valid := m.Convert(MetricPoint{
+		_, valid, reason := m.Convert(MetricPoint{
 			Identity: invalidID,
 			Value: ValuePoint{
 				ObservedTimestamp: 0,
@@ -242,9 +250,21 @@ func TestMetricTracker_Convert(t *testing.T) {
 				IntValue:          100,
 			},
 		})
-		if valid {
-			t.Error("Expected invalid for non cumulative metric")
-		}
+		assert.False(t, valid, "Expected invalid for non cumulative metric")
+		assert.Empty(t, reason, "Expected no reason for non cumulative metric")
+	})
+
+	t.Run("NaN float value", func(t *testing.T) {
+		m := NewMetricTracker(t.Context(), zap.NewNop(), 0, InitialValueAuto)
+		_, valid, reason := m.Convert(MetricPoint{
+			Identity: miSum,
+			Value: ValuePoint{
+				ObservedTimestamp: pcommon.NewTimestampFromTime(future),
+				FloatValue:        math.NaN(),
+			},
+		})
+		assert.False(t, valid, "Expected invalid for NaN float value")
+		assert.Empty(t, reason, "Expected no reason for NaN float value")
 	})
 }
 
@@ -259,29 +279,29 @@ func Test_metricTracker_removeStale(t *testing.T) {
 
 	type fields struct {
 		MaxStaleness time.Duration
-		States       map[string]*State
+		States       map[string]*state
 	}
 	tests := []struct {
 		name    string
 		fields  fields
-		wantOut map[string]*State
+		wantOut map[string]*state
 	}{
 		{
 			name: "Removes stale entry, leaves fresh entry",
 			fields: fields{
 				MaxStaleness: 0, // This logic isn't tested here
-				States: map[string]*State{
+				States: map[string]*state{
 					"stale": {
-						PrevPoint: stalePoint,
+						prevPoint: stalePoint,
 					},
 					"fresh": {
-						PrevPoint: freshPoint,
+						prevPoint: freshPoint,
 					},
 				},
 			},
-			wantOut: map[string]*State{
+			wantOut: map[string]*state{
 				"fresh": {
-					PrevPoint: freshPoint,
+					prevPoint: freshPoint,
 				},
 			},
 		},
@@ -297,9 +317,9 @@ func Test_metricTracker_removeStale(t *testing.T) {
 			}
 			tr.removeStale(currentTime)
 
-			gotOut := make(map[string]*State)
+			gotOut := make(map[string]*state)
 			tr.states.Range(func(key, value any) bool {
-				gotOut[key.(string)] = value.(*State)
+				gotOut[key.(string)] = value.(*state)
 				return true
 			})
 			assert.Equal(t, tt.wantOut, gotOut)
@@ -308,7 +328,7 @@ func Test_metricTracker_removeStale(t *testing.T) {
 }
 
 func Test_metricTracker_sweeper(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	sweepEvent := make(chan pcommon.Timestamp)
 	closed := &atomic.Bool{}
 
@@ -336,9 +356,7 @@ func Test_metricTracker_sweeper(t *testing.T) {
 		assert.LessOrEqual(t, tr.maxStaleness, time.Since(staleBefore.AsTime()))
 	}
 	cancel()
-	for range sweepEvent { // nolint
+	for range sweepEvent { //nolint:revive
 	}
-	if !closed.Load() {
-		t.Errorf("Sweeper did not terminate.")
-	}
+	assert.True(t, closed.Load(), "Sweeper did not terminate.")
 }

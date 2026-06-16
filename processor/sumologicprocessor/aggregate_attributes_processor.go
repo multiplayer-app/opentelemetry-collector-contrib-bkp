@@ -23,10 +23,10 @@ type aggregation struct {
 	prefixes  []string
 }
 
-func newAggregateAttributesProcessor(config []aggregationPair) *aggregateAttributesProcessor {
+func newAggregateAttributesProcessor(config []AggregationPair) *aggregateAttributesProcessor {
 	aggregations := []*aggregation{}
 
-	for i := 0; i < len(config); i++ {
+	for i := range config {
 		pair := &aggregation{
 			attribute: config[i].Attribute,
 			prefixes:  config[i].Prefixes,
@@ -121,8 +121,8 @@ func (proc *aggregateAttributesProcessor) processAttributes(attributes pcommon.M
 			newMap := pcommon.NewMap()
 			newMap.EnsureCapacity(attributes.Len())
 
-			attributes.Range(func(key string, value pcommon.Value) bool {
-				ok, trimmedKey := getNewKey(key, prefix)
+			for key, value := range attributes.All() {
+				trimmedKey, ok := strings.CutPrefix(key, prefix)
 				if ok {
 					// TODO: Potential name conflict to resolve, eg.:
 					// pod_* matches pod_foo
@@ -136,8 +136,7 @@ func (proc *aggregateAttributesProcessor) processAttributes(attributes pcommon.M
 				} else {
 					value.CopyTo(newMap.PutEmpty(key))
 				}
-				return true
-			})
+			}
 			newMap.CopyTo(attributes)
 		}
 
@@ -160,13 +159,4 @@ func (proc *aggregateAttributesProcessor) processAttributes(attributes pcommon.M
 	}
 
 	return nil
-}
-
-// Checks if the key has given prefix and trims it if so.
-func getNewKey(key string, prefix string) (bool, string) {
-	if strings.HasPrefix(key, prefix) {
-		return true, strings.TrimPrefix(key, prefix)
-	}
-
-	return false, ""
 }

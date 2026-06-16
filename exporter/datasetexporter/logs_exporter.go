@@ -46,7 +46,7 @@ func createLogsExporter(ctx context.Context, set exporter.Settings, config compo
 		return nil, fmt.Errorf("cannot get DataSetExporter: %w", err)
 	}
 
-	return exporterhelper.NewLogsExporter(
+	return exporterhelper.NewLogs(
 		ctx,
 		set,
 		config,
@@ -235,7 +235,7 @@ func buildEventFromLog(
 	}
 }
 
-func (e *DatasetExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
+func (e *datasetExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
 	var events []*add_events.EventBundle
 
 	resourceLogs := ld.ResourceLogs()

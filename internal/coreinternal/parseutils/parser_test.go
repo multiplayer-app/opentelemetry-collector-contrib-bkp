@@ -4,7 +4,7 @@
 package parseutils
 
 import (
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -86,6 +86,17 @@ func Test_SplitString(t *testing.T) {
 			},
 		},
 		{
+			name:      "embedded escaped quotes",
+			input:     `ab c="this \"is \"" d='a \'co ol\' value' e="\""`,
+			delimiter: " ",
+			expected: []string{
+				"ab",
+				`c=this \"is \"`,
+				`d=a \'co ol\' value`,
+				`e=\"`,
+			},
+		},
+		{
 			name:      "quoted values include whitespace",
 			input:     `name="    ottl " func="  key_ value"`,
 			delimiter: " ",
@@ -150,13 +161,13 @@ h`,
 			name:        "unclosed quotes",
 			input:       "a 'b c",
 			delimiter:   " ",
-			expectedErr: fmt.Errorf("never reached the end of a quoted value"),
+			expectedErr: errors.New("never reached the end of a quoted value"),
 		},
 		{
 			name:        "mismatched quotes",
 			input:       `a 'b c' "d '`,
 			delimiter:   " ",
-			expectedErr: fmt.Errorf("never reached the end of a quoted value"),
+			expectedErr: errors.New("never reached the end of a quoted value"),
 		},
 		{
 			name:      "tab delimiters",
@@ -207,13 +218,13 @@ func Test_ParseKeyValuePairs(t *testing.T) {
 			name:        "no delimiter found",
 			pairs:       []string{"ab"},
 			delimiter:   "=",
-			expectedErr: fmt.Errorf("cannot split \"ab\" into 2 items, got 1 item(s)"),
+			expectedErr: errors.New("cannot split \"ab\" into 2 items, got 1 item(s)"),
 		},
 		{
 			name:        "no delimiter found 2x",
 			pairs:       []string{"ab", "cd"},
 			delimiter:   "=",
-			expectedErr: fmt.Errorf("cannot split \"ab\" into 2 items, got 1 item(s); cannot split \"cd\" into 2 items, got 1 item(s)"),
+			expectedErr: errors.New("cannot split \"ab\" into 2 items, got 1 item(s); cannot split \"cd\" into 2 items, got 1 item(s)"),
 		},
 		{
 			name:      "empty pairs",
@@ -225,7 +236,7 @@ func Test_ParseKeyValuePairs(t *testing.T) {
 			name:        "empty pair string",
 			pairs:       []string{""},
 			delimiter:   "=",
-			expectedErr: fmt.Errorf("cannot split \"\" into 2 items, got 1 item(s)"),
+			expectedErr: errors.New("cannot split \"\" into 2 items, got 1 item(s)"),
 		},
 		{
 			name:      "empty delimiter",
@@ -259,6 +270,17 @@ func Test_ParseKeyValuePairs(t *testing.T) {
 				"c": "d",
 			},
 		},
+		{
+			name:      "escaped quotes",
+			pairs:     []string{"key=foobar", `key2="foo bar"`, `key3="foo \"bar\""`, `key4='\'foo\' \'bar\''`},
+			delimiter: "=",
+			expected: map[string]any{
+				"key":  "foobar",
+				"key2": `"foo bar"`,
+				"key3": `"foo \"bar\""`,
+				"key4": `'\'foo\' \'bar\''`,
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -270,6 +292,58 @@ func Test_ParseKeyValuePairs(t *testing.T) {
 				assert.Equal(t, tc.expected, result)
 			} else {
 				assert.EqualError(t, err, tc.expectedErr.Error())
+			}
+		})
+	}
+}
+
+func BenchmarkSplitString(b *testing.B) {
+	benchCases := []struct {
+		name      string
+		input     string
+		delimiter string
+	}{
+		{
+			name:      "simple_short",
+			input:     "a b c",
+			delimiter: " ",
+		},
+		{
+			name:      "quoted_values",
+			input:     `name="John Doe" age=30 city="New York"`,
+			delimiter: " ",
+		},
+		{
+			name:      "multi_char_delimiter",
+			input:     "key1=val1!@!key2=val2!@!key3=val3!@!key4=val4",
+			delimiter: "!@!",
+		},
+		{
+			name:      "many_fields",
+			input:     `a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8 i=9 j=10 k=11 l=12 m=13 n=14 o=15 p=16`,
+			delimiter: " ",
+		},
+		{
+			name:      "long_quoted_value",
+			input:     `key1="this is a very long quoted value that contains many words and spaces" key2="another long value here"`,
+			delimiter: " ",
+		},
+		{
+			name:      "escaped_quotes",
+			input:     `a="hello \"world\"" b='it\'s cool' c="test \"value\""`,
+			delimiter: " ",
+		},
+		{
+			name:      "leading_trailing_delimiters",
+			input:     "   name=ottl        func=key_value   hello=world   foo=bar   ",
+			delimiter: " ",
+		},
+	}
+
+	for _, bc := range benchCases {
+		b.Run(bc.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_, _ = SplitString(bc.input, bc.delimiter)
 			}
 		})
 	}

@@ -4,6 +4,7 @@ package metadata
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -14,7 +15,14 @@ import (
 	"go.opentelemetry.io/collector/receiver"
 )
 
-// AttributeBufferPoolData specifies the a value buffer_pool_data attribute.
+const (
+	AggregationStrategySum = "sum"
+	AggregationStrategyAvg = "avg"
+	AggregationStrategyMin = "min"
+	AggregationStrategyMax = "max"
+)
+
+// AttributeBufferPoolData specifies the value buffer_pool_data attribute.
 type AttributeBufferPoolData int
 
 const (
@@ -40,7 +48,7 @@ var MapAttributeBufferPoolData = map[string]AttributeBufferPoolData{
 	"clean": AttributeBufferPoolDataClean,
 }
 
-// AttributeBufferPoolOperations specifies the a value buffer_pool_operations attribute.
+// AttributeBufferPoolOperations specifies the value buffer_pool_operations attribute.
 type AttributeBufferPoolOperations int
 
 const (
@@ -86,7 +94,7 @@ var MapAttributeBufferPoolOperations = map[string]AttributeBufferPoolOperations{
 	"write_requests":     AttributeBufferPoolOperationsWriteRequests,
 }
 
-// AttributeBufferPoolPages specifies the a value buffer_pool_pages attribute.
+// AttributeBufferPoolPages specifies the value buffer_pool_pages attribute.
 type AttributeBufferPoolPages int
 
 const (
@@ -94,6 +102,7 @@ const (
 	AttributeBufferPoolPagesData
 	AttributeBufferPoolPagesFree
 	AttributeBufferPoolPagesMisc
+	AttributeBufferPoolPagesTotal
 )
 
 // String returns the string representation of the AttributeBufferPoolPages.
@@ -105,18 +114,21 @@ func (av AttributeBufferPoolPages) String() string {
 		return "free"
 	case AttributeBufferPoolPagesMisc:
 		return "misc"
+	case AttributeBufferPoolPagesTotal:
+		return "total"
 	}
 	return ""
 }
 
 // MapAttributeBufferPoolPages is a helper map of string to AttributeBufferPoolPages attribute value.
 var MapAttributeBufferPoolPages = map[string]AttributeBufferPoolPages{
-	"data": AttributeBufferPoolPagesData,
-	"free": AttributeBufferPoolPagesFree,
-	"misc": AttributeBufferPoolPagesMisc,
+	"data":  AttributeBufferPoolPagesData,
+	"free":  AttributeBufferPoolPagesFree,
+	"misc":  AttributeBufferPoolPagesMisc,
+	"total": AttributeBufferPoolPagesTotal,
 }
 
-// AttributeCacheStatus specifies the a value cache_status attribute.
+// AttributeCacheStatus specifies the value cache_status attribute.
 type AttributeCacheStatus int
 
 const (
@@ -146,15 +158,17 @@ var MapAttributeCacheStatus = map[string]AttributeCacheStatus{
 	"overflow": AttributeCacheStatusOverflow,
 }
 
-// AttributeCommand specifies the a value command attribute.
+// AttributeCommand specifies the value command attribute.
 type AttributeCommand int
 
 const (
 	_ AttributeCommand = iota
 	AttributeCommandDelete
+	AttributeCommandDeleteMulti
 	AttributeCommandInsert
 	AttributeCommandSelect
 	AttributeCommandUpdate
+	AttributeCommandUpdateMulti
 )
 
 // String returns the string representation of the AttributeCommand.
@@ -162,25 +176,31 @@ func (av AttributeCommand) String() string {
 	switch av {
 	case AttributeCommandDelete:
 		return "delete"
+	case AttributeCommandDeleteMulti:
+		return "delete_multi"
 	case AttributeCommandInsert:
 		return "insert"
 	case AttributeCommandSelect:
 		return "select"
 	case AttributeCommandUpdate:
 		return "update"
+	case AttributeCommandUpdateMulti:
+		return "update_multi"
 	}
 	return ""
 }
 
 // MapAttributeCommand is a helper map of string to AttributeCommand attribute value.
 var MapAttributeCommand = map[string]AttributeCommand{
-	"delete": AttributeCommandDelete,
-	"insert": AttributeCommandInsert,
-	"select": AttributeCommandSelect,
-	"update": AttributeCommandUpdate,
+	"delete":       AttributeCommandDelete,
+	"delete_multi": AttributeCommandDeleteMulti,
+	"insert":       AttributeCommandInsert,
+	"select":       AttributeCommandSelect,
+	"update":       AttributeCommandUpdate,
+	"update_multi": AttributeCommandUpdateMulti,
 }
 
-// AttributeConnectionError specifies the a value connection_error attribute.
+// AttributeConnectionError specifies the value connection_error attribute.
 type AttributeConnectionError int
 
 const (
@@ -234,7 +254,7 @@ var MapAttributeConnectionError = map[string]AttributeConnectionError{
 	"locked":          AttributeConnectionErrorLocked,
 }
 
-// AttributeConnectionStatus specifies the a value connection_status attribute.
+// AttributeConnectionStatus specifies the value connection_status attribute.
 type AttributeConnectionStatus int
 
 const (
@@ -264,7 +284,29 @@ var MapAttributeConnectionStatus = map[string]AttributeConnectionStatus{
 	"rejected": AttributeConnectionStatusRejected,
 }
 
-// AttributeDirection specifies the a value direction attribute.
+// AttributeDbSystemName specifies the value db.system.name attribute.
+type AttributeDbSystemName int
+
+const (
+	_ AttributeDbSystemName = iota
+	AttributeDbSystemNameMysql
+)
+
+// String returns the string representation of the AttributeDbSystemName.
+func (av AttributeDbSystemName) String() string {
+	switch av {
+	case AttributeDbSystemNameMysql:
+		return "mysql"
+	}
+	return ""
+}
+
+// MapAttributeDbSystemName is a helper map of string to AttributeDbSystemName attribute value.
+var MapAttributeDbSystemName = map[string]AttributeDbSystemName{
+	"mysql": AttributeDbSystemNameMysql,
+}
+
+// AttributeDirection specifies the value direction attribute.
 type AttributeDirection int
 
 const (
@@ -290,7 +332,7 @@ var MapAttributeDirection = map[string]AttributeDirection{
 	"sent":     AttributeDirectionSent,
 }
 
-// AttributeDoubleWrites specifies the a value double_writes attribute.
+// AttributeDoubleWrites specifies the value double_writes attribute.
 type AttributeDoubleWrites int
 
 const (
@@ -316,7 +358,7 @@ var MapAttributeDoubleWrites = map[string]AttributeDoubleWrites{
 	"writes":        AttributeDoubleWritesWrites,
 }
 
-// AttributeEventState specifies the a value event_state attribute.
+// AttributeEventState specifies the value event_state attribute.
 type AttributeEventState int
 
 const (
@@ -374,7 +416,7 @@ var MapAttributeEventState = map[string]AttributeEventState{
 	"no_index_used":           AttributeEventStateNoIndexUsed,
 }
 
-// AttributeHandler specifies the a value handler attribute.
+// AttributeHandler specifies the value handler attribute.
 type AttributeHandler int
 
 const (
@@ -464,7 +506,7 @@ var MapAttributeHandler = map[string]AttributeHandler{
 	"write":              AttributeHandlerWrite,
 }
 
-// AttributeIoWaitsOperations specifies the a value io_waits_operations attribute.
+// AttributeIoWaitsOperations specifies the value io_waits_operations attribute.
 type AttributeIoWaitsOperations int
 
 const (
@@ -498,7 +540,7 @@ var MapAttributeIoWaitsOperations = map[string]AttributeIoWaitsOperations{
 	"update": AttributeIoWaitsOperationsUpdate,
 }
 
-// AttributeJoinKind specifies the a value join_kind attribute.
+// AttributeJoinKind specifies the value join_kind attribute.
 type AttributeJoinKind int
 
 const (
@@ -536,7 +578,7 @@ var MapAttributeJoinKind = map[string]AttributeJoinKind{
 	"scan":        AttributeJoinKindScan,
 }
 
-// AttributeLocks specifies the a value locks attribute.
+// AttributeLocks specifies the value locks attribute.
 type AttributeLocks int
 
 const (
@@ -562,7 +604,7 @@ var MapAttributeLocks = map[string]AttributeLocks{
 	"waited":    AttributeLocksWaited,
 }
 
-// AttributeLogOperations specifies the a value log_operations attribute.
+// AttributeLogOperations specifies the value log_operations attribute.
 type AttributeLogOperations int
 
 const (
@@ -570,6 +612,7 @@ const (
 	AttributeLogOperationsWaits
 	AttributeLogOperationsWriteRequests
 	AttributeLogOperationsWrites
+	AttributeLogOperationsFsyncs
 )
 
 // String returns the string representation of the AttributeLogOperations.
@@ -581,6 +624,8 @@ func (av AttributeLogOperations) String() string {
 		return "write_requests"
 	case AttributeLogOperationsWrites:
 		return "writes"
+	case AttributeLogOperationsFsyncs:
+		return "fsyncs"
 	}
 	return ""
 }
@@ -590,9 +635,10 @@ var MapAttributeLogOperations = map[string]AttributeLogOperations{
 	"waits":          AttributeLogOperationsWaits,
 	"write_requests": AttributeLogOperationsWriteRequests,
 	"writes":         AttributeLogOperationsWrites,
+	"fsyncs":         AttributeLogOperationsFsyncs,
 }
 
-// AttributeMysqlxThreads specifies the a value mysqlx_threads attribute.
+// AttributeMysqlxThreads specifies the value mysqlx_threads attribute.
 type AttributeMysqlxThreads int
 
 const (
@@ -618,7 +664,7 @@ var MapAttributeMysqlxThreads = map[string]AttributeMysqlxThreads{
 	"active":    AttributeMysqlxThreadsActive,
 }
 
-// AttributeOpenedResources specifies the a value opened_resources attribute.
+// AttributeOpenedResources specifies the value opened_resources attribute.
 type AttributeOpenedResources int
 
 const (
@@ -648,7 +694,7 @@ var MapAttributeOpenedResources = map[string]AttributeOpenedResources{
 	"table":            AttributeOpenedResourcesTable,
 }
 
-// AttributeOperations specifies the a value operations attribute.
+// AttributeOperations specifies the value operations attribute.
 type AttributeOperations int
 
 const (
@@ -678,7 +724,7 @@ var MapAttributeOperations = map[string]AttributeOperations{
 	"writes": AttributeOperationsWrites,
 }
 
-// AttributePageOperations specifies the a value page_operations attribute.
+// AttributePageOperations specifies the value page_operations attribute.
 type AttributePageOperations int
 
 const (
@@ -708,7 +754,7 @@ var MapAttributePageOperations = map[string]AttributePageOperations{
 	"written": AttributePageOperationsWritten,
 }
 
-// AttributePreparedStatementsCommand specifies the a value prepared_statements_command attribute.
+// AttributePreparedStatementsCommand specifies the value prepared_statements_command attribute.
 type AttributePreparedStatementsCommand int
 
 const (
@@ -750,7 +796,7 @@ var MapAttributePreparedStatementsCommand = map[string]AttributePreparedStatemen
 	"send_long_data": AttributePreparedStatementsCommandSendLongData,
 }
 
-// AttributeReadLockType specifies the a value read_lock_type attribute.
+// AttributeReadLockType specifies the value read_lock_type attribute.
 type AttributeReadLockType int
 
 const (
@@ -788,7 +834,7 @@ var MapAttributeReadLockType = map[string]AttributeReadLockType{
 	"external":          AttributeReadLockTypeExternal,
 }
 
-// AttributeRowLocks specifies the a value row_locks attribute.
+// AttributeRowLocks specifies the value row_locks attribute.
 type AttributeRowLocks int
 
 const (
@@ -814,7 +860,7 @@ var MapAttributeRowLocks = map[string]AttributeRowLocks{
 	"time":  AttributeRowLocksTime,
 }
 
-// AttributeRowOperations specifies the a value row_operations attribute.
+// AttributeRowOperations specifies the value row_operations attribute.
 type AttributeRowOperations int
 
 const (
@@ -848,7 +894,7 @@ var MapAttributeRowOperations = map[string]AttributeRowOperations{
 	"updated":  AttributeRowOperationsUpdated,
 }
 
-// AttributeSorts specifies the a value sorts attribute.
+// AttributeSorts specifies the value sorts attribute.
 type AttributeSorts int
 
 const (
@@ -882,7 +928,7 @@ var MapAttributeSorts = map[string]AttributeSorts{
 	"scan":         AttributeSortsScan,
 }
 
-// AttributeTableSizeType specifies the a value table_size_type attribute.
+// AttributeTableSizeType specifies the value table_size_type attribute.
 type AttributeTableSizeType int
 
 const (
@@ -908,7 +954,7 @@ var MapAttributeTableSizeType = map[string]AttributeTableSizeType{
 	"index": AttributeTableSizeTypeIndex,
 }
 
-// AttributeThreads specifies the a value threads attribute.
+// AttributeThreads specifies the value threads attribute.
 type AttributeThreads int
 
 const (
@@ -942,7 +988,7 @@ var MapAttributeThreads = map[string]AttributeThreads{
 	"running":   AttributeThreadsRunning,
 }
 
-// AttributeTmpResource specifies the a value tmp_resource attribute.
+// AttributeTmpResource specifies the value tmp_resource attribute.
 type AttributeTmpResource int
 
 const (
@@ -972,7 +1018,7 @@ var MapAttributeTmpResource = map[string]AttributeTmpResource{
 	"tables":      AttributeTmpResourceTables,
 }
 
-// AttributeWriteLockType specifies the a value write_lock_type attribute.
+// AttributeWriteLockType specifies the value write_lock_type attribute.
 type AttributeWriteLockType int
 
 const (
@@ -1010,10 +1056,213 @@ var MapAttributeWriteLockType = map[string]AttributeWriteLockType{
 	"external":          AttributeWriteLockTypeExternal,
 }
 
+var MetricsInfo = metricsInfo{
+	MysqlBufferPoolDataPages: metricInfo{
+		Name: "mysql.buffer_pool.data_pages",
+	},
+	MysqlBufferPoolLimit: metricInfo{
+		Name: "mysql.buffer_pool.limit",
+	},
+	MysqlBufferPoolOperations: metricInfo{
+		Name: "mysql.buffer_pool.operations",
+	},
+	MysqlBufferPoolPageFlushes: metricInfo{
+		Name: "mysql.buffer_pool.page_flushes",
+	},
+	MysqlBufferPoolPages: metricInfo{
+		Name: "mysql.buffer_pool.pages",
+	},
+	MysqlBufferPoolUsage: metricInfo{
+		Name: "mysql.buffer_pool.usage",
+	},
+	MysqlClientNetworkIo: metricInfo{
+		Name: "mysql.client.network.io",
+	},
+	MysqlCommands: metricInfo{
+		Name: "mysql.commands",
+	},
+	MysqlConnectionCount: metricInfo{
+		Name: "mysql.connection.count",
+	},
+	MysqlConnectionErrors: metricInfo{
+		Name: "mysql.connection.errors",
+	},
+	MysqlDoubleWrites: metricInfo{
+		Name: "mysql.double_writes",
+	},
+	MysqlHandlers: metricInfo{
+		Name: "mysql.handlers",
+	},
+	MysqlIndexIoWaitCount: metricInfo{
+		Name: "mysql.index.io.wait.count",
+	},
+	MysqlIndexIoWaitTime: metricInfo{
+		Name: "mysql.index.io.wait.time",
+	},
+	MysqlJoins: metricInfo{
+		Name: "mysql.joins",
+	},
+	MysqlLocks: metricInfo{
+		Name: "mysql.locks",
+	},
+	MysqlLogOperations: metricInfo{
+		Name: "mysql.log_operations",
+	},
+	MysqlMaxUsedConnections: metricInfo{
+		Name: "mysql.max_used_connections",
+	},
+	MysqlMysqlxConnections: metricInfo{
+		Name: "mysql.mysqlx_connections",
+	},
+	MysqlMysqlxWorkerThreads: metricInfo{
+		Name: "mysql.mysqlx_worker_threads",
+	},
+	MysqlOpenedResources: metricInfo{
+		Name: "mysql.opened_resources",
+	},
+	MysqlOperations: metricInfo{
+		Name: "mysql.operations",
+	},
+	MysqlPageOperations: metricInfo{
+		Name: "mysql.page_operations",
+	},
+	MysqlPageSize: metricInfo{
+		Name: "mysql.page_size",
+	},
+	MysqlPreparedStatements: metricInfo{
+		Name: "mysql.prepared_statements",
+	},
+	MysqlQueryClientCount: metricInfo{
+		Name: "mysql.query.client.count",
+	},
+	MysqlQueryCount: metricInfo{
+		Name: "mysql.query.count",
+	},
+	MysqlQuerySlowCount: metricInfo{
+		Name: "mysql.query.slow.count",
+	},
+	MysqlReplicaSQLDelay: metricInfo{
+		Name: "mysql.replica.sql_delay",
+	},
+	MysqlReplicaTimeBehindSource: metricInfo{
+		Name: "mysql.replica.time_behind_source",
+	},
+	MysqlRowLocks: metricInfo{
+		Name: "mysql.row_locks",
+	},
+	MysqlRowOperations: metricInfo{
+		Name: "mysql.row_operations",
+	},
+	MysqlSorts: metricInfo{
+		Name: "mysql.sorts",
+	},
+	MysqlStatementEventCount: metricInfo{
+		Name: "mysql.statement_event.count",
+	},
+	MysqlStatementEventWaitTime: metricInfo{
+		Name: "mysql.statement_event.wait.time",
+	},
+	MysqlTableAverageRowLength: metricInfo{
+		Name: "mysql.table.average_row_length",
+	},
+	MysqlTableIoWaitCount: metricInfo{
+		Name: "mysql.table.io.wait.count",
+	},
+	MysqlTableIoWaitTime: metricInfo{
+		Name: "mysql.table.io.wait.time",
+	},
+	MysqlTableLockWaitReadCount: metricInfo{
+		Name: "mysql.table.lock_wait.read.count",
+	},
+	MysqlTableLockWaitReadTime: metricInfo{
+		Name: "mysql.table.lock_wait.read.time",
+	},
+	MysqlTableLockWaitWriteCount: metricInfo{
+		Name: "mysql.table.lock_wait.write.count",
+	},
+	MysqlTableLockWaitWriteTime: metricInfo{
+		Name: "mysql.table.lock_wait.write.time",
+	},
+	MysqlTableRows: metricInfo{
+		Name: "mysql.table.rows",
+	},
+	MysqlTableSize: metricInfo{
+		Name: "mysql.table.size",
+	},
+	MysqlTableOpenCache: metricInfo{
+		Name: "mysql.table_open_cache",
+	},
+	MysqlThreads: metricInfo{
+		Name: "mysql.threads",
+	},
+	MysqlTmpResources: metricInfo{
+		Name: "mysql.tmp_resources",
+	},
+	MysqlUptime: metricInfo{
+		Name: "mysql.uptime",
+	},
+}
+
+type metricsInfo struct {
+	MysqlBufferPoolDataPages     metricInfo
+	MysqlBufferPoolLimit         metricInfo
+	MysqlBufferPoolOperations    metricInfo
+	MysqlBufferPoolPageFlushes   metricInfo
+	MysqlBufferPoolPages         metricInfo
+	MysqlBufferPoolUsage         metricInfo
+	MysqlClientNetworkIo         metricInfo
+	MysqlCommands                metricInfo
+	MysqlConnectionCount         metricInfo
+	MysqlConnectionErrors        metricInfo
+	MysqlDoubleWrites            metricInfo
+	MysqlHandlers                metricInfo
+	MysqlIndexIoWaitCount        metricInfo
+	MysqlIndexIoWaitTime         metricInfo
+	MysqlJoins                   metricInfo
+	MysqlLocks                   metricInfo
+	MysqlLogOperations           metricInfo
+	MysqlMaxUsedConnections      metricInfo
+	MysqlMysqlxConnections       metricInfo
+	MysqlMysqlxWorkerThreads     metricInfo
+	MysqlOpenedResources         metricInfo
+	MysqlOperations              metricInfo
+	MysqlPageOperations          metricInfo
+	MysqlPageSize                metricInfo
+	MysqlPreparedStatements      metricInfo
+	MysqlQueryClientCount        metricInfo
+	MysqlQueryCount              metricInfo
+	MysqlQuerySlowCount          metricInfo
+	MysqlReplicaSQLDelay         metricInfo
+	MysqlReplicaTimeBehindSource metricInfo
+	MysqlRowLocks                metricInfo
+	MysqlRowOperations           metricInfo
+	MysqlSorts                   metricInfo
+	MysqlStatementEventCount     metricInfo
+	MysqlStatementEventWaitTime  metricInfo
+	MysqlTableAverageRowLength   metricInfo
+	MysqlTableIoWaitCount        metricInfo
+	MysqlTableIoWaitTime         metricInfo
+	MysqlTableLockWaitReadCount  metricInfo
+	MysqlTableLockWaitReadTime   metricInfo
+	MysqlTableLockWaitWriteCount metricInfo
+	MysqlTableLockWaitWriteTime  metricInfo
+	MysqlTableRows               metricInfo
+	MysqlTableSize               metricInfo
+	MysqlTableOpenCache          metricInfo
+	MysqlThreads                 metricInfo
+	MysqlTmpResources            metricInfo
+	MysqlUptime                  metricInfo
+}
+
+type metricInfo struct {
+	Name string
+}
+
 type metricMysqlBufferPoolDataPages struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                       // data buffer for generated metric.
+	config        MysqlBufferPoolDataPagesMetricConfig // metric config provided by user.
+	capacity      int                                  // max observed number of data points added to the metric.
+	aggDataPoints []int64                              // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.buffer_pool.data_pages metric with initial data.
@@ -1025,17 +1274,48 @@ func (m *metricMysqlBufferPoolDataPages) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlBufferPoolDataPages) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, bufferPoolDataAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlBufferPoolDataPagesMetricAttributeKeyBufferPoolData) {
+		dp.Attributes().PutStr("status", bufferPoolDataAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("status", bufferPoolDataAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1048,14 +1328,20 @@ func (m *metricMysqlBufferPoolDataPages) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlBufferPoolDataPages) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlBufferPoolDataPages(cfg MetricConfig) metricMysqlBufferPoolDataPages {
+func newMetricMysqlBufferPoolDataPages(cfg MysqlBufferPoolDataPagesMetricConfig) metricMysqlBufferPoolDataPages {
 	m := metricMysqlBufferPoolDataPages{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1064,9 +1350,9 @@ func newMetricMysqlBufferPoolDataPages(cfg MetricConfig) metricMysqlBufferPoolDa
 }
 
 type metricMysqlBufferPoolLimit struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                   // data buffer for generated metric.
+	config   MysqlBufferPoolLimitMetricConfig // metric config provided by user.
+	capacity int                              // max observed number of data points added to the metric.
 }
 
 // init fills mysql.buffer_pool.limit metric with initial data.
@@ -1105,8 +1391,9 @@ func (m *metricMysqlBufferPoolLimit) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlBufferPoolLimit(cfg MetricConfig) metricMysqlBufferPoolLimit {
+func newMetricMysqlBufferPoolLimit(cfg MysqlBufferPoolLimitMetricConfig) metricMysqlBufferPoolLimit {
 	m := metricMysqlBufferPoolLimit{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1115,9 +1402,10 @@ func newMetricMysqlBufferPoolLimit(cfg MetricConfig) metricMysqlBufferPoolLimit 
 }
 
 type metricMysqlBufferPoolOperations struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                        // data buffer for generated metric.
+	config        MysqlBufferPoolOperationsMetricConfig // metric config provided by user.
+	capacity      int                                   // max observed number of data points added to the metric.
+	aggDataPoints []int64                               // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.buffer_pool.operations metric with initial data.
@@ -1129,17 +1417,48 @@ func (m *metricMysqlBufferPoolOperations) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlBufferPoolOperations) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, bufferPoolOperationsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlBufferPoolOperationsMetricAttributeKeyBufferPoolOperations) {
+		dp.Attributes().PutStr("operation", bufferPoolOperationsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", bufferPoolOperationsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1152,14 +1471,20 @@ func (m *metricMysqlBufferPoolOperations) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlBufferPoolOperations) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlBufferPoolOperations(cfg MetricConfig) metricMysqlBufferPoolOperations {
+func newMetricMysqlBufferPoolOperations(cfg MysqlBufferPoolOperationsMetricConfig) metricMysqlBufferPoolOperations {
 	m := metricMysqlBufferPoolOperations{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1168,9 +1493,9 @@ func newMetricMysqlBufferPoolOperations(cfg MetricConfig) metricMysqlBufferPoolO
 }
 
 type metricMysqlBufferPoolPageFlushes struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                         // data buffer for generated metric.
+	config   MysqlBufferPoolPageFlushesMetricConfig // metric config provided by user.
+	capacity int                                    // max observed number of data points added to the metric.
 }
 
 // init fills mysql.buffer_pool.page_flushes metric with initial data.
@@ -1209,8 +1534,9 @@ func (m *metricMysqlBufferPoolPageFlushes) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlBufferPoolPageFlushes(cfg MetricConfig) metricMysqlBufferPoolPageFlushes {
+func newMetricMysqlBufferPoolPageFlushes(cfg MysqlBufferPoolPageFlushesMetricConfig) metricMysqlBufferPoolPageFlushes {
 	m := metricMysqlBufferPoolPageFlushes{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1219,9 +1545,10 @@ func newMetricMysqlBufferPoolPageFlushes(cfg MetricConfig) metricMysqlBufferPool
 }
 
 type metricMysqlBufferPoolPages struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlBufferPoolPagesMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.buffer_pool.pages metric with initial data.
@@ -1233,17 +1560,48 @@ func (m *metricMysqlBufferPoolPages) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlBufferPoolPages) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, bufferPoolPagesAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlBufferPoolPagesMetricAttributeKeyBufferPoolPages) {
+		dp.Attributes().PutStr("kind", bufferPoolPagesAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", bufferPoolPagesAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1256,14 +1614,20 @@ func (m *metricMysqlBufferPoolPages) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlBufferPoolPages) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlBufferPoolPages(cfg MetricConfig) metricMysqlBufferPoolPages {
+func newMetricMysqlBufferPoolPages(cfg MysqlBufferPoolPagesMetricConfig) metricMysqlBufferPoolPages {
 	m := metricMysqlBufferPoolPages{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1272,9 +1636,10 @@ func newMetricMysqlBufferPoolPages(cfg MetricConfig) metricMysqlBufferPoolPages 
 }
 
 type metricMysqlBufferPoolUsage struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlBufferPoolUsageMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.buffer_pool.usage metric with initial data.
@@ -1286,17 +1651,48 @@ func (m *metricMysqlBufferPoolUsage) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlBufferPoolUsage) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, bufferPoolDataAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlBufferPoolUsageMetricAttributeKeyBufferPoolData) {
+		dp.Attributes().PutStr("status", bufferPoolDataAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("status", bufferPoolDataAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1309,14 +1705,20 @@ func (m *metricMysqlBufferPoolUsage) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlBufferPoolUsage) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlBufferPoolUsage(cfg MetricConfig) metricMysqlBufferPoolUsage {
+func newMetricMysqlBufferPoolUsage(cfg MysqlBufferPoolUsageMetricConfig) metricMysqlBufferPoolUsage {
 	m := metricMysqlBufferPoolUsage{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1325,9 +1727,10 @@ func newMetricMysqlBufferPoolUsage(cfg MetricConfig) metricMysqlBufferPoolUsage 
 }
 
 type metricMysqlClientNetworkIo struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlClientNetworkIoMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.client.network.io metric with initial data.
@@ -1339,17 +1742,48 @@ func (m *metricMysqlClientNetworkIo) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlClientNetworkIo) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, directionAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlClientNetworkIoMetricAttributeKeyDirection) {
+		dp.Attributes().PutStr("kind", directionAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", directionAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1362,14 +1796,20 @@ func (m *metricMysqlClientNetworkIo) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlClientNetworkIo) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlClientNetworkIo(cfg MetricConfig) metricMysqlClientNetworkIo {
+func newMetricMysqlClientNetworkIo(cfg MysqlClientNetworkIoMetricConfig) metricMysqlClientNetworkIo {
 	m := metricMysqlClientNetworkIo{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1378,9 +1818,10 @@ func newMetricMysqlClientNetworkIo(cfg MetricConfig) metricMysqlClientNetworkIo 
 }
 
 type metricMysqlCommands struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric            // data buffer for generated metric.
+	config        MysqlCommandsMetricConfig // metric config provided by user.
+	capacity      int                       // max observed number of data points added to the metric.
+	aggDataPoints []int64                   // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.commands metric with initial data.
@@ -1392,17 +1833,48 @@ func (m *metricMysqlCommands) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlCommands) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, commandAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlCommandsMetricAttributeKeyCommand) {
+		dp.Attributes().PutStr("command", commandAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("command", commandAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1415,14 +1887,20 @@ func (m *metricMysqlCommands) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlCommands) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlCommands(cfg MetricConfig) metricMysqlCommands {
+func newMetricMysqlCommands(cfg MysqlCommandsMetricConfig) metricMysqlCommands {
 	m := metricMysqlCommands{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1431,9 +1909,9 @@ func newMetricMysqlCommands(cfg MetricConfig) metricMysqlCommands {
 }
 
 type metricMysqlConnectionCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                   // data buffer for generated metric.
+	config   MysqlConnectionCountMetricConfig // metric config provided by user.
+	capacity int                              // max observed number of data points added to the metric.
 }
 
 // init fills mysql.connection.count metric with initial data.
@@ -1472,8 +1950,9 @@ func (m *metricMysqlConnectionCount) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlConnectionCount(cfg MetricConfig) metricMysqlConnectionCount {
+func newMetricMysqlConnectionCount(cfg MysqlConnectionCountMetricConfig) metricMysqlConnectionCount {
 	m := metricMysqlConnectionCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1482,9 +1961,10 @@ func newMetricMysqlConnectionCount(cfg MetricConfig) metricMysqlConnectionCount 
 }
 
 type metricMysqlConnectionErrors struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                    // data buffer for generated metric.
+	config        MysqlConnectionErrorsMetricConfig // metric config provided by user.
+	capacity      int                               // max observed number of data points added to the metric.
+	aggDataPoints []int64                           // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.connection.errors metric with initial data.
@@ -1496,17 +1976,48 @@ func (m *metricMysqlConnectionErrors) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlConnectionErrors) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, connectionErrorAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlConnectionErrorsMetricAttributeKeyConnectionError) {
+		dp.Attributes().PutStr("error", connectionErrorAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("error", connectionErrorAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1519,14 +2030,20 @@ func (m *metricMysqlConnectionErrors) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlConnectionErrors) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlConnectionErrors(cfg MetricConfig) metricMysqlConnectionErrors {
+func newMetricMysqlConnectionErrors(cfg MysqlConnectionErrorsMetricConfig) metricMysqlConnectionErrors {
 	m := metricMysqlConnectionErrors{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1535,9 +2052,10 @@ func newMetricMysqlConnectionErrors(cfg MetricConfig) metricMysqlConnectionError
 }
 
 type metricMysqlDoubleWrites struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                // data buffer for generated metric.
+	config        MysqlDoubleWritesMetricConfig // metric config provided by user.
+	capacity      int                           // max observed number of data points added to the metric.
+	aggDataPoints []int64                       // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.double_writes metric with initial data.
@@ -1549,17 +2067,48 @@ func (m *metricMysqlDoubleWrites) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlDoubleWrites) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, doubleWritesAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlDoubleWritesMetricAttributeKeyDoubleWrites) {
+		dp.Attributes().PutStr("kind", doubleWritesAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", doubleWritesAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1572,14 +2121,20 @@ func (m *metricMysqlDoubleWrites) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlDoubleWrites) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlDoubleWrites(cfg MetricConfig) metricMysqlDoubleWrites {
+func newMetricMysqlDoubleWrites(cfg MysqlDoubleWritesMetricConfig) metricMysqlDoubleWrites {
 	m := metricMysqlDoubleWrites{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1588,9 +2143,10 @@ func newMetricMysqlDoubleWrites(cfg MetricConfig) metricMysqlDoubleWrites {
 }
 
 type metricMysqlHandlers struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric            // data buffer for generated metric.
+	config        MysqlHandlersMetricConfig // metric config provided by user.
+	capacity      int                       // max observed number of data points added to the metric.
+	aggDataPoints []int64                   // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.handlers metric with initial data.
@@ -1602,17 +2158,48 @@ func (m *metricMysqlHandlers) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlHandlers) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, handlerAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlHandlersMetricAttributeKeyHandler) {
+		dp.Attributes().PutStr("kind", handlerAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", handlerAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1625,14 +2212,20 @@ func (m *metricMysqlHandlers) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlHandlers) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlHandlers(cfg MetricConfig) metricMysqlHandlers {
+func newMetricMysqlHandlers(cfg MysqlHandlersMetricConfig) metricMysqlHandlers {
 	m := metricMysqlHandlers{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1641,9 +2234,10 @@ func newMetricMysqlHandlers(cfg MetricConfig) metricMysqlHandlers {
 }
 
 type metricMysqlIndexIoWaitCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                    // data buffer for generated metric.
+	config        MysqlIndexIoWaitCountMetricConfig // metric config provided by user.
+	capacity      int                               // max observed number of data points added to the metric.
+	aggDataPoints []int64                           // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.index.io.wait.count metric with initial data.
@@ -1655,20 +2249,57 @@ func (m *metricMysqlIndexIoWaitCount) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlIndexIoWaitCount) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, ioWaitsOperationsAttributeValue string, tableNameAttributeValue string, schemaAttributeValue string, indexNameAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitCountMetricAttributeKeyIoWaitsOperations) {
+		dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitCountMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitCountMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitCountMetricAttributeKeyIndexName) {
+		dp.Attributes().PutStr("index", indexNameAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("index", indexNameAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1681,14 +2312,20 @@ func (m *metricMysqlIndexIoWaitCount) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlIndexIoWaitCount) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlIndexIoWaitCount(cfg MetricConfig) metricMysqlIndexIoWaitCount {
+func newMetricMysqlIndexIoWaitCount(cfg MysqlIndexIoWaitCountMetricConfig) metricMysqlIndexIoWaitCount {
 	m := metricMysqlIndexIoWaitCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1697,9 +2334,10 @@ func newMetricMysqlIndexIoWaitCount(cfg MetricConfig) metricMysqlIndexIoWaitCoun
 }
 
 type metricMysqlIndexIoWaitTime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlIndexIoWaitTimeMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.index.io.wait.time metric with initial data.
@@ -1711,20 +2349,57 @@ func (m *metricMysqlIndexIoWaitTime) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlIndexIoWaitTime) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, ioWaitsOperationsAttributeValue string, tableNameAttributeValue string, schemaAttributeValue string, indexNameAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitTimeMetricAttributeKeyIoWaitsOperations) {
+		dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitTimeMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitTimeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlIndexIoWaitTimeMetricAttributeKeyIndexName) {
+		dp.Attributes().PutStr("index", indexNameAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("index", indexNameAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1737,14 +2412,20 @@ func (m *metricMysqlIndexIoWaitTime) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlIndexIoWaitTime) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlIndexIoWaitTime(cfg MetricConfig) metricMysqlIndexIoWaitTime {
+func newMetricMysqlIndexIoWaitTime(cfg MysqlIndexIoWaitTimeMetricConfig) metricMysqlIndexIoWaitTime {
 	m := metricMysqlIndexIoWaitTime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1753,9 +2434,10 @@ func newMetricMysqlIndexIoWaitTime(cfg MetricConfig) metricMysqlIndexIoWaitTime 
 }
 
 type metricMysqlJoins struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric         // data buffer for generated metric.
+	config        MysqlJoinsMetricConfig // metric config provided by user.
+	capacity      int                    // max observed number of data points added to the metric.
+	aggDataPoints []int64                // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.joins metric with initial data.
@@ -1767,17 +2449,48 @@ func (m *metricMysqlJoins) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlJoins) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, joinKindAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlJoinsMetricAttributeKeyJoinKind) {
+		dp.Attributes().PutStr("kind", joinKindAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", joinKindAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1790,14 +2503,20 @@ func (m *metricMysqlJoins) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlJoins) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlJoins(cfg MetricConfig) metricMysqlJoins {
+func newMetricMysqlJoins(cfg MysqlJoinsMetricConfig) metricMysqlJoins {
 	m := metricMysqlJoins{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1806,9 +2525,10 @@ func newMetricMysqlJoins(cfg MetricConfig) metricMysqlJoins {
 }
 
 type metricMysqlLocks struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric         // data buffer for generated metric.
+	config        MysqlLocksMetricConfig // metric config provided by user.
+	capacity      int                    // max observed number of data points added to the metric.
+	aggDataPoints []int64                // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.locks metric with initial data.
@@ -1820,17 +2540,48 @@ func (m *metricMysqlLocks) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlLocks) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, locksAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlLocksMetricAttributeKeyLocks) {
+		dp.Attributes().PutStr("kind", locksAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", locksAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1843,14 +2594,20 @@ func (m *metricMysqlLocks) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlLocks) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlLocks(cfg MetricConfig) metricMysqlLocks {
+func newMetricMysqlLocks(cfg MysqlLocksMetricConfig) metricMysqlLocks {
 	m := metricMysqlLocks{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1859,9 +2616,10 @@ func newMetricMysqlLocks(cfg MetricConfig) metricMysqlLocks {
 }
 
 type metricMysqlLogOperations struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                 // data buffer for generated metric.
+	config        MysqlLogOperationsMetricConfig // metric config provided by user.
+	capacity      int                            // max observed number of data points added to the metric.
+	aggDataPoints []int64                        // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.log_operations metric with initial data.
@@ -1873,17 +2631,48 @@ func (m *metricMysqlLogOperations) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlLogOperations) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, logOperationsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlLogOperationsMetricAttributeKeyLogOperations) {
+		dp.Attributes().PutStr("operation", logOperationsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", logOperationsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1896,14 +2685,72 @@ func (m *metricMysqlLogOperations) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlLogOperations) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlLogOperations(cfg MetricConfig) metricMysqlLogOperations {
+func newMetricMysqlLogOperations(cfg MysqlLogOperationsMetricConfig) metricMysqlLogOperations {
 	m := metricMysqlLogOperations{config: cfg}
+
+	if cfg.Enabled {
+		m.data = pmetric.NewMetric()
+		m.init()
+	}
+	return m
+}
+
+type metricMysqlMaxUsedConnections struct {
+	data     pmetric.Metric                      // data buffer for generated metric.
+	config   MysqlMaxUsedConnectionsMetricConfig // metric config provided by user.
+	capacity int                                 // max observed number of data points added to the metric.
+}
+
+// init fills mysql.max_used_connections metric with initial data.
+func (m *metricMysqlMaxUsedConnections) init() {
+	m.data.SetName("mysql.max_used_connections")
+	m.data.SetDescription("Maximum number of connections used simultaneously since the server started.")
+	m.data.SetUnit("1")
+	m.data.SetEmptySum()
+	m.data.Sum().SetIsMonotonic(false)
+	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+}
+
+func (m *metricMysqlMaxUsedConnections) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64) {
+	if !m.config.Enabled {
+		return
+	}
+	dp := m.data.Sum().DataPoints().AppendEmpty()
+	dp.SetStartTimestamp(start)
+	dp.SetTimestamp(ts)
+	dp.SetIntValue(val)
+}
+
+// updateCapacity saves max length of data point slices that will be used for the slice capacity.
+func (m *metricMysqlMaxUsedConnections) updateCapacity() {
+	if m.data.Sum().DataPoints().Len() > m.capacity {
+		m.capacity = m.data.Sum().DataPoints().Len()
+	}
+}
+
+// emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
+func (m *metricMysqlMaxUsedConnections) emit(metrics pmetric.MetricSlice) {
+	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		m.updateCapacity()
+		m.data.MoveTo(metrics.AppendEmpty())
+		m.init()
+	}
+}
+
+func newMetricMysqlMaxUsedConnections(cfg MysqlMaxUsedConnectionsMetricConfig) metricMysqlMaxUsedConnections {
+	m := metricMysqlMaxUsedConnections{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1912,9 +2759,10 @@ func newMetricMysqlLogOperations(cfg MetricConfig) metricMysqlLogOperations {
 }
 
 type metricMysqlMysqlxConnections struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                     // data buffer for generated metric.
+	config        MysqlMysqlxConnectionsMetricConfig // metric config provided by user.
+	capacity      int                                // max observed number of data points added to the metric.
+	aggDataPoints []int64                            // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.mysqlx_connections metric with initial data.
@@ -1926,17 +2774,48 @@ func (m *metricMysqlMysqlxConnections) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlMysqlxConnections) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, connectionStatusAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlMysqlxConnectionsMetricAttributeKeyConnectionStatus) {
+		dp.Attributes().PutStr("status", connectionStatusAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("status", connectionStatusAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -1949,14 +2828,20 @@ func (m *metricMysqlMysqlxConnections) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlMysqlxConnections) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlMysqlxConnections(cfg MetricConfig) metricMysqlMysqlxConnections {
+func newMetricMysqlMysqlxConnections(cfg MysqlMysqlxConnectionsMetricConfig) metricMysqlMysqlxConnections {
 	m := metricMysqlMysqlxConnections{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -1965,9 +2850,10 @@ func newMetricMysqlMysqlxConnections(cfg MetricConfig) metricMysqlMysqlxConnecti
 }
 
 type metricMysqlMysqlxWorkerThreads struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                       // data buffer for generated metric.
+	config        MysqlMysqlxWorkerThreadsMetricConfig // metric config provided by user.
+	capacity      int                                  // max observed number of data points added to the metric.
+	aggDataPoints []int64                              // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.mysqlx_worker_threads metric with initial data.
@@ -1979,17 +2865,48 @@ func (m *metricMysqlMysqlxWorkerThreads) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlMysqlxWorkerThreads) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, mysqlxThreadsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlMysqlxWorkerThreadsMetricAttributeKeyMysqlxThreads) {
+		dp.Attributes().PutStr("kind", mysqlxThreadsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", mysqlxThreadsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2002,14 +2919,20 @@ func (m *metricMysqlMysqlxWorkerThreads) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlMysqlxWorkerThreads) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlMysqlxWorkerThreads(cfg MetricConfig) metricMysqlMysqlxWorkerThreads {
+func newMetricMysqlMysqlxWorkerThreads(cfg MysqlMysqlxWorkerThreadsMetricConfig) metricMysqlMysqlxWorkerThreads {
 	m := metricMysqlMysqlxWorkerThreads{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2018,9 +2941,10 @@ func newMetricMysqlMysqlxWorkerThreads(cfg MetricConfig) metricMysqlMysqlxWorker
 }
 
 type metricMysqlOpenedResources struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlOpenedResourcesMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.opened_resources metric with initial data.
@@ -2032,17 +2956,48 @@ func (m *metricMysqlOpenedResources) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlOpenedResources) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, openedResourcesAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlOpenedResourcesMetricAttributeKeyOpenedResources) {
+		dp.Attributes().PutStr("kind", openedResourcesAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", openedResourcesAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2055,14 +3010,20 @@ func (m *metricMysqlOpenedResources) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlOpenedResources) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlOpenedResources(cfg MetricConfig) metricMysqlOpenedResources {
+func newMetricMysqlOpenedResources(cfg MysqlOpenedResourcesMetricConfig) metricMysqlOpenedResources {
 	m := metricMysqlOpenedResources{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2071,9 +3032,10 @@ func newMetricMysqlOpenedResources(cfg MetricConfig) metricMysqlOpenedResources 
 }
 
 type metricMysqlOperations struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric              // data buffer for generated metric.
+	config        MysqlOperationsMetricConfig // metric config provided by user.
+	capacity      int                         // max observed number of data points added to the metric.
+	aggDataPoints []int64                     // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.operations metric with initial data.
@@ -2085,17 +3047,48 @@ func (m *metricMysqlOperations) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlOperations) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, operationsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlOperationsMetricAttributeKeyOperations) {
+		dp.Attributes().PutStr("operation", operationsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", operationsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2108,14 +3101,20 @@ func (m *metricMysqlOperations) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlOperations) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlOperations(cfg MetricConfig) metricMysqlOperations {
+func newMetricMysqlOperations(cfg MysqlOperationsMetricConfig) metricMysqlOperations {
 	m := metricMysqlOperations{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2124,9 +3123,10 @@ func newMetricMysqlOperations(cfg MetricConfig) metricMysqlOperations {
 }
 
 type metricMysqlPageOperations struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                  // data buffer for generated metric.
+	config        MysqlPageOperationsMetricConfig // metric config provided by user.
+	capacity      int                             // max observed number of data points added to the metric.
+	aggDataPoints []int64                         // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.page_operations metric with initial data.
@@ -2138,17 +3138,48 @@ func (m *metricMysqlPageOperations) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlPageOperations) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, pageOperationsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlPageOperationsMetricAttributeKeyPageOperations) {
+		dp.Attributes().PutStr("operation", pageOperationsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", pageOperationsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2161,14 +3192,72 @@ func (m *metricMysqlPageOperations) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlPageOperations) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlPageOperations(cfg MetricConfig) metricMysqlPageOperations {
+func newMetricMysqlPageOperations(cfg MysqlPageOperationsMetricConfig) metricMysqlPageOperations {
 	m := metricMysqlPageOperations{config: cfg}
+
+	if cfg.Enabled {
+		m.data = pmetric.NewMetric()
+		m.init()
+	}
+	return m
+}
+
+type metricMysqlPageSize struct {
+	data     pmetric.Metric            // data buffer for generated metric.
+	config   MysqlPageSizeMetricConfig // metric config provided by user.
+	capacity int                       // max observed number of data points added to the metric.
+}
+
+// init fills mysql.page_size metric with initial data.
+func (m *metricMysqlPageSize) init() {
+	m.data.SetName("mysql.page_size")
+	m.data.SetDescription("InnoDB page size.")
+	m.data.SetUnit("By")
+	m.data.SetEmptySum()
+	m.data.Sum().SetIsMonotonic(false)
+	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+}
+
+func (m *metricMysqlPageSize) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64) {
+	if !m.config.Enabled {
+		return
+	}
+	dp := m.data.Sum().DataPoints().AppendEmpty()
+	dp.SetStartTimestamp(start)
+	dp.SetTimestamp(ts)
+	dp.SetIntValue(val)
+}
+
+// updateCapacity saves max length of data point slices that will be used for the slice capacity.
+func (m *metricMysqlPageSize) updateCapacity() {
+	if m.data.Sum().DataPoints().Len() > m.capacity {
+		m.capacity = m.data.Sum().DataPoints().Len()
+	}
+}
+
+// emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
+func (m *metricMysqlPageSize) emit(metrics pmetric.MetricSlice) {
+	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		m.updateCapacity()
+		m.data.MoveTo(metrics.AppendEmpty())
+		m.init()
+	}
+}
+
+func newMetricMysqlPageSize(cfg MysqlPageSizeMetricConfig) metricMysqlPageSize {
+	m := metricMysqlPageSize{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2177,9 +3266,10 @@ func newMetricMysqlPageOperations(cfg MetricConfig) metricMysqlPageOperations {
 }
 
 type metricMysqlPreparedStatements struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                      // data buffer for generated metric.
+	config        MysqlPreparedStatementsMetricConfig // metric config provided by user.
+	capacity      int                                 // max observed number of data points added to the metric.
+	aggDataPoints []int64                             // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.prepared_statements metric with initial data.
@@ -2191,17 +3281,48 @@ func (m *metricMysqlPreparedStatements) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlPreparedStatements) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, preparedStatementsCommandAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlPreparedStatementsMetricAttributeKeyPreparedStatementsCommand) {
+		dp.Attributes().PutStr("command", preparedStatementsCommandAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("command", preparedStatementsCommandAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2214,14 +3335,20 @@ func (m *metricMysqlPreparedStatements) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlPreparedStatements) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlPreparedStatements(cfg MetricConfig) metricMysqlPreparedStatements {
+func newMetricMysqlPreparedStatements(cfg MysqlPreparedStatementsMetricConfig) metricMysqlPreparedStatements {
 	m := metricMysqlPreparedStatements{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2230,9 +3357,9 @@ func newMetricMysqlPreparedStatements(cfg MetricConfig) metricMysqlPreparedState
 }
 
 type metricMysqlQueryClientCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                    // data buffer for generated metric.
+	config   MysqlQueryClientCountMetricConfig // metric config provided by user.
+	capacity int                               // max observed number of data points added to the metric.
 }
 
 // init fills mysql.query.client.count metric with initial data.
@@ -2271,8 +3398,9 @@ func (m *metricMysqlQueryClientCount) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlQueryClientCount(cfg MetricConfig) metricMysqlQueryClientCount {
+func newMetricMysqlQueryClientCount(cfg MysqlQueryClientCountMetricConfig) metricMysqlQueryClientCount {
 	m := metricMysqlQueryClientCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2281,9 +3409,9 @@ func newMetricMysqlQueryClientCount(cfg MetricConfig) metricMysqlQueryClientCoun
 }
 
 type metricMysqlQueryCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric              // data buffer for generated metric.
+	config   MysqlQueryCountMetricConfig // metric config provided by user.
+	capacity int                         // max observed number of data points added to the metric.
 }
 
 // init fills mysql.query.count metric with initial data.
@@ -2322,8 +3450,9 @@ func (m *metricMysqlQueryCount) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlQueryCount(cfg MetricConfig) metricMysqlQueryCount {
+func newMetricMysqlQueryCount(cfg MysqlQueryCountMetricConfig) metricMysqlQueryCount {
 	m := metricMysqlQueryCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2332,9 +3461,9 @@ func newMetricMysqlQueryCount(cfg MetricConfig) metricMysqlQueryCount {
 }
 
 type metricMysqlQuerySlowCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                  // data buffer for generated metric.
+	config   MysqlQuerySlowCountMetricConfig // metric config provided by user.
+	capacity int                             // max observed number of data points added to the metric.
 }
 
 // init fills mysql.query.slow.count metric with initial data.
@@ -2373,8 +3502,9 @@ func (m *metricMysqlQuerySlowCount) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlQuerySlowCount(cfg MetricConfig) metricMysqlQuerySlowCount {
+func newMetricMysqlQuerySlowCount(cfg MysqlQuerySlowCountMetricConfig) metricMysqlQuerySlowCount {
 	m := metricMysqlQuerySlowCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2383,9 +3513,9 @@ func newMetricMysqlQuerySlowCount(cfg MetricConfig) metricMysqlQuerySlowCount {
 }
 
 type metricMysqlReplicaSQLDelay struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                   // data buffer for generated metric.
+	config   MysqlReplicaSQLDelayMetricConfig // metric config provided by user.
+	capacity int                              // max observed number of data points added to the metric.
 }
 
 // init fills mysql.replica.sql_delay metric with initial data.
@@ -2424,8 +3554,9 @@ func (m *metricMysqlReplicaSQLDelay) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlReplicaSQLDelay(cfg MetricConfig) metricMysqlReplicaSQLDelay {
+func newMetricMysqlReplicaSQLDelay(cfg MysqlReplicaSQLDelayMetricConfig) metricMysqlReplicaSQLDelay {
 	m := metricMysqlReplicaSQLDelay{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2434,9 +3565,9 @@ func newMetricMysqlReplicaSQLDelay(cfg MetricConfig) metricMysqlReplicaSQLDelay 
 }
 
 type metricMysqlReplicaTimeBehindSource struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric                           // data buffer for generated metric.
+	config   MysqlReplicaTimeBehindSourceMetricConfig // metric config provided by user.
+	capacity int                                      // max observed number of data points added to the metric.
 }
 
 // init fills mysql.replica.time_behind_source metric with initial data.
@@ -2475,8 +3606,9 @@ func (m *metricMysqlReplicaTimeBehindSource) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlReplicaTimeBehindSource(cfg MetricConfig) metricMysqlReplicaTimeBehindSource {
+func newMetricMysqlReplicaTimeBehindSource(cfg MysqlReplicaTimeBehindSourceMetricConfig) metricMysqlReplicaTimeBehindSource {
 	m := metricMysqlReplicaTimeBehindSource{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2485,9 +3617,10 @@ func newMetricMysqlReplicaTimeBehindSource(cfg MetricConfig) metricMysqlReplicaT
 }
 
 type metricMysqlRowLocks struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric            // data buffer for generated metric.
+	config        MysqlRowLocksMetricConfig // metric config provided by user.
+	capacity      int                       // max observed number of data points added to the metric.
+	aggDataPoints []int64                   // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.row_locks metric with initial data.
@@ -2499,17 +3632,48 @@ func (m *metricMysqlRowLocks) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlRowLocks) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, rowLocksAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlRowLocksMetricAttributeKeyRowLocks) {
+		dp.Attributes().PutStr("kind", rowLocksAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", rowLocksAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2522,14 +3686,20 @@ func (m *metricMysqlRowLocks) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlRowLocks) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlRowLocks(cfg MetricConfig) metricMysqlRowLocks {
+func newMetricMysqlRowLocks(cfg MysqlRowLocksMetricConfig) metricMysqlRowLocks {
 	m := metricMysqlRowLocks{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2538,9 +3708,10 @@ func newMetricMysqlRowLocks(cfg MetricConfig) metricMysqlRowLocks {
 }
 
 type metricMysqlRowOperations struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                 // data buffer for generated metric.
+	config        MysqlRowOperationsMetricConfig // metric config provided by user.
+	capacity      int                            // max observed number of data points added to the metric.
+	aggDataPoints []int64                        // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.row_operations metric with initial data.
@@ -2552,17 +3723,48 @@ func (m *metricMysqlRowOperations) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlRowOperations) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, rowOperationsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlRowOperationsMetricAttributeKeyRowOperations) {
+		dp.Attributes().PutStr("operation", rowOperationsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", rowOperationsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2575,14 +3777,20 @@ func (m *metricMysqlRowOperations) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlRowOperations) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlRowOperations(cfg MetricConfig) metricMysqlRowOperations {
+func newMetricMysqlRowOperations(cfg MysqlRowOperationsMetricConfig) metricMysqlRowOperations {
 	m := metricMysqlRowOperations{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2591,9 +3799,10 @@ func newMetricMysqlRowOperations(cfg MetricConfig) metricMysqlRowOperations {
 }
 
 type metricMysqlSorts struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric         // data buffer for generated metric.
+	config        MysqlSortsMetricConfig // metric config provided by user.
+	capacity      int                    // max observed number of data points added to the metric.
+	aggDataPoints []int64                // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.sorts metric with initial data.
@@ -2605,17 +3814,48 @@ func (m *metricMysqlSorts) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlSorts) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, sortsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlSortsMetricAttributeKeySorts) {
+		dp.Attributes().PutStr("kind", sortsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", sortsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2628,14 +3868,20 @@ func (m *metricMysqlSorts) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlSorts) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlSorts(cfg MetricConfig) metricMysqlSorts {
+func newMetricMysqlSorts(cfg MysqlSortsMetricConfig) metricMysqlSorts {
 	m := metricMysqlSorts{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2644,9 +3890,10 @@ func newMetricMysqlSorts(cfg MetricConfig) metricMysqlSorts {
 }
 
 type metricMysqlStatementEventCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                       // data buffer for generated metric.
+	config        MysqlStatementEventCountMetricConfig // metric config provided by user.
+	capacity      int                                  // max observed number of data points added to the metric.
+	aggDataPoints []int64                              // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.statement_event.count metric with initial data.
@@ -2658,20 +3905,57 @@ func (m *metricMysqlStatementEventCount) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlStatementEventCount) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, digestAttributeValue string, digestTextAttributeValue string, eventStateAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventCountMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventCountMetricAttributeKeyDigest) {
+		dp.Attributes().PutStr("digest", digestAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventCountMetricAttributeKeyDigestText) {
+		dp.Attributes().PutStr("digest_text", digestTextAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventCountMetricAttributeKeyEventState) {
+		dp.Attributes().PutStr("kind", eventStateAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("digest", digestAttributeValue)
-	dp.Attributes().PutStr("digest_text", digestTextAttributeValue)
-	dp.Attributes().PutStr("kind", eventStateAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2684,14 +3968,20 @@ func (m *metricMysqlStatementEventCount) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlStatementEventCount) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlStatementEventCount(cfg MetricConfig) metricMysqlStatementEventCount {
+func newMetricMysqlStatementEventCount(cfg MysqlStatementEventCountMetricConfig) metricMysqlStatementEventCount {
 	m := metricMysqlStatementEventCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2700,9 +3990,10 @@ func newMetricMysqlStatementEventCount(cfg MetricConfig) metricMysqlStatementEve
 }
 
 type metricMysqlStatementEventWaitTime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                          // data buffer for generated metric.
+	config        MysqlStatementEventWaitTimeMetricConfig // metric config provided by user.
+	capacity      int                                     // max observed number of data points added to the metric.
+	aggDataPoints []int64                                 // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.statement_event.wait.time metric with initial data.
@@ -2714,19 +4005,54 @@ func (m *metricMysqlStatementEventWaitTime) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlStatementEventWaitTime) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, digestAttributeValue string, digestTextAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventWaitTimeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventWaitTimeMetricAttributeKeyDigest) {
+		dp.Attributes().PutStr("digest", digestAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlStatementEventWaitTimeMetricAttributeKeyDigestText) {
+		dp.Attributes().PutStr("digest_text", digestTextAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("digest", digestAttributeValue)
-	dp.Attributes().PutStr("digest_text", digestTextAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2739,14 +4065,20 @@ func (m *metricMysqlStatementEventWaitTime) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlStatementEventWaitTime) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlStatementEventWaitTime(cfg MetricConfig) metricMysqlStatementEventWaitTime {
+func newMetricMysqlStatementEventWaitTime(cfg MysqlStatementEventWaitTimeMetricConfig) metricMysqlStatementEventWaitTime {
 	m := metricMysqlStatementEventWaitTime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2755,9 +4087,10 @@ func newMetricMysqlStatementEventWaitTime(cfg MetricConfig) metricMysqlStatement
 }
 
 type metricMysqlTableAverageRowLength struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                         // data buffer for generated metric.
+	config        MysqlTableAverageRowLengthMetricConfig // metric config provided by user.
+	capacity      int                                    // max observed number of data points added to the metric.
+	aggDataPoints []int64                                // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.average_row_length metric with initial data.
@@ -2769,18 +4102,51 @@ func (m *metricMysqlTableAverageRowLength) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableAverageRowLength) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, tableNameAttributeValue string, schemaAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableAverageRowLengthMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableAverageRowLengthMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2793,14 +4159,20 @@ func (m *metricMysqlTableAverageRowLength) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableAverageRowLength) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableAverageRowLength(cfg MetricConfig) metricMysqlTableAverageRowLength {
+func newMetricMysqlTableAverageRowLength(cfg MysqlTableAverageRowLengthMetricConfig) metricMysqlTableAverageRowLength {
 	m := metricMysqlTableAverageRowLength{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2809,9 +4181,10 @@ func newMetricMysqlTableAverageRowLength(cfg MetricConfig) metricMysqlTableAvera
 }
 
 type metricMysqlTableIoWaitCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                    // data buffer for generated metric.
+	config        MysqlTableIoWaitCountMetricConfig // metric config provided by user.
+	capacity      int                               // max observed number of data points added to the metric.
+	aggDataPoints []int64                           // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.io.wait.count metric with initial data.
@@ -2823,19 +4196,54 @@ func (m *metricMysqlTableIoWaitCount) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableIoWaitCount) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, ioWaitsOperationsAttributeValue string, tableNameAttributeValue string, schemaAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitCountMetricAttributeKeyIoWaitsOperations) {
+		dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitCountMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitCountMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2848,14 +4256,20 @@ func (m *metricMysqlTableIoWaitCount) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableIoWaitCount) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableIoWaitCount(cfg MetricConfig) metricMysqlTableIoWaitCount {
+func newMetricMysqlTableIoWaitCount(cfg MysqlTableIoWaitCountMetricConfig) metricMysqlTableIoWaitCount {
 	m := metricMysqlTableIoWaitCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2864,9 +4278,10 @@ func newMetricMysqlTableIoWaitCount(cfg MetricConfig) metricMysqlTableIoWaitCoun
 }
 
 type metricMysqlTableIoWaitTime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                   // data buffer for generated metric.
+	config        MysqlTableIoWaitTimeMetricConfig // metric config provided by user.
+	capacity      int                              // max observed number of data points added to the metric.
+	aggDataPoints []int64                          // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.io.wait.time metric with initial data.
@@ -2878,19 +4293,54 @@ func (m *metricMysqlTableIoWaitTime) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableIoWaitTime) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, ioWaitsOperationsAttributeValue string, tableNameAttributeValue string, schemaAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitTimeMetricAttributeKeyIoWaitsOperations) {
+		dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitTimeMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableIoWaitTimeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("operation", ioWaitsOperationsAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2903,14 +4353,20 @@ func (m *metricMysqlTableIoWaitTime) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableIoWaitTime) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableIoWaitTime(cfg MetricConfig) metricMysqlTableIoWaitTime {
+func newMetricMysqlTableIoWaitTime(cfg MysqlTableIoWaitTimeMetricConfig) metricMysqlTableIoWaitTime {
 	m := metricMysqlTableIoWaitTime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2919,9 +4375,10 @@ func newMetricMysqlTableIoWaitTime(cfg MetricConfig) metricMysqlTableIoWaitTime 
 }
 
 type metricMysqlTableLockWaitReadCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                          // data buffer for generated metric.
+	config        MysqlTableLockWaitReadCountMetricConfig // metric config provided by user.
+	capacity      int                                     // max observed number of data points added to the metric.
+	aggDataPoints []int64                                 // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.lock_wait.read.count metric with initial data.
@@ -2933,19 +4390,54 @@ func (m *metricMysqlTableLockWaitReadCount) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableLockWaitReadCount) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, tableNameAttributeValue string, readLockTypeAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadCountMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadCountMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadCountMetricAttributeKeyReadLockType) {
+		dp.Attributes().PutStr("kind", readLockTypeAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("kind", readLockTypeAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -2958,14 +4450,20 @@ func (m *metricMysqlTableLockWaitReadCount) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableLockWaitReadCount) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableLockWaitReadCount(cfg MetricConfig) metricMysqlTableLockWaitReadCount {
+func newMetricMysqlTableLockWaitReadCount(cfg MysqlTableLockWaitReadCountMetricConfig) metricMysqlTableLockWaitReadCount {
 	m := metricMysqlTableLockWaitReadCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -2974,9 +4472,10 @@ func newMetricMysqlTableLockWaitReadCount(cfg MetricConfig) metricMysqlTableLock
 }
 
 type metricMysqlTableLockWaitReadTime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                         // data buffer for generated metric.
+	config        MysqlTableLockWaitReadTimeMetricConfig // metric config provided by user.
+	capacity      int                                    // max observed number of data points added to the metric.
+	aggDataPoints []int64                                // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.lock_wait.read.time metric with initial data.
@@ -2988,19 +4487,54 @@ func (m *metricMysqlTableLockWaitReadTime) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableLockWaitReadTime) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, tableNameAttributeValue string, readLockTypeAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadTimeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadTimeMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitReadTimeMetricAttributeKeyReadLockType) {
+		dp.Attributes().PutStr("kind", readLockTypeAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("kind", readLockTypeAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3013,14 +4547,20 @@ func (m *metricMysqlTableLockWaitReadTime) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableLockWaitReadTime) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableLockWaitReadTime(cfg MetricConfig) metricMysqlTableLockWaitReadTime {
+func newMetricMysqlTableLockWaitReadTime(cfg MysqlTableLockWaitReadTimeMetricConfig) metricMysqlTableLockWaitReadTime {
 	m := metricMysqlTableLockWaitReadTime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3029,9 +4569,10 @@ func newMetricMysqlTableLockWaitReadTime(cfg MetricConfig) metricMysqlTableLockW
 }
 
 type metricMysqlTableLockWaitWriteCount struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                           // data buffer for generated metric.
+	config        MysqlTableLockWaitWriteCountMetricConfig // metric config provided by user.
+	capacity      int                                      // max observed number of data points added to the metric.
+	aggDataPoints []int64                                  // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.lock_wait.write.count metric with initial data.
@@ -3043,19 +4584,54 @@ func (m *metricMysqlTableLockWaitWriteCount) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableLockWaitWriteCount) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, tableNameAttributeValue string, writeLockTypeAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteCountMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteCountMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteCountMetricAttributeKeyWriteLockType) {
+		dp.Attributes().PutStr("kind", writeLockTypeAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("kind", writeLockTypeAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3068,14 +4644,20 @@ func (m *metricMysqlTableLockWaitWriteCount) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableLockWaitWriteCount) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableLockWaitWriteCount(cfg MetricConfig) metricMysqlTableLockWaitWriteCount {
+func newMetricMysqlTableLockWaitWriteCount(cfg MysqlTableLockWaitWriteCountMetricConfig) metricMysqlTableLockWaitWriteCount {
 	m := metricMysqlTableLockWaitWriteCount{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3084,9 +4666,10 @@ func newMetricMysqlTableLockWaitWriteCount(cfg MetricConfig) metricMysqlTableLoc
 }
 
 type metricMysqlTableLockWaitWriteTime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                          // data buffer for generated metric.
+	config        MysqlTableLockWaitWriteTimeMetricConfig // metric config provided by user.
+	capacity      int                                     // max observed number of data points added to the metric.
+	aggDataPoints []int64                                 // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.lock_wait.write.time metric with initial data.
@@ -3098,19 +4681,54 @@ func (m *metricMysqlTableLockWaitWriteTime) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableLockWaitWriteTime) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, schemaAttributeValue string, tableNameAttributeValue string, writeLockTypeAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteTimeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteTimeMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableLockWaitWriteTimeMetricAttributeKeyWriteLockType) {
+		dp.Attributes().PutStr("kind", writeLockTypeAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("kind", writeLockTypeAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3123,14 +4741,20 @@ func (m *metricMysqlTableLockWaitWriteTime) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableLockWaitWriteTime) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableLockWaitWriteTime(cfg MetricConfig) metricMysqlTableLockWaitWriteTime {
+func newMetricMysqlTableLockWaitWriteTime(cfg MysqlTableLockWaitWriteTimeMetricConfig) metricMysqlTableLockWaitWriteTime {
 	m := metricMysqlTableLockWaitWriteTime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3139,9 +4763,10 @@ func newMetricMysqlTableLockWaitWriteTime(cfg MetricConfig) metricMysqlTableLock
 }
 
 type metricMysqlTableRows struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric             // data buffer for generated metric.
+	config        MysqlTableRowsMetricConfig // metric config provided by user.
+	capacity      int                        // max observed number of data points added to the metric.
+	aggDataPoints []int64                    // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.rows metric with initial data.
@@ -3153,18 +4778,51 @@ func (m *metricMysqlTableRows) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableRows) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, tableNameAttributeValue string, schemaAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableRowsMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableRowsMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3177,14 +4835,20 @@ func (m *metricMysqlTableRows) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableRows) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableRows(cfg MetricConfig) metricMysqlTableRows {
+func newMetricMysqlTableRows(cfg MysqlTableRowsMetricConfig) metricMysqlTableRows {
 	m := metricMysqlTableRows{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3193,9 +4857,10 @@ func newMetricMysqlTableRows(cfg MetricConfig) metricMysqlTableRows {
 }
 
 type metricMysqlTableSize struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric             // data buffer for generated metric.
+	config        MysqlTableSizeMetricConfig // metric config provided by user.
+	capacity      int                        // max observed number of data points added to the metric.
+	aggDataPoints []int64                    // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table.size metric with initial data.
@@ -3207,19 +4872,54 @@ func (m *metricMysqlTableSize) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableSize) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, tableNameAttributeValue string, schemaAttributeValue string, tableSizeTypeAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableSizeMetricAttributeKeyTableName) {
+		dp.Attributes().PutStr("table", tableNameAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableSizeMetricAttributeKeySchema) {
+		dp.Attributes().PutStr("schema", schemaAttributeValue)
+	}
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableSizeMetricAttributeKeyTableSizeType) {
+		dp.Attributes().PutStr("kind", tableSizeTypeAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("table", tableNameAttributeValue)
-	dp.Attributes().PutStr("schema", schemaAttributeValue)
-	dp.Attributes().PutStr("kind", tableSizeTypeAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3232,14 +4932,20 @@ func (m *metricMysqlTableSize) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableSize) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableSize(cfg MetricConfig) metricMysqlTableSize {
+func newMetricMysqlTableSize(cfg MysqlTableSizeMetricConfig) metricMysqlTableSize {
 	m := metricMysqlTableSize{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3248,9 +4954,10 @@ func newMetricMysqlTableSize(cfg MetricConfig) metricMysqlTableSize {
 }
 
 type metricMysqlTableOpenCache struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                  // data buffer for generated metric.
+	config        MysqlTableOpenCacheMetricConfig // metric config provided by user.
+	capacity      int                             // max observed number of data points added to the metric.
+	aggDataPoints []int64                         // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.table_open_cache metric with initial data.
@@ -3262,17 +4969,48 @@ func (m *metricMysqlTableOpenCache) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTableOpenCache) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, cacheStatusAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTableOpenCacheMetricAttributeKeyCacheStatus) {
+		dp.Attributes().PutStr("status", cacheStatusAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("status", cacheStatusAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3285,14 +5023,20 @@ func (m *metricMysqlTableOpenCache) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTableOpenCache) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTableOpenCache(cfg MetricConfig) metricMysqlTableOpenCache {
+func newMetricMysqlTableOpenCache(cfg MysqlTableOpenCacheMetricConfig) metricMysqlTableOpenCache {
 	m := metricMysqlTableOpenCache{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3301,9 +5045,10 @@ func newMetricMysqlTableOpenCache(cfg MetricConfig) metricMysqlTableOpenCache {
 }
 
 type metricMysqlThreads struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric           // data buffer for generated metric.
+	config        MysqlThreadsMetricConfig // metric config provided by user.
+	capacity      int                      // max observed number of data points added to the metric.
+	aggDataPoints []int64                  // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.threads metric with initial data.
@@ -3315,17 +5060,48 @@ func (m *metricMysqlThreads) init() {
 	m.data.Sum().SetIsMonotonic(false)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlThreads) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, threadsAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlThreadsMetricAttributeKeyThreads) {
+		dp.Attributes().PutStr("kind", threadsAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("kind", threadsAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3338,14 +5114,20 @@ func (m *metricMysqlThreads) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlThreads) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlThreads(cfg MetricConfig) metricMysqlThreads {
+func newMetricMysqlThreads(cfg MysqlThreadsMetricConfig) metricMysqlThreads {
 	m := metricMysqlThreads{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3354,9 +5136,10 @@ func newMetricMysqlThreads(cfg MetricConfig) metricMysqlThreads {
 }
 
 type metricMysqlTmpResources struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data          pmetric.Metric                // data buffer for generated metric.
+	config        MysqlTmpResourcesMetricConfig // metric config provided by user.
+	capacity      int                           // max observed number of data points added to the metric.
+	aggDataPoints []int64                       // slice containing number of aggregated datapoints at each index
 }
 
 // init fills mysql.tmp_resources metric with initial data.
@@ -3368,17 +5151,48 @@ func (m *metricMysqlTmpResources) init() {
 	m.data.Sum().SetIsMonotonic(true)
 	m.data.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 	m.data.Sum().DataPoints().EnsureCapacity(m.capacity)
+	m.aggDataPoints = m.aggDataPoints[:0]
 }
 
 func (m *metricMysqlTmpResources) recordDataPoint(start pcommon.Timestamp, ts pcommon.Timestamp, val int64, tmpResourceAttributeValue string) {
 	if !m.config.Enabled {
 		return
 	}
-	dp := m.data.Sum().DataPoints().AppendEmpty()
+
+	dp := pmetric.NewNumberDataPoint()
 	dp.SetStartTimestamp(start)
 	dp.SetTimestamp(ts)
+	if slices.Contains(m.config.EnabledAttributes, MysqlTmpResourcesMetricAttributeKeyTmpResource) {
+		dp.Attributes().PutStr("resource", tmpResourceAttributeValue)
+	}
+
+	var s string
+	dps := m.data.Sum().DataPoints()
+	for i := 0; i < dps.Len(); i++ {
+		dpi := dps.At(i)
+		if dp.Attributes().Equal(dpi.Attributes()) && dp.StartTimestamp() == dpi.StartTimestamp() && dp.Timestamp() == dpi.Timestamp() {
+			switch s = m.config.AggregationStrategy; s {
+			case AggregationStrategySum, AggregationStrategyAvg:
+				dpi.SetIntValue(dpi.IntValue() + val)
+				m.aggDataPoints[i] += 1
+				return
+			case AggregationStrategyMin:
+				if dpi.IntValue() > val {
+					dpi.SetIntValue(val)
+				}
+				return
+			case AggregationStrategyMax:
+				if dpi.IntValue() < val {
+					dpi.SetIntValue(val)
+				}
+				return
+			}
+		}
+	}
+
 	dp.SetIntValue(val)
-	dp.Attributes().PutStr("resource", tmpResourceAttributeValue)
+	m.aggDataPoints = append(m.aggDataPoints, 1)
+	dp.MoveTo(dps.AppendEmpty())
 }
 
 // updateCapacity saves max length of data point slices that will be used for the slice capacity.
@@ -3391,14 +5205,20 @@ func (m *metricMysqlTmpResources) updateCapacity() {
 // emit appends recorded metric data to a metrics slice and prepares it for recording another set of data points.
 func (m *metricMysqlTmpResources) emit(metrics pmetric.MetricSlice) {
 	if m.config.Enabled && m.data.Sum().DataPoints().Len() > 0 {
+		if m.config.AggregationStrategy == AggregationStrategyAvg {
+			for i, aggCount := range m.aggDataPoints {
+				m.data.Sum().DataPoints().At(i).SetIntValue(m.data.Sum().DataPoints().At(i).IntValue() / aggCount)
+			}
+		}
 		m.updateCapacity()
 		m.data.MoveTo(metrics.AppendEmpty())
 		m.init()
 	}
 }
 
-func newMetricMysqlTmpResources(cfg MetricConfig) metricMysqlTmpResources {
+func newMetricMysqlTmpResources(cfg MysqlTmpResourcesMetricConfig) metricMysqlTmpResources {
 	m := metricMysqlTmpResources{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3407,9 +5227,9 @@ func newMetricMysqlTmpResources(cfg MetricConfig) metricMysqlTmpResources {
 }
 
 type metricMysqlUptime struct {
-	data     pmetric.Metric // data buffer for generated metric.
-	config   MetricConfig   // metric config provided by user.
-	capacity int            // max observed number of data points added to the metric.
+	data     pmetric.Metric          // data buffer for generated metric.
+	config   MysqlUptimeMetricConfig // metric config provided by user.
+	capacity int                     // max observed number of data points added to the metric.
 }
 
 // init fills mysql.uptime metric with initial data.
@@ -3448,8 +5268,9 @@ func (m *metricMysqlUptime) emit(metrics pmetric.MetricSlice) {
 	}
 }
 
-func newMetricMysqlUptime(cfg MetricConfig) metricMysqlUptime {
+func newMetricMysqlUptime(cfg MysqlUptimeMetricConfig) metricMysqlUptime {
 	m := metricMysqlUptime{config: cfg}
+
 	if cfg.Enabled {
 		m.data = pmetric.NewMetric()
 		m.init()
@@ -3484,11 +5305,13 @@ type MetricsBuilder struct {
 	metricMysqlJoins                   metricMysqlJoins
 	metricMysqlLocks                   metricMysqlLocks
 	metricMysqlLogOperations           metricMysqlLogOperations
+	metricMysqlMaxUsedConnections      metricMysqlMaxUsedConnections
 	metricMysqlMysqlxConnections       metricMysqlMysqlxConnections
 	metricMysqlMysqlxWorkerThreads     metricMysqlMysqlxWorkerThreads
 	metricMysqlOpenedResources         metricMysqlOpenedResources
 	metricMysqlOperations              metricMysqlOperations
 	metricMysqlPageOperations          metricMysqlPageOperations
+	metricMysqlPageSize                metricMysqlPageSize
 	metricMysqlPreparedStatements      metricMysqlPreparedStatements
 	metricMysqlQueryClientCount        metricMysqlQueryClientCount
 	metricMysqlQueryCount              metricMysqlQueryCount
@@ -3532,7 +5355,6 @@ func WithStartTime(startTime pcommon.Timestamp) MetricBuilderOption {
 		mb.startTime = startTime
 	})
 }
-
 func NewMetricsBuilder(mbc MetricsBuilderConfig, settings receiver.Settings, options ...MetricBuilderOption) *MetricsBuilder {
 	mb := &MetricsBuilder{
 		config:                             mbc,
@@ -3556,11 +5378,13 @@ func NewMetricsBuilder(mbc MetricsBuilderConfig, settings receiver.Settings, opt
 		metricMysqlJoins:                   newMetricMysqlJoins(mbc.Metrics.MysqlJoins),
 		metricMysqlLocks:                   newMetricMysqlLocks(mbc.Metrics.MysqlLocks),
 		metricMysqlLogOperations:           newMetricMysqlLogOperations(mbc.Metrics.MysqlLogOperations),
+		metricMysqlMaxUsedConnections:      newMetricMysqlMaxUsedConnections(mbc.Metrics.MysqlMaxUsedConnections),
 		metricMysqlMysqlxConnections:       newMetricMysqlMysqlxConnections(mbc.Metrics.MysqlMysqlxConnections),
 		metricMysqlMysqlxWorkerThreads:     newMetricMysqlMysqlxWorkerThreads(mbc.Metrics.MysqlMysqlxWorkerThreads),
 		metricMysqlOpenedResources:         newMetricMysqlOpenedResources(mbc.Metrics.MysqlOpenedResources),
 		metricMysqlOperations:              newMetricMysqlOperations(mbc.Metrics.MysqlOperations),
 		metricMysqlPageOperations:          newMetricMysqlPageOperations(mbc.Metrics.MysqlPageOperations),
+		metricMysqlPageSize:                newMetricMysqlPageSize(mbc.Metrics.MysqlPageSize),
 		metricMysqlPreparedStatements:      newMetricMysqlPreparedStatements(mbc.Metrics.MysqlPreparedStatements),
 		metricMysqlQueryClientCount:        newMetricMysqlQueryClientCount(mbc.Metrics.MysqlQueryClientCount),
 		metricMysqlQueryCount:              newMetricMysqlQueryCount(mbc.Metrics.MysqlQueryCount),
@@ -3660,7 +5484,7 @@ func WithStartTimeOverride(start pcommon.Timestamp) ResourceMetricsOption {
 func (mb *MetricsBuilder) EmitForResource(options ...ResourceMetricsOption) {
 	rm := pmetric.NewResourceMetrics()
 	ils := rm.ScopeMetrics().AppendEmpty()
-	ils.Scope().SetName("github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mysqlreceiver")
+	ils.Scope().SetName(ScopeName)
 	ils.Scope().SetVersion(mb.buildInfo.Version)
 	ils.Metrics().EnsureCapacity(mb.metricsCapacity)
 	mb.metricMysqlBufferPoolDataPages.emit(ils.Metrics())
@@ -3680,11 +5504,13 @@ func (mb *MetricsBuilder) EmitForResource(options ...ResourceMetricsOption) {
 	mb.metricMysqlJoins.emit(ils.Metrics())
 	mb.metricMysqlLocks.emit(ils.Metrics())
 	mb.metricMysqlLogOperations.emit(ils.Metrics())
+	mb.metricMysqlMaxUsedConnections.emit(ils.Metrics())
 	mb.metricMysqlMysqlxConnections.emit(ils.Metrics())
 	mb.metricMysqlMysqlxWorkerThreads.emit(ils.Metrics())
 	mb.metricMysqlOpenedResources.emit(ils.Metrics())
 	mb.metricMysqlOperations.emit(ils.Metrics())
 	mb.metricMysqlPageOperations.emit(ils.Metrics())
+	mb.metricMysqlPageSize.emit(ils.Metrics())
 	mb.metricMysqlPreparedStatements.emit(ils.Metrics())
 	mb.metricMysqlQueryClientCount.emit(ils.Metrics())
 	mb.metricMysqlQueryCount.emit(ils.Metrics())
@@ -3890,6 +5716,16 @@ func (mb *MetricsBuilder) RecordMysqlLogOperationsDataPoint(ts pcommon.Timestamp
 	return nil
 }
 
+// RecordMysqlMaxUsedConnectionsDataPoint adds a data point to mysql.max_used_connections metric.
+func (mb *MetricsBuilder) RecordMysqlMaxUsedConnectionsDataPoint(ts pcommon.Timestamp, inputVal string) error {
+	val, err := strconv.ParseInt(inputVal, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse int64 for MysqlMaxUsedConnections, value was %s: %w", inputVal, err)
+	}
+	mb.metricMysqlMaxUsedConnections.recordDataPoint(mb.startTime, ts, val)
+	return nil
+}
+
 // RecordMysqlMysqlxConnectionsDataPoint adds a data point to mysql.mysqlx_connections metric.
 func (mb *MetricsBuilder) RecordMysqlMysqlxConnectionsDataPoint(ts pcommon.Timestamp, inputVal string, connectionStatusAttributeValue AttributeConnectionStatus) error {
 	val, err := strconv.ParseInt(inputVal, 10, 64)
@@ -3937,6 +5773,16 @@ func (mb *MetricsBuilder) RecordMysqlPageOperationsDataPoint(ts pcommon.Timestam
 		return fmt.Errorf("failed to parse int64 for MysqlPageOperations, value was %s: %w", inputVal, err)
 	}
 	mb.metricMysqlPageOperations.recordDataPoint(mb.startTime, ts, val, pageOperationsAttributeValue.String())
+	return nil
+}
+
+// RecordMysqlPageSizeDataPoint adds a data point to mysql.page_size metric.
+func (mb *MetricsBuilder) RecordMysqlPageSizeDataPoint(ts pcommon.Timestamp, inputVal string) error {
+	val, err := strconv.ParseInt(inputVal, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse int64 for MysqlPageSize, value was %s: %w", inputVal, err)
+	}
+	mb.metricMysqlPageSize.recordDataPoint(mb.startTime, ts, val)
 	return nil
 }
 

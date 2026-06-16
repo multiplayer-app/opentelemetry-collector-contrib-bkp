@@ -4,47 +4,85 @@
 package mongodbreceiver
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-version"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/drivertest"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver/receivertest"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbreceiver/internal/metadata"
 )
 
 func TestNewMongodbScraper(t *testing.T) {
 	f := NewFactory()
 	cfg := f.CreateDefaultConfig().(*Config)
 
-	scraper := newMongodbScraper(receivertest.NewNopSettings(), cfg)
+	scraper := newMongodbScraper(receivertest.NewNopSettings(metadata.Type), cfg)
 	require.NotEmpty(t, scraper.config.hostlist())
 }
 
+func TestGenerateInstanceID(t *testing.T) {
+	t.Run("deterministic", func(t *testing.T) {
+		// Same inputs should produce the same UUID
+		id1 := generateInstanceID("localhost", 27017)
+		id2 := generateInstanceID("localhost", 27017)
+		require.Equal(t, id1, id2, "same inputs should produce same UUID")
+		require.Equal(t, "fd638985-aee9-53f2-95d3-ce3e8483c243", id1)
+	})
+
+	t.Run("unique for different ports", func(t *testing.T) {
+		id1 := generateInstanceID("localhost", 27017)
+		id2 := generateInstanceID("localhost", 27018)
+		require.NotEqual(t, id1, id2, "different ports should produce different UUIDs")
+	})
+
+	t.Run("unique for different hosts", func(t *testing.T) {
+		id1 := generateInstanceID("host1", 27017)
+		id2 := generateInstanceID("host2", 27017)
+		require.NotEqual(t, id1, id2, "different hosts should produce different UUIDs")
+	})
+
+	t.Run("valid UUID v5 format", func(t *testing.T) {
+		id := generateInstanceID("localhost", 27017)
+		parsed, err := uuid.Parse(id)
+		require.NoError(t, err, "generated ID should be a valid UUID")
+		require.Equal(t, uuid.Version(5), parsed.Version(), "should be UUID v5")
+	})
+}
+
 func TestScraperLifecycle(t *testing.T) {
-	now := time.Now()
 	f := NewFactory()
 	cfg := f.CreateDefaultConfig().(*Config)
 
-	scraper := newMongodbScraper(receivertest.NewNopSettings(), cfg)
-	require.NoError(t, scraper.start(context.Background(), componenttest.NewNopHost()))
-	require.NoError(t, scraper.shutdown(context.Background()))
+	/*
+		NOTE:
+		setting direct connection to true because originally, the scraper tests only ONE mongodb instance.
+		added in routing logic to detect multiple mongodb instances which takes longer than 2 milliseconds.
+		since this test is testing for lifecycle (start and shutting down ONE instance).
+	*/
+	cfg.DirectConnection = true
 
-	require.Less(t, time.Since(now), 200*time.Millisecond, "component start and stop should be very fast")
+	scraper := newMongodbScraper(receivertest.NewNopSettings(metadata.Type), cfg)
+	require.NoError(t, scraper.start(t.Context(), componenttest.NewNopHost()))
+	require.NoError(t, scraper.shutdown(t.Context()))
 }
 
 var (
@@ -282,19 +320,19 @@ func TestScraperScrape(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			scraperCfg := createDefaultConfig().(*Config)
 			// Enable any metrics set to `false` by default
-			scraperCfg.MetricsBuilderConfig.Metrics.MongodbOperationLatencyTime.Enabled = true
-			scraperCfg.MetricsBuilderConfig.Metrics.MongodbOperationReplCount.Enabled = true
-			scraperCfg.MetricsBuilderConfig.Metrics.MongodbUptime.Enabled = true
-			scraperCfg.MetricsBuilderConfig.Metrics.MongodbHealth.Enabled = true
+			scraperCfg.Metrics.MongodbOperationLatencyTime.Enabled = true
+			scraperCfg.Metrics.MongodbOperationReplCount.Enabled = true
+			scraperCfg.Metrics.MongodbUptime.Enabled = true
+			scraperCfg.Metrics.MongodbHealth.Enabled = true
 
-			scraper := newMongodbScraper(receivertest.NewNopSettings(), scraperCfg)
+			scraper := newMongodbScraper(receivertest.NewNopSettings(metadata.Type), scraperCfg)
 
 			mc := tc.setupMockClient(t)
 			if mc != nil {
 				scraper.client = mc
 			}
 
-			actualMetrics, err := scraper.scrape(context.Background())
+			actualMetrics, err := scraper.scrape(t.Context())
 			if tc.expectedErr == nil {
 				require.NoError(t, err)
 			} else {
@@ -331,56 +369,58 @@ func TestScraperScrape(t *testing.T) {
 }
 
 func TestTopMetricsAggregation(t *testing.T) {
-	mont := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	mt := drivertest.NewMockDeployment()
+	opts := options.Client()
+	//nolint:staticcheck // Using deprecated Deployment field for testing purposes
+	opts.Deployment = mt
+	c, err := mongo.Connect(opts)
+	require.NoError(t, err)
 
 	loadedTop, err := loadTop()
 	require.NoError(t, err)
 
-	mont.Run("test top stats are aggregated correctly", func(mt *mtest.T) {
-		mt.AddMockResponses(loadedTop)
-		driver := mt.Client
-		client := mongodbClient{
-			Client: driver,
-			logger: zap.NewNop(),
-		}
-		var doc bson.M
-		doc, err = client.TopStats(context.Background())
-		require.NoError(t, err)
+	mt.AddResponses(loadedTop)
+	client := mongodbClient{
+		Client: c,
+		logger: zap.NewNop(),
+	}
+	var doc bson.M
+	doc, err = client.TopStats(t.Context())
+	require.NoError(t, err)
 
-		collectionPathNames, err := digForCollectionPathNames(doc)
-		require.NoError(t, err)
-		require.ElementsMatch(t, collectionPathNames,
-			[]string{
-				"config.transactions",
-				"test.admin",
-				"test.orders",
-				"admin.system.roles",
-				"local.system.replset",
-				"test.products",
-				"admin.system.users",
-				"admin.system.version",
-				"config.system.sessions",
-				"local.oplog.rs",
-				"local.startup_log",
-			})
+	collectionPathNames, err := digForCollectionPathNames(doc)
+	require.NoError(t, err)
+	require.ElementsMatch(t, collectionPathNames,
+		[]string{
+			"config.transactions",
+			"test.admin",
+			"test.orders",
+			"admin.system.roles",
+			"local.system.replset",
+			"test.products",
+			"admin.system.users",
+			"admin.system.version",
+			"config.system.sessions",
+			"local.oplog.rs",
+			"local.startup_log",
+		})
 
-		actualOperationTimeValues, err := aggregateOperationTimeValues(doc, collectionPathNames, operationsMap)
-		require.NoError(t, err)
+	actualOperationTimeValues, err := aggregateOperationTimeValues(doc, collectionPathNames, operationsMap)
+	require.NoError(t, err)
 
-		// values are taken from testdata/top.json
-		expectedInsertValues := 0 + 0 + 0 + 0 + 0 + 11302 + 0 + 1163 + 0 + 0 + 0
-		expectedQueryValues := 0 + 0 + 6072 + 0 + 0 + 0 + 44 + 0 + 0 + 0 + 2791
-		expectedUpdateValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 155 + 9962 + 0
-		expectedRemoveValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 3750 + 0
-		expectedGetmoreValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0
-		expectedCommandValues := 540 + 397 + 4009 + 0 + 0 + 23285 + 0 + 10993 + 0 + 10116 + 0
-		require.EqualValues(t, expectedInsertValues, actualOperationTimeValues["insert"])
-		require.EqualValues(t, expectedQueryValues, actualOperationTimeValues["queries"])
-		require.EqualValues(t, expectedUpdateValues, actualOperationTimeValues["update"])
-		require.EqualValues(t, expectedRemoveValues, actualOperationTimeValues["remove"])
-		require.EqualValues(t, expectedGetmoreValues, actualOperationTimeValues["getmore"])
-		require.EqualValues(t, expectedCommandValues, actualOperationTimeValues["commands"])
-	})
+	// values are taken from testdata/top.json
+	expectedInsertValues := 0 + 0 + 0 + 0 + 0 + 11302 + 0 + 1163 + 0 + 0 + 0
+	expectedQueryValues := 0 + 0 + 6072 + 0 + 0 + 0 + 44 + 0 + 0 + 0 + 2791
+	expectedUpdateValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 155 + 9962 + 0
+	expectedRemoveValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 3750 + 0
+	expectedGetmoreValues := 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0
+	expectedCommandValues := 540 + 397 + 4009 + 0 + 0 + 23285 + 0 + 10993 + 0 + 10116 + 0
+	require.EqualValues(t, expectedInsertValues, actualOperationTimeValues["insert"])
+	require.EqualValues(t, expectedQueryValues, actualOperationTimeValues["queries"])
+	require.EqualValues(t, expectedUpdateValues, actualOperationTimeValues["update"])
+	require.EqualValues(t, expectedRemoveValues, actualOperationTimeValues["remove"])
+	require.EqualValues(t, expectedGetmoreValues, actualOperationTimeValues["getmore"])
+	require.EqualValues(t, expectedCommandValues, actualOperationTimeValues["commands"])
 }
 
 func TestServerAddressAndPort(t *testing.T) {
@@ -437,6 +477,149 @@ func TestServerAddressAndPort(t *testing.T) {
 				require.Equal(t, tt.expectedAddress, address)
 				require.Equal(t, tt.expectedPort, port)
 			}
+		})
+	}
+}
+
+func TestReceiverMetricsDisabled(t *testing.T) {
+	scraperCfg := createDefaultConfig().(*Config)
+
+	// disable all metrics
+	v := reflect.ValueOf(&scraperCfg.Metrics).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		v.Field(i).FieldByName("Enabled").SetBool(false)
+	}
+
+	fc := &fakeClient{}
+	adminStatus, err := loadAdminStatusAsMap()
+	require.NoError(t, err)
+	ss, err := loadServerStatusAsMap()
+	require.NoError(t, err)
+	dbStats, err := loadDBStatsAsMap()
+	require.NoError(t, err)
+	topStats, err := loadTopAsMap()
+	require.NoError(t, err)
+	productsIndexStats, err := loadIndexStatsAsMap("products")
+	require.NoError(t, err)
+	ordersIndexStats, err := loadIndexStatsAsMap("orders")
+	require.NoError(t, err)
+	mongo40, err := version.NewVersion("4.0")
+	require.NoError(t, err)
+	fakeDatabaseName := "fakedatabase"
+	fc.On("GetVersion", mock.Anything).Return(mongo40, nil)
+	fc.On("ListDatabaseNames", mock.Anything, mock.Anything, mock.Anything).Return([]string{fakeDatabaseName}, nil)
+	fc.On("ServerStatus", mock.Anything, fakeDatabaseName).Return(ss, nil)
+	fc.On("ServerStatus", mock.Anything, "admin").Return(adminStatus, nil)
+	fc.On("DBStats", mock.Anything, fakeDatabaseName).Return(dbStats, nil)
+	fc.On("TopStats", mock.Anything).Return(topStats, nil)
+	fc.On("ListCollectionNames", mock.Anything, fakeDatabaseName).Return([]string{"products", "orders"}, nil)
+	fc.On("IndexStats", mock.Anything, fakeDatabaseName, "products").Return(productsIndexStats, nil)
+	fc.On("IndexStats", mock.Anything, fakeDatabaseName, "orders").Return(ordersIndexStats, nil)
+
+	scraper := newMongodbScraper(receivertest.NewNopSettings(metadata.Type), scraperCfg)
+	scraper.client = fc
+
+	scrapedMetrics, err := scraper.scrape(t.Context())
+	if err != nil {
+		require.NoError(t, err, "error scraping while no metrics are enabled")
+	}
+
+	require.Equal(t, 0, scrapedMetrics.MetricCount(), "no data should be scraped when all metrics are disabled")
+}
+
+func TestDependentMetricsWhenDisabled(t *testing.T) {
+	tests := []struct {
+		name              string
+		subject           func(*metadata.MetricsConfig)
+		dependent         func(*metadata.MetricsConfig)
+		expectedMetricGen func(t *testing.T) pmetric.Metrics
+	}{
+		{
+			name: "mongodb.commands.rate metric should work when mongodb.operation.count disabled",
+			subject: func(mc *metadata.MetricsConfig) {
+				mc.MongodbOperationCount.Enabled = false
+			},
+			dependent: func(mc *metadata.MetricsConfig) {
+				mc.MongodbCommandsRate.Enabled = true
+			},
+			expectedMetricGen: func(t *testing.T) pmetric.Metrics {
+				goldenPath := filepath.Join("testdata", "scraper", "mongodb-commands-rate-count-dependency.yaml")
+				expectedMetrics, err := golden.ReadMetrics(goldenPath)
+				require.NoError(t, err)
+				return expectedMetrics
+			},
+		},
+		{
+			name: "mongodb.repl_commands_per_sec metric should work when mongodb.operation.repl.count disabled",
+			subject: func(mc *metadata.MetricsConfig) {
+				mc.MongodbOperationReplCount.Enabled = false
+			},
+			dependent: func(mc *metadata.MetricsConfig) {
+				mc.MongodbReplCommandsPerSec.Enabled = true
+			},
+			expectedMetricGen: func(t *testing.T) pmetric.Metrics {
+				goldenPath := filepath.Join("testdata", "scraper", "mongodb-repl-commands-per-sec-count-dependency.yaml")
+				expectedMetrics, err := golden.ReadMetrics(goldenPath)
+				require.NoError(t, err)
+				return expectedMetrics
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scraperCfg := createDefaultConfig().(*Config)
+
+			tt.subject(&scraperCfg.Metrics)
+			tt.dependent(&scraperCfg.Metrics)
+
+			// successful scrape config
+			fc := &fakeClient{}
+			adminStatus, err := loadAdminStatusAsMap()
+			require.NoError(t, err)
+			ss, err := loadServerStatusAsMap()
+			require.NoError(t, err)
+			dbStats, err := loadDBStatsAsMap()
+			require.NoError(t, err)
+			topStats, err := loadTopAsMap()
+			require.NoError(t, err)
+			productsIndexStats, err := loadIndexStatsAsMap("products")
+			require.NoError(t, err)
+			ordersIndexStats, err := loadIndexStatsAsMap("orders")
+			require.NoError(t, err)
+			mongo40, err := version.NewVersion("4.0")
+			require.NoError(t, err)
+			fakeDatabaseName := "fakedatabase"
+			fc.On("GetVersion", mock.Anything).Return(mongo40, nil)
+			fc.On("ListDatabaseNames", mock.Anything, mock.Anything, mock.Anything).Return([]string{fakeDatabaseName}, nil)
+			fc.On("ServerStatus", mock.Anything, fakeDatabaseName).Return(ss, nil)
+			fc.On("ServerStatus", mock.Anything, "admin").Return(adminStatus, nil)
+			fc.On("DBStats", mock.Anything, fakeDatabaseName).Return(dbStats, nil)
+			fc.On("TopStats", mock.Anything).Return(topStats, nil)
+			fc.On("ListCollectionNames", mock.Anything, fakeDatabaseName).Return([]string{"products", "orders"}, nil)
+			fc.On("IndexStats", mock.Anything, fakeDatabaseName, "products").Return(productsIndexStats, nil)
+			fc.On("IndexStats", mock.Anything, fakeDatabaseName, "orders").Return(ordersIndexStats, nil)
+
+			scraper := newMongodbScraper(receivertest.NewNopSettings(metadata.Type), scraperCfg)
+			scraper.client = fc
+
+			_, err = scraper.scrape(t.Context())
+			if err != nil {
+				require.NoError(t, err, "error scraping metrics")
+			}
+
+			// wait a few seconds, then scrape again so metrics that rely on previous values can be calculated
+			time.Sleep(2 * time.Second)
+			scrapedMetrics, err := scraper.scrape(t.Context())
+			if err != nil {
+				require.NoError(t, err, "error scraping metrics")
+			}
+
+			expectedMetrics := tt.expectedMetricGen(t)
+
+			require.NoError(t, pmetrictest.CompareMetrics(expectedMetrics, scrapedMetrics,
+				pmetrictest.IgnoreResourceMetricsOrder(),
+				pmetrictest.IgnoreMetricDataPointsOrder(), pmetrictest.IgnoreStartTimestamp(), pmetrictest.IgnoreTimestamp()))
 		})
 	}
 }

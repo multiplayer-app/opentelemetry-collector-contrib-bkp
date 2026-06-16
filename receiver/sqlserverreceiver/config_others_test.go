@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/sqlserverreceiver/internal/metadata"
 )
@@ -24,14 +24,16 @@ func TestValidateOtherOS(t *testing.T) {
 		{
 			desc: "valid config",
 			cfg: &Config{
-				MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
 			},
 			expectedSuccess: true,
-		}, {
+		},
+		{
 			desc: "valid config with no metric settings",
 			cfg: &Config{
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
 			},
 			expectedSuccess: true,
 		},
@@ -43,34 +45,38 @@ func TestValidateOtherOS(t *testing.T) {
 		{
 			desc: "valid config with both names set",
 			cfg: &Config{
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-				ComputerName:     "ComputerName",
-				InstanceName:     "InstanceName",
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
+				ComputerName:         "ComputerName",
+				InstanceName:         "InstanceName",
 			},
 			expectedSuccess: true,
 		},
 		{
 			desc: "valid config with instance_name but not computer_name",
 			cfg: &Config{
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-				InstanceName:     "InstanceName",
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
+				InstanceName:         "InstanceName",
 			},
 			expectedSuccess: true,
 		},
 		{
 			desc: "valid config with computer_name but not instance_name",
 			cfg: &Config{
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-				ComputerName:     "ComputerName",
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
+				ComputerName:         "ComputerName",
 			},
 			expectedSuccess: true,
 		},
 		{
 			desc: "valid config with both instance and computer name",
 			cfg: &Config{
-				ControllerConfig: scraperhelper.NewDefaultControllerConfig(),
-				ComputerName:     "ComputerName",
-				InstanceName:     "InstanceName",
+				MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+				ControllerConfig:     scraperhelper.NewDefaultControllerConfig(),
+				ComputerName:         "ComputerName",
+				InstanceName:         "InstanceName",
 			},
 			expectedSuccess: true,
 		},
@@ -79,9 +85,9 @@ func TestValidateOtherOS(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			if tc.expectedSuccess {
-				require.NoError(t, component.ValidateConfig(tc.cfg))
+				require.NoError(t, xconfmap.Validate(tc.cfg))
 			} else {
-				require.Error(t, component.ValidateConfig(tc.cfg))
+				require.Error(t, xconfmap.Validate(tc.cfg))
 			}
 		})
 	}

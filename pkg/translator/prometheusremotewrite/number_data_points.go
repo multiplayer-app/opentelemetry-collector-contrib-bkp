@@ -11,21 +11,20 @@ import (
 	"github.com/prometheus/prometheus/prompb"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.uber.org/multierr"
 )
 
 func (c *prometheusConverter) addGaugeNumberDataPoints(dataPoints pmetric.NumberDataPointSlice,
-	resource pcommon.Resource, settings Settings, name string) {
+	resource pcommon.Resource, scope pcommon.InstrumentationScope, settings Settings, name string,
+) error {
+	var errs error
 	for x := 0; x < dataPoints.Len(); x++ {
 		pt := dataPoints.At(x)
-		labels := createAttributes(
-			resource,
-			pt.Attributes(),
-			settings.ExternalLabels,
-			nil,
-			true,
-			model.MetricNameLabel,
-			name,
-		)
+		labels, err := createAttributes(resource, pt.Attributes(), scope, settings.ExternalLabels, nil, true, c.labelNamer, settings.DisableScopeInfo, model.MetricNameLabel, name)
+		if err != nil {
+			errs = multierr.Append(errs, err)
+			continue
+		}
 		sample := &prompb.Sample{
 			// convert ns to ms
 			Timestamp: convertTimeStamp(pt.Timestamp()),
@@ -41,21 +40,20 @@ func (c *prometheusConverter) addGaugeNumberDataPoints(dataPoints pmetric.Number
 		}
 		c.addSample(sample, labels)
 	}
+	return errs
 }
 
 func (c *prometheusConverter) addSumNumberDataPoints(dataPoints pmetric.NumberDataPointSlice,
-	resource pcommon.Resource, metric pmetric.Metric, settings Settings, name string) {
+	resource pcommon.Resource, scope pcommon.InstrumentationScope, _ pmetric.Metric, settings Settings, name string,
+) error {
+	var errs error
 	for x := 0; x < dataPoints.Len(); x++ {
 		pt := dataPoints.At(x)
-		lbls := createAttributes(
-			resource,
-			pt.Attributes(),
-			settings.ExternalLabels,
-			nil,
-			true,
-			model.MetricNameLabel,
-			name,
-		)
+		lbls, err := createAttributes(resource, pt.Attributes(), scope, settings.ExternalLabels, nil, true, c.labelNamer, settings.DisableScopeInfo, model.MetricNameLabel, name)
+		if err != nil {
+			errs = multierr.Append(errs, err)
+			continue
+		}
 		sample := &prompb.Sample{
 			// convert ns to ms
 			Timestamp: convertTimeStamp(pt.Timestamp()),
@@ -74,23 +72,6 @@ func (c *prometheusConverter) addSumNumberDataPoints(dataPoints pmetric.NumberDa
 			exemplars := getPromExemplars[pmetric.NumberDataPoint](pt)
 			ts.Exemplars = append(ts.Exemplars, exemplars...)
 		}
-
-		// add created time series if needed
-		if settings.ExportCreatedMetric && metric.Sum().IsMonotonic() {
-			startTimestamp := pt.StartTimestamp()
-			if startTimestamp == 0 {
-				return
-			}
-
-			createdLabels := make([]prompb.Label, len(lbls))
-			copy(createdLabels, lbls)
-			for i, l := range createdLabels {
-				if l.Name == model.MetricNameLabel {
-					createdLabels[i].Value = name + createdSuffix
-					break
-				}
-			}
-			c.addTimeSeriesIfNeeded(createdLabels, startTimestamp, pt.Timestamp())
-		}
 	}
+	return errs
 }

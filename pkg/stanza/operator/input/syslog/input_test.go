@@ -5,6 +5,7 @@ package syslog
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/input/tcp"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/input/udp"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/parser/syslog"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/parser/syslog/syslogtest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/pipeline"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/split/splittest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/testutil"
@@ -29,7 +31,7 @@ var (
 		cfg := syslog.NewConfigWithID("test_syslog_parser")
 		return cfg
 	}
-	OctetCase = syslog.Case{
+	OctetCase = syslogtest.Case{
 		Name: "RFC6587 Octet Counting",
 		Config: func() *syslog.Config {
 			cfg := basicConfig()
@@ -45,13 +47,14 @@ var (
 			Severity:     entry.Info,
 			SeverityText: "info",
 			Attributes: map[string]any{
-				"appname":  "SecureAuth0",
-				"facility": 10,
-				"hostname": "192.168.2.132",
-				"message":  "Found the user for retrieving user's profile",
-				"msg_id":   "ID52020",
-				"priority": 86,
-				"proc_id":  "23108",
+				"appname":       "SecureAuth0",
+				"facility":      10,
+				"facility_text": "authpriv",
+				"hostname":      "192.168.2.132",
+				"message":       "Found the user for retrieving user's profile",
+				"msg_id":        "ID52020",
+				"priority":      86,
+				"proc_id":       "23108",
 				"structured_data": map[string]any{
 					"SecureAuth@27389": map[string]any{
 						"PEN":             "27389",
@@ -66,7 +69,7 @@ var (
 		},
 		ValidForTCP: true,
 	}
-	WithMetadata = syslog.Case{
+	WithMetadata = syslogtest.Case{
 		Name: "RFC3164",
 		Config: func() *syslog.Config {
 			cfg := basicConfig()
@@ -84,12 +87,13 @@ var (
 				"service.name": "apache_server",
 			},
 			Attributes: map[string]any{
-				"foo":      "bar",
-				"appname":  "apache_server",
-				"facility": 4,
-				"hostname": "1.2.3.4",
-				"message":  "test message",
-				"priority": 34,
+				"foo":           "bar",
+				"appname":       "apache_server",
+				"facility":      4,
+				"facility_text": "auth",
+				"hostname":      "1.2.3.4",
+				"message":       "test message",
+				"priority":      34,
 			},
 			Body: fmt.Sprintf("<34>%s 1.2.3.4 apache_server: test message", ts.Format("Jan _2 15:04:05")),
 		},
@@ -99,7 +103,7 @@ var (
 )
 
 func TestInput(t *testing.T) {
-	cases, err := syslog.CreateCases(basicConfig)
+	cases, err := syslogtest.CreateCases(basicConfig)
 	require.NoError(t, err)
 	cases = append(cases, OctetCase)
 
@@ -107,7 +111,7 @@ func TestInput(t *testing.T) {
 		cfg := tc.Config.BaseConfig
 		if tc.ValidForTCP {
 			tcpCfg := NewConfigWithTCP(&cfg)
-			if tc.Name == syslog.RFC6587OctetCountingPreserveSpaceTest {
+			if tc.Name == syslogtest.RFC6587OctetCountingPreserveSpaceTest {
 				tcpCfg.TCP.TrimConfig.PreserveLeading = true
 				tcpCfg.TCP.TrimConfig.PreserveTrailing = true
 			}
@@ -117,7 +121,7 @@ func TestInput(t *testing.T) {
 		}
 		if tc.ValidForUDP {
 			udpCfg := NewConfigWithUDP(&cfg)
-			if tc.Name == syslog.RFC6587OctetCountingPreserveSpaceTest {
+			if tc.Name == syslogtest.RFC6587OctetCountingPreserveSpaceTest {
 				udpCfg.UDP.TrimConfig.PreserveLeading = true
 				udpCfg.UDP.TrimConfig.PreserveTrailing = true
 			}
@@ -131,23 +135,23 @@ func TestInput(t *testing.T) {
 	t.Run("TCPWithMetadata", func(t *testing.T) {
 		cfg := NewConfigWithTCP(&withMetadataCfg)
 		cfg.IdentifierConfig = helper.NewIdentifierConfig()
-		cfg.IdentifierConfig.Resource["service.name"] = helper.ExprStringConfig("apache_server")
+		cfg.Resource["service.name"] = helper.ExprStringConfig("apache_server")
 		cfg.AttributerConfig = helper.NewAttributerConfig()
-		cfg.AttributerConfig.Attributes["foo"] = helper.ExprStringConfig("bar")
+		cfg.Attributes["foo"] = helper.ExprStringConfig("bar")
 		InputTest(t, WithMetadata, cfg, map[string]any{"service.name": "apache_server"}, map[string]any{"foo": "bar"})
 	})
 
 	t.Run("UDPWithMetadata", func(t *testing.T) {
 		cfg := NewConfigWithUDP(&withMetadataCfg)
 		cfg.IdentifierConfig = helper.NewIdentifierConfig()
-		cfg.IdentifierConfig.Resource["service.name"] = helper.ExprStringConfig("apache_server")
+		cfg.Resource["service.name"] = helper.ExprStringConfig("apache_server")
 		cfg.AttributerConfig = helper.NewAttributerConfig()
-		cfg.AttributerConfig.Attributes["foo"] = helper.ExprStringConfig("bar")
+		cfg.Attributes["foo"] = helper.ExprStringConfig("bar")
 		InputTest(t, WithMetadata, cfg, map[string]any{"service.name": "apache_server"}, map[string]any{"foo": "bar"})
 	})
 }
 
-func InputTest(t *testing.T, tc syslog.Case, cfg *Config, rsrc map[string]any, attr map[string]any) {
+func InputTest(t *testing.T, tc syslogtest.Case, cfg *Config, rsrc, attr map[string]any) {
 	set := componenttest.NewNopTelemetrySettings()
 	op, err := cfg.Build(set)
 	require.NoError(t, err)
@@ -194,18 +198,14 @@ func InputTest(t *testing.T, tc syslog.Case, cfg *Config, rsrc map[string]any, a
 			if expect.Resource == nil {
 				expect.Resource = rsrc
 			} else {
-				for k, v := range rsrc {
-					expect.Resource[k] = v
-				}
+				maps.Copy(expect.Resource, rsrc)
 			}
 		}
 		if attr != nil {
 			if expect.Attributes == nil {
 				expect.Attributes = attr
 			} else {
-				for k, v := range attr {
-					expect.Attributes[k] = v
-				}
+				maps.Copy(expect.Attributes, attr)
 			}
 		}
 		require.Equal(t, expect, e)

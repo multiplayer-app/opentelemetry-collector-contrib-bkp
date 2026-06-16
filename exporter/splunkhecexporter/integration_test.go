@@ -8,12 +8,12 @@ package splunkhecexporter // import "github.com/open-telemetry/opentelemetry-col
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -28,26 +28,26 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	conventions "go.opentelemetry.io/collector/semconv/v1.27.0"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
 	integrationtestutils "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter/internal/integrationtestutils"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/splunk"
 )
 
-type SplunkContainerConfig struct {
+type splunkContainerConfig struct {
 	conCtx    context.Context
 	container testcontainers.Container
 }
 
-func setup() SplunkContainerConfig {
+func setup() splunkContainerConfig {
 	// Perform setup operations here
 	cfg := startSplunk()
 	return cfg
 }
 
-func teardown(cfg SplunkContainerConfig) {
+func teardown(cfg splunkContainerConfig) {
 	// Perform teardown operations here
 	fmt.Println("Tearing down...")
 	// Stop and remove the container
@@ -83,7 +83,7 @@ func createInsecureClient() *http.Client {
 	return client
 }
 
-func startSplunk() SplunkContainerConfig {
+func startSplunk() splunkContainerConfig {
 	logger, err := zap.NewProduction()
 	if err != nil {
 		panic(err)
@@ -105,7 +105,7 @@ func startSplunk() SplunkContainerConfig {
 			{
 				HostFilePath:      filepath.Join("testdata", "splunk.yaml"),
 				ContainerFilePath: "/tmp/defaults/default.yml",
-				FileMode:          0644,
+				FileMode:          0o644,
 			},
 		},
 		WaitingFor: wait.ForHealthCheck().WithStartupTimeout(5 * time.Minute),
@@ -115,7 +115,6 @@ func startSplunk() SplunkContainerConfig {
 		ContainerRequest: req,
 		Started:          true,
 	})
-
 	if err != nil {
 		logger.Info("Error while creating container")
 		panic(err)
@@ -145,12 +144,12 @@ func startSplunk() SplunkContainerConfig {
 	}
 
 	// Use the container's host and port for your tests
-	logger.Info("Splunk running at:", zap.String("host", host), zap.Int("uiPort", uiPort.Int()), zap.Int("hecPort", hecPort.Int()), zap.Int("managementPort", managementPort.Int()))
+	logger.Info("Splunk running at:", zap.String("host", host), zap.String("uiPort", uiPort.String()), zap.String("hecPort", hecPort.String()), zap.String("managementPort", managementPort.Port()))
 	integrationtestutils.SetConfigVariable("HOST", host)
-	integrationtestutils.SetConfigVariable("UI_PORT", strconv.Itoa(uiPort.Int()))
-	integrationtestutils.SetConfigVariable("HEC_PORT", strconv.Itoa(hecPort.Int()))
-	integrationtestutils.SetConfigVariable("MANAGEMENT_PORT", strconv.Itoa(managementPort.Int()))
-	cfg := SplunkContainerConfig{
+	integrationtestutils.SetConfigVariable("UI_PORT", uiPort.Port())
+	integrationtestutils.SetConfigVariable("HEC_PORT", hecPort.Port())
+	integrationtestutils.SetConfigVariable("MANAGEMENT_PORT", managementPort.Port())
+	cfg := splunkContainerConfig{
 		conCtx:    conContext,
 		container: container,
 	}
@@ -166,13 +165,13 @@ func prepareLogs() plog.Logs {
 	logRecord := sl.LogRecords().AppendEmpty()
 	logRecord.Body().SetStr("test log")
 	logRecord.Attributes().PutStr(splunk.DefaultNameLabel, "test- label")
-	logRecord.Attributes().PutStr(conventions.AttributeHostName, "myhost")
+	logRecord.Attributes().PutStr("host.name", "myhost")
 	logRecord.Attributes().PutStr("custom", "custom")
 	logRecord.SetTimestamp(ts)
 	return logs
 }
 
-func prepareLogsNonDefaultParams(index string, source string, sourcetype string, event string) plog.Logs {
+func prepareLogsNonDefaultParams(index, source, sourcetype, event string) plog.Logs {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
 	sl := rl.ScopeLogs().AppendEmpty()
@@ -185,7 +184,7 @@ func prepareLogsNonDefaultParams(index string, source string, sourcetype string,
 	logRecord.Attributes().PutStr(splunk.DefaultSourceLabel, source)
 	logRecord.Attributes().PutStr(splunk.DefaultSourceTypeLabel, sourcetype)
 	logRecord.Attributes().PutStr(splunk.DefaultIndexLabel, index)
-	logRecord.Attributes().PutStr(conventions.AttributeHostName, "myhost")
+	logRecord.Attributes().PutStr("host.name", "myhost")
 	logRecord.Attributes().PutStr("custom", "custom")
 	logRecord.SetTimestamp(ts)
 	return logs
@@ -200,7 +199,7 @@ func prepareMetricsData(metricName string) pmetric.Metrics {
 	return metricData
 }
 
-func prepareTracesData(index string, source string, sourcetype string) ptrace.Traces {
+func prepareTracesData(index, source, sourcetype string) ptrace.Traces {
 	ts := pcommon.Timestamp(0)
 
 	traces := ptrace.NewTraces()
@@ -223,9 +222,11 @@ type cfg struct {
 
 type telemetryType string
 
-var metricsType = telemetryType("metrics")
-var logsType = telemetryType("logs")
-var tracesType = telemetryType("traces")
+var (
+	metricsType = telemetryType("metrics")
+	logsType    = telemetryType("logs")
+	tracesType  = telemetryType("traces")
+)
 
 type testCfg struct {
 	name      string
@@ -235,7 +236,7 @@ type testCfg struct {
 }
 
 func logsTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
-	settings := exportertest.NewNopSettings()
+	settings := exportertest.NewNopSettings(metadata.Type)
 	c := newLogsClient(settings, config)
 	var logs plog.Logs
 	if test.config.index != "main" {
@@ -247,7 +248,7 @@ func logsTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
 	httpClient := createInsecureClient()
 	c.hecWorker = &defaultHecWorker{url, httpClient, buildHTTPHeaders(config, component.NewDefaultBuildInfo()), settings.Logger}
 
-	err := c.pushLogData(context.Background(), logs)
+	err := c.pushLogData(t.Context(), logs)
 	require.NoError(t, err, "Must not error while sending Logs data")
 	waitForEventToBeIndexed()
 
@@ -263,14 +264,14 @@ func logsTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
 }
 
 func metricsTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
-	settings := exportertest.NewNopSettings()
+	settings := exportertest.NewNopSettings(metadata.Type)
 	c := newMetricsClient(settings, config)
 	metricData := prepareMetricsData(test.config.event)
 
 	httpClient := createInsecureClient()
 	c.hecWorker = &defaultHecWorker{url, httpClient, buildHTTPHeaders(config, component.NewDefaultBuildInfo()), settings.Logger}
 
-	err := c.pushMetricsData(context.Background(), metricData)
+	err := c.pushMetricsData(t.Context(), metricData)
 	require.NoError(t, err, "Must not error while sending Metrics data")
 	waitForEventToBeIndexed()
 
@@ -279,14 +280,14 @@ func metricsTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
 }
 
 func tracesTest(t *testing.T, config *Config, url *url.URL, test testCfg) {
-	settings := exportertest.NewNopSettings()
+	settings := exportertest.NewNopSettings(metadata.Type)
 	c := newTracesClient(settings, config)
 	tracesData := prepareTracesData(test.config.index, test.config.source, test.config.sourcetype)
 
 	httpClient := createInsecureClient()
 	c.hecWorker = &defaultHecWorker{url, httpClient, buildHTTPHeaders(config, component.NewDefaultBuildInfo()), settings.Logger}
 
-	err := c.pushTraceData(context.Background(), tracesData)
+	err := c.pushTraceData(t.Context(), tracesData)
 	require.NoError(t, err, "Must not error while sending Trace data")
 	waitForEventToBeIndexed()
 
@@ -362,7 +363,7 @@ func TestSplunkHecExporter(t *testing.T) {
 			// Endpoint and Token do not have a default value so set them directly.
 			config := NewFactory().CreateDefaultConfig().(*Config)
 			config.Token = configopaque.String(integrationtestutils.GetConfigVariable("HEC_TOKEN"))
-			config.ClientConfig.Endpoint = "https://" + integrationtestutils.GetConfigVariable("HOST") + ":" + integrationtestutils.GetConfigVariable("HEC_PORT") + "/services/collector"
+			config.Endpoint = "https://" + integrationtestutils.GetConfigVariable("HOST") + ":" + integrationtestutils.GetConfigVariable("HEC_PORT") + "/services/collector"
 			config.Source = "otel"
 			config.SourceType = "st-otel"
 
@@ -371,7 +372,7 @@ func TestSplunkHecExporter(t *testing.T) {
 			} else {
 				config.Index = "main"
 			}
-			config.TLSSetting.InsecureSkipVerify = true
+			config.TLS.InsecureSkipVerify = true
 
 			url, err := config.getURL()
 			require.NoError(t, err, "Must not error while getting URL")
@@ -392,4 +393,30 @@ func TestSplunkHecExporter(t *testing.T) {
 
 func waitForEventToBeIndexed() {
 	time.Sleep(3 * time.Second)
+}
+
+func initSpan(name string, ts pcommon.Timestamp, span ptrace.Span) {
+	span.Attributes().PutStr("foo", "bar")
+	span.SetName(name)
+	span.SetStartTimestamp(ts)
+	spanLink := span.Links().AppendEmpty()
+	spanLink.TraceState().FromRaw("OK")
+	bytes, _ := hex.DecodeString("12345678")
+	var traceID [16]byte
+	copy(traceID[:], bytes)
+	spanLink.SetTraceID(traceID)
+	bytes, _ = hex.DecodeString("1234")
+	var spanID [8]byte
+	copy(spanID[:], bytes)
+	spanLink.SetSpanID(spanID)
+	spanLink.Attributes().PutInt("foo", 1)
+	spanLink.Attributes().PutBool("bar", false)
+	foobarContents := spanLink.Attributes().PutEmptySlice("foobar")
+	foobarContents.AppendEmpty().SetStr("a")
+	foobarContents.AppendEmpty().SetStr("b")
+
+	spanEvent := span.Events().AppendEmpty()
+	spanEvent.Attributes().PutStr("foo", "bar")
+	spanEvent.SetName("myEvent")
+	spanEvent.SetTimestamp(ts + 3)
 }

@@ -11,14 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-version"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/featuregate"
+	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbreceiver/internal/metadata"
@@ -27,44 +28,100 @@ import (
 var (
 	unknownVersion = func() *version.Version { return version.Must(version.NewVersion("0.0")) }
 
-	_ = featuregate.GlobalRegistry().MustRegister(
-		"receiver.mongodb.removeDatabaseAttr",
-		featuregate.StageStable,
-		featuregate.WithRegisterDescription("Remove duplicate database name attribute"),
-		featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/24972"),
-		featuregate.WithRegisterFromVersion("v0.90.0"),
-		featuregate.WithRegisterToVersion("v0.104.0"))
+	// otelNamespaceUUID is the official OTel namespace UUID for deterministic UUID v5 generation.
+	otelNamespaceUUID = uuid.MustParse("4d63009a-8d0f-11ee-aad7-4c796ed8e320")
 )
 
+// generateInstanceID generates a deterministic UUID v5 from server address and port.
+func generateInstanceID(serverAddress string, serverPort int64) string {
+	name := fmt.Sprintf("%s:%d", serverAddress, serverPort)
+	return uuid.NewSHA1(otelNamespaceUUID, []byte(name)).String()
+}
+
 type mongodbScraper struct {
-	logger       *zap.Logger
-	config       *Config
-	client       client
-	mongoVersion *version.Version
-	mb           *metadata.MetricsBuilder
+	logger             *zap.Logger
+	config             *Config
+	client             client
+	secondaryClients   []client
+	mongoVersion       *version.Version
+	mb                 *metadata.MetricsBuilder
+	prevReplTimestamp  pcommon.Timestamp
+	prevReplCounts     map[string]int64
+	prevTimestamp      pcommon.Timestamp
+	prevFlushTimestamp pcommon.Timestamp
+	prevCounts         map[string]int64
+	prevFlushCount     int64
 }
 
 func newMongodbScraper(settings receiver.Settings, config *Config) *mongodbScraper {
 	return &mongodbScraper{
-		logger:       settings.Logger,
-		config:       config,
-		mb:           metadata.NewMetricsBuilder(config.MetricsBuilderConfig, settings),
-		mongoVersion: unknownVersion(),
+		logger:             settings.Logger,
+		config:             config,
+		mb:                 metadata.NewMetricsBuilder(config.MetricsBuilderConfig, settings),
+		mongoVersion:       unknownVersion(),
+		prevReplTimestamp:  pcommon.Timestamp(0),
+		prevReplCounts:     make(map[string]int64),
+		prevTimestamp:      pcommon.Timestamp(0),
+		prevFlushTimestamp: pcommon.Timestamp(0),
+		prevCounts:         make(map[string]int64),
+		prevFlushCount:     0,
 	}
 }
 
 func (s *mongodbScraper) start(ctx context.Context, _ component.Host) error {
-	c, err := newClient(ctx, s.config, s.logger)
+	c, err := newClient(ctx, s.config, s.logger, false)
 	if err != nil {
 		return fmt.Errorf("create mongo client: %w", err)
 	}
 	s.client = c
+
+	// Skip secondary host discovery if direct connection is enabled
+	if s.config.DirectConnection {
+		return nil
+	}
+
+	secondaries, err := s.findSecondaryHosts(ctx)
+	if err != nil {
+		s.logger.Warn("failed to find secondary hosts", zap.Error(err))
+		return nil
+	}
+
+	for _, secondary := range secondaries {
+		secondaryConfig := *s.config
+		secondaryConfig.Hosts = []confignet.TCPAddrConfig{
+			{
+				Endpoint: secondary,
+			},
+		}
+
+		client, err := newClient(ctx, &secondaryConfig, s.logger, true)
+		if err != nil {
+			s.logger.Warn("failed to connect to secondary", zap.String("host", secondary), zap.Error(err))
+			continue
+		}
+		s.secondaryClients = append(s.secondaryClients, client)
+	}
+
 	return nil
 }
 
 func (s *mongodbScraper) shutdown(ctx context.Context) error {
+	var errs []error
+
 	if s.client != nil {
-		return s.client.Disconnect(ctx)
+		if err := s.client.Disconnect(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	for _, client := range s.secondaryClients {
+		if err := client.Disconnect(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("multiple disconnect errors: %v", errs)
 	}
 	return nil
 }
@@ -112,29 +169,26 @@ func (s *mongodbScraper) collectMetrics(ctx context.Context, errs *scrapererror.
 	s.recordAdminStats(now, serverStatus, errs)
 	s.collectTopStats(ctx, now, errs)
 
-	rb := s.mb.NewResourceBuilder()
-	rb.SetServerAddress(serverAddress)
-	rb.SetServerPort(serverPort)
-	s.mb.EmitForResource(metadata.WithResource(rb.Emit()))
-
 	// Collect metrics for each database
 	for _, dbName := range dbNames {
 		s.collectDatabase(ctx, now, dbName, errs)
 		collectionNames, err := s.client.ListCollectionNames(ctx, dbName)
 		if err != nil {
 			errs.AddPartial(1, fmt.Errorf("failed to fetch collection names: %w", err))
-			return
+			continue
 		}
 
 		for _, collectionName := range collectionNames {
 			s.collectIndexStats(ctx, now, dbName, collectionName, errs)
 		}
-
-		rb.SetServerAddress(serverAddress)
-		rb.SetServerPort(serverPort)
-		rb.SetDatabase(dbName)
-		s.mb.EmitForResource(metadata.WithResource(rb.Emit()))
 	}
+
+	// Emit single resource for the server
+	rb := s.mb.NewResourceBuilder()
+	rb.SetServerAddress(serverAddress)
+	rb.SetServerPort(serverPort)
+	rb.SetServiceInstanceID(generateInstanceID(serverAddress, serverPort))
+	s.mb.EmitForResource(metadata.WithResource(rb.Emit()))
 }
 
 func (s *mongodbScraper) collectDatabase(ctx context.Context, now pcommon.Timestamp, databaseName string, errs *scrapererror.ScrapeErrors) {
@@ -162,7 +216,7 @@ func (s *mongodbScraper) collectTopStats(ctx context.Context, now pcommon.Timest
 	s.recordOperationTime(now, topStats, errs)
 }
 
-func (s *mongodbScraper) collectIndexStats(ctx context.Context, now pcommon.Timestamp, databaseName string, collectionName string, errs *scrapererror.ScrapeErrors) {
+func (s *mongodbScraper) collectIndexStats(ctx context.Context, now pcommon.Timestamp, databaseName, collectionName string, errs *scrapererror.ScrapeErrors) {
 	if databaseName == "local" {
 		return
 	}
@@ -175,40 +229,128 @@ func (s *mongodbScraper) collectIndexStats(ctx context.Context, now pcommon.Time
 }
 
 func (s *mongodbScraper) recordDBStats(now pcommon.Timestamp, doc bson.M, dbName string, errs *scrapererror.ScrapeErrors) {
-	s.recordCollections(now, doc, dbName, errs)
-	s.recordDataSize(now, doc, dbName, errs)
-	s.recordExtentCount(now, doc, dbName, errs)
-	s.recordIndexSize(now, doc, dbName, errs)
-	s.recordIndexCount(now, doc, dbName, errs)
-	s.recordObjectCount(now, doc, dbName, errs)
-	s.recordStorageSize(now, doc, dbName, errs)
+	if s.config.Metrics.MongodbCollectionCount.Enabled {
+		s.recordCollections(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbDataSize.Enabled {
+		s.recordDataSize(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbExtentCount.Enabled {
+		s.recordExtentCount(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbIndexSize.Enabled {
+		s.recordIndexSize(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbIndexCount.Enabled {
+		s.recordIndexCount(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbObjectCount.Enabled {
+		s.recordObjectCount(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbStorageSize.Enabled {
+		s.recordStorageSize(now, doc, dbName, errs)
+	}
 }
 
 func (s *mongodbScraper) recordNormalServerStats(now pcommon.Timestamp, doc bson.M, dbName string, errs *scrapererror.ScrapeErrors) {
-	s.recordConnections(now, doc, dbName, errs)
-	s.recordDocumentOperations(now, doc, dbName, errs)
-	s.recordMemoryUsage(now, doc, dbName, errs)
-	s.recordLockAcquireCounts(now, doc, dbName, errs)
-	s.recordLockAcquireWaitCounts(now, doc, dbName, errs)
-	s.recordLockTimeAcquiringMicros(now, doc, dbName, errs)
-	s.recordLockDeadlockCount(now, doc, dbName, errs)
+	if s.config.Metrics.MongodbConnectionCount.Enabled {
+		s.recordConnections(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbDocumentOperationCount.Enabled {
+		s.recordDocumentOperations(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbMemoryUsage.Enabled {
+		s.recordMemoryUsage(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbLockAcquireCount.Enabled {
+		s.recordLockAcquireCounts(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbLockAcquireWaitCount.Enabled {
+		s.recordLockAcquireWaitCounts(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbLockAcquireTime.Enabled {
+		s.recordLockTimeAcquiringMicros(now, doc, dbName, errs)
+	}
+
+	if s.config.Metrics.MongodbLockDeadlockCount.Enabled {
+		s.recordLockDeadlockCount(now, doc, dbName, errs)
+	}
 }
 
 func (s *mongodbScraper) recordAdminStats(now pcommon.Timestamp, document bson.M, errs *scrapererror.ScrapeErrors) {
-	s.recordCacheOperations(now, document, errs)
-	s.recordCursorCount(now, document, errs)
-	s.recordCursorTimeoutCount(now, document, errs)
-	s.recordGlobalLockTime(now, document, errs)
-	s.recordNetworkCount(now, document, errs)
+	if s.config.Metrics.MongodbCacheOperations.Enabled {
+		s.recordCacheOperations(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbCursorCount.Enabled {
+		s.recordCursorCount(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbCursorTimeoutCount.Enabled {
+		s.recordCursorTimeoutCount(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbGlobalLockTime.Enabled {
+		s.recordGlobalLockTime(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbNetworkRequestCount.Enabled {
+		s.recordNetworkCount(now, document, errs)
+	}
+
 	s.recordOperations(now, document, errs)
+
 	s.recordOperationsRepl(now, document, errs)
-	s.recordSessionCount(now, document, errs)
-	s.recordLatencyTime(now, document, errs)
-	s.recordUptime(now, document, errs)
-	s.recordHealth(now, document, errs)
+
+	if s.config.Metrics.MongodbSessionCount.Enabled {
+		s.recordSessionCount(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbOperationLatencyTime.Enabled {
+		s.recordLatencyTime(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbUptime.Enabled {
+		s.recordUptime(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbHealth.Enabled {
+		s.recordHealth(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbActiveWrites.Enabled {
+		s.recordActiveWrites(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbActiveReads.Enabled {
+		s.recordActiveReads(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbFlushesRate.Enabled {
+		s.recordFlushesPerSecond(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbWtcacheBytesRead.Enabled {
+		s.recordWTCacheBytes(now, document, errs)
+	}
+
+	if s.config.Metrics.MongodbPageFaults.Enabled {
+		s.recordPageFaults(now, document, errs)
+	}
 }
 
-func (s *mongodbScraper) recordIndexStats(now pcommon.Timestamp, indexStats []bson.M, databaseName string, collectionName string, errs *scrapererror.ScrapeErrors) {
+func (s *mongodbScraper) recordIndexStats(now pcommon.Timestamp, indexStats []bson.M, databaseName, collectionName string, errs *scrapererror.ScrapeErrors) {
 	s.recordIndexAccess(now, indexStats, databaseName, collectionName, errs)
 }
 
@@ -230,4 +372,45 @@ func serverAddressAndPort(serverStatus bson.M) (string, int64, error) {
 	default:
 		return "", 0, fmt.Errorf("unexpected host format: %s", host)
 	}
+}
+
+func (s *mongodbScraper) findSecondaryHosts(ctx context.Context) ([]string, error) {
+	result, err := s.client.RunCommand(ctx, "admin", bson.M{"replSetGetStatus": 1})
+	if err != nil {
+		s.logger.Error("Failed to get replica set status", zap.Error(err))
+		return nil, fmt.Errorf("failed to get replica set status: %w", err)
+	}
+
+	members, ok := result["members"].(bson.A)
+	if !ok {
+		return nil, fmt.Errorf("invalid members format: expected type primitive.A but got %T, value: %v", result["members"], result["members"])
+	}
+
+	var hosts []string
+	for _, member := range members {
+		m, ok := member.(bson.M)
+		if !ok {
+			continue
+		}
+
+		state, ok := m["stateStr"].(string)
+		if !ok {
+			continue
+		}
+
+		name, ok := m["name"].(string)
+		if !ok {
+			continue
+		}
+
+		// Only add actual secondaries, not arbiters or other states
+		if state == "SECONDARY" {
+			s.logger.Debug("Found secondary",
+				zap.String("host", name),
+				zap.String("state", state))
+			hosts = append(hosts, name)
+		}
+	}
+
+	return hosts, nil
 }

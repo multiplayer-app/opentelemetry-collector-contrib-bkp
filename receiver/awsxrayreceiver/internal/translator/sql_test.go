@@ -21,6 +21,7 @@ func TestSQLURL(t *testing.T) {
 		"ebdb",
 		dbName, "expected db name to be the same")
 }
+
 func TestSQLURLQueryParameter(t *testing.T) {
 	raw := "jdbc:postgresql://aawijb5u25wdoy.cpamxznpdoq8.us-west-2.rds.amazonaws.com:5432/ebdb?myInterceptor=foo"
 	url, dbName, err := splitSQLURL(raw)
@@ -31,5 +32,18 @@ func TestSQLURLQueryParameter(t *testing.T) {
 
 	assert.Equal(t,
 		"ebdb",
+		dbName, "expected db name to be the same")
+}
+
+func TestFsURL(t *testing.T) {
+	raw := "jdbc:sqlite:/tmp/ebdb.sqlite"
+	url, dbName, err := splitSQLURL(raw)
+	assert.NoError(t, err, "should succeed")
+	assert.Equal(t,
+		"jdbc:sqlite:",
+		url, "expected url to be the same")
+
+	assert.Equal(t,
+		"/tmp/ebdb.sqlite",
 		dbName, "expected db name to be the same")
 }

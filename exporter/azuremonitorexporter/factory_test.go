@@ -4,22 +4,22 @@
 package azuremonitorexporter
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/collector/exporter/exportertest"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter/internal/metadata"
 )
 
 // An inappropriate config
-type badConfig struct {
-}
+type badConfig struct{}
 
-func TestCreateTracesExporterUsingSpecificTransportChannel(t *testing.T) {
+func TestCreateTracesUsingSpecificTransportChannel(t *testing.T) {
 	// mock transport channel creation
-	f := factory{tChannel: &mockTransportChannel{}}
-	ctx := context.Background()
-	params := exportertest.NewNopSettings()
+	f := &factory{}
+	ctx := t.Context()
+	params := exportertest.NewNopSettings(metadata.Type)
 	config := createDefaultConfig().(*Config)
 	config.ConnectionString = "InstrumentationKey=test-key;IngestionEndpoint=https://test-endpoint/"
 	exporter, err := f.createTracesExporter(ctx, params, config)
@@ -27,25 +27,22 @@ func TestCreateTracesExporterUsingSpecificTransportChannel(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestCreateTracesExporterUsingDefaultTransportChannel(t *testing.T) {
+func TestCreateTracesUsingDefaultTransportChannel(t *testing.T) {
 	// We get the default transport channel creation, if we don't specify one during f creation
 	f := factory{}
-	assert.Nil(t, f.tChannel)
-	ctx := context.Background()
+	ctx := t.Context()
 	config := createDefaultConfig().(*Config)
 	config.ConnectionString = "InstrumentationKey=test-key;IngestionEndpoint=https://test-endpoint/"
-	exporter, err := f.createTracesExporter(ctx, exportertest.NewNopSettings(), config)
+	exporter, err := f.createTracesExporter(ctx, exportertest.NewNopSettings(metadata.Type), config)
 	assert.NotNil(t, exporter)
 	assert.NoError(t, err)
-	assert.NotNil(t, f.tChannel)
 }
 
-func TestCreateTracesExporterUsingBadConfig(t *testing.T) {
+func TestCreateTracesUsingBadConfig(t *testing.T) {
 	// We get the default transport channel creation, if we don't specify one during factory creation
 	f := factory{}
-	assert.Nil(t, f.tChannel)
-	ctx := context.Background()
-	params := exportertest.NewNopSettings()
+	ctx := t.Context()
+	params := exportertest.NewNopSettings(metadata.Type)
 
 	badConfig := &badConfig{}
 

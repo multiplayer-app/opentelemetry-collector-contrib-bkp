@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package googlecloudexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/googlecloudexporter"
 
@@ -11,24 +11,17 @@ import (
 
 	"github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/collector"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
-	"go.opentelemetry.io/collector/featuregate"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/googlecloudexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/googlecloudexporter/internal/resourcemapping"
 )
 
 const (
 	defaultTimeout = 12 * time.Second // Consistent with Cloud Monitoring's timeout
-)
-
-var _ = featuregate.GlobalRegistry().MustRegister(
-	"exporter.googlecloud.OTLPDirect",
-	featuregate.StageStable,
-	featuregate.WithRegisterDescription("When enabled, the googlecloud exporter translates pdata directly to google cloud monitoring's types, rather than first translating to opencensus."),
-	featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/7132"),
-	featuregate.WithRegisterToVersion("v0.69.0"),
 )
 
 // NewFactory creates a factory for the googlecloud exporter
@@ -46,7 +39,7 @@ func NewFactory() exporter.Factory {
 func createDefaultConfig() component.Config {
 	return &Config{
 		TimeoutSettings: exporterhelper.TimeoutConfig{Timeout: defaultTimeout},
-		QueueSettings:   exporterhelper.NewDefaultQueueConfig(),
+		QueueSettings:   configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 		Config:          collector.DefaultConfig(),
 	}
 }
@@ -54,13 +47,17 @@ func createDefaultConfig() component.Config {
 func createLogsExporter(
 	ctx context.Context,
 	params exporter.Settings,
-	cfg component.Config) (exporter.Logs, error) {
+	cfg component.Config,
+) (exporter.Logs, error) {
 	eCfg := cfg.(*Config)
-	logsExporter, err := collector.NewGoogleCloudLogsExporter(ctx, eCfg.Config, params.TelemetrySettings.Logger, params.TelemetrySettings.MeterProvider, params.BuildInfo.Version, eCfg.TimeoutSettings.Timeout)
+	if metadata.ExporterGooglecloudCustomMonitoredResourcesFeatureGate.IsEnabled() {
+		eCfg.LogConfig.MapMonitoredResource = resourcemapping.CustomLoggingMonitoredResourceMapping
+	}
+	logsExporter, err := collector.NewGoogleCloudLogsExporter(ctx, eCfg.Config, params, eCfg.TimeoutSettings.Timeout)
 	if err != nil {
 		return nil, err
 	}
-	return exporterhelper.NewLogsExporter(
+	return exporterhelper.NewLogs(
 		ctx,
 		params,
 		cfg,
@@ -79,13 +76,14 @@ func createLogsExporter(
 func createTracesExporter(
 	ctx context.Context,
 	params exporter.Settings,
-	cfg component.Config) (exporter.Traces, error) {
+	cfg component.Config,
+) (exporter.Traces, error) {
 	eCfg := cfg.(*Config)
-	tExp, err := collector.NewGoogleCloudTracesExporter(ctx, eCfg.Config, params.TelemetrySettings.Logger, params.TelemetrySettings.MeterProvider, params.BuildInfo.Version, eCfg.TimeoutSettings.Timeout)
+	tExp, err := collector.NewGoogleCloudTracesExporter(ctx, eCfg.Config, params, eCfg.TimeoutSettings.Timeout)
 	if err != nil {
 		return nil, err
 	}
-	return exporterhelper.NewTracesExporter(
+	return exporterhelper.NewTraces(
 		ctx,
 		params,
 		cfg,
@@ -104,13 +102,17 @@ func createTracesExporter(
 func createMetricsExporter(
 	ctx context.Context,
 	params exporter.Settings,
-	cfg component.Config) (exporter.Metrics, error) {
+	cfg component.Config,
+) (exporter.Metrics, error) {
 	eCfg := cfg.(*Config)
-	mExp, err := collector.NewGoogleCloudMetricsExporter(ctx, eCfg.Config, params.TelemetrySettings.Logger, params.TelemetrySettings.MeterProvider, params.BuildInfo.Version, eCfg.TimeoutSettings.Timeout)
+	if metadata.ExporterGooglecloudCustomMonitoredResourcesFeatureGate.IsEnabled() {
+		eCfg.MetricConfig.MapMonitoredResource = resourcemapping.CustomMetricMonitoredResourceMapping
+	}
+	mExp, err := collector.NewGoogleCloudMetricsExporter(ctx, eCfg.Config, params, eCfg.TimeoutSettings.Timeout)
 	if err != nil {
 		return nil, err
 	}
-	return exporterhelper.NewMetricsExporter(
+	return exporterhelper.NewMetrics(
 		ctx,
 		params,
 		cfg,

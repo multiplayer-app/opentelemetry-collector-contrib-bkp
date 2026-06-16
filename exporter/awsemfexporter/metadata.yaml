@@ -1,4 +1,5 @@
 type: awsemf
+display_name: AWS CloudWatch EMF Exporter
 
 status:
   class: exporter
@@ -6,7 +7,8 @@ status:
     beta: [metrics]
   distributions: [contrib]
   codeowners:
-    active: [Aneurysm9, shaochengwang, mxiamxia, bryan-aguilar]
+    active: [Aneurysm9, mxiamxia]
+    emeritus: [shaochengwang, bryan-aguilar]
 
 tests:
   config:

@@ -5,7 +5,8 @@ package translator // import "github.com/open-telemetry/opentelemetry-collector-
 
 import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
-	conventions "go.opentelemetry.io/collector/semconv/v1.12.0"
+	conventionsv121 "go.opentelemetry.io/otel/semconv/v1.21.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
 
 	awsxray "github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/xray"
 )
@@ -13,9 +14,14 @@ import (
 func makeService(resource pcommon.Resource) *awsxray.ServiceData {
 	var service *awsxray.ServiceData
 
-	verStr, ok := resource.Attributes().Get(conventions.AttributeServiceVersion)
+	verStr, ok := resource.Attributes().Get(string(conventions.ServiceVersionKey))
 	if !ok {
-		verStr, ok = resource.Attributes().Get(conventions.AttributeContainerImageTag)
+		if tags, okTags := resource.Attributes().Get(string(conventions.ContainerImageTagsKey)); okTags && tags.Type() == pcommon.ValueTypeSlice && tags.Slice().Len() > 0 {
+			verStr = tags.Slice().At(0)
+			ok = true
+		} else {
+			verStr, ok = resource.Attributes().Get(string(conventionsv121.ContainerImageTagKey))
+		}
 	}
 	if ok {
 		service = &awsxray.ServiceData{

@@ -22,12 +22,13 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/testbed/testbed"
 )
 
 func BenchmarkExporter(b *testing.B) {
-	for _, eventType := range []string{"logs", "traces"} {
-		for _, mappingMode := range []string{"none", "ecs", "raw"} {
+	for _, eventType := range []string{"logs", "metrics", "traces"} {
+		for _, mappingMode := range []string{"none", "ecs", "raw", "otel"} {
 			for _, tc := range []struct {
 				name      string
 				batchSize int
@@ -41,6 +42,8 @@ func BenchmarkExporter(b *testing.B) {
 					switch eventType {
 					case "logs":
 						benchmarkLogs(b, tc.batchSize, mappingMode)
+					case "metrics":
+						benchmarkMetrics(b, tc.batchSize, mappingMode)
 					case "traces":
 						benchmarkTraces(b, tc.batchSize, mappingMode)
 					}
@@ -51,23 +54,23 @@ func BenchmarkExporter(b *testing.B) {
 }
 
 func benchmarkLogs(b *testing.B, batchSize int, mappingMode string) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
-	exporterSettings := exportertest.NewNopSettings()
-	exporterSettings.TelemetrySettings.Logger = zaptest.NewLogger(b, zaptest.Level(zap.WarnLevel))
+	exporterSettings := exportertest.NewNopSettings(metadata.Type)
+	exporterSettings.Logger = zaptest.NewLogger(b, zaptest.Level(zap.WarnLevel))
 	runnerCfg := prepareBenchmark(b, batchSize, mappingMode)
-	exporter, err := runnerCfg.factory.CreateLogsExporter(
+	exporter, err := runnerCfg.factory.CreateLogs(
 		ctx, exporterSettings, runnerCfg.esCfg,
 	)
 	require.NoError(b, err)
 	require.NoError(b, exporter.Start(ctx, componenttest.NewNopHost()))
 
+	logs, _ := runnerCfg.provider.GenerateLogs()
+	logs.MarkReadOnly()
 	b.ReportAllocs()
-	b.ResetTimer()
-	b.StopTimer()
-	for i := 0; i < b.N; i++ {
-		logs, _ := runnerCfg.provider.GenerateLogs()
+
+	for b.Loop() {
 		b.StartTimer()
 		require.NoError(b, exporter.ConsumeLogs(ctx, logs))
 		b.StopTimer()
@@ -79,24 +82,53 @@ func benchmarkLogs(b *testing.B, batchSize int, mappingMode string) {
 	require.NoError(b, exporter.Shutdown(ctx))
 }
 
-func benchmarkTraces(b *testing.B, batchSize int, mappingMode string) {
-	ctx, cancel := context.WithCancel(context.Background())
+func benchmarkMetrics(b *testing.B, batchSize int, mappingMode string) {
+	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
-	exporterSettings := exportertest.NewNopSettings()
-	exporterSettings.TelemetrySettings.Logger = zaptest.NewLogger(b, zaptest.Level(zap.WarnLevel))
+	exporterSettings := exportertest.NewNopSettings(metadata.Type)
+	exporterSettings.Logger = zaptest.NewLogger(b, zaptest.Level(zap.WarnLevel))
 	runnerCfg := prepareBenchmark(b, batchSize, mappingMode)
-	exporter, err := runnerCfg.factory.CreateTracesExporter(
+	exporter, err := runnerCfg.factory.CreateMetrics(
 		ctx, exporterSettings, runnerCfg.esCfg,
 	)
 	require.NoError(b, err)
 	require.NoError(b, exporter.Start(ctx, componenttest.NewNopHost()))
 
+	metrics, _ := runnerCfg.provider.GenerateMetrics()
+	metrics.MarkReadOnly()
 	b.ReportAllocs()
-	b.ResetTimer()
-	b.StopTimer()
-	for i := 0; i < b.N; i++ {
-		traces, _ := runnerCfg.provider.GenerateTraces()
+
+	for b.Loop() {
+		b.StartTimer()
+		require.NoError(b, exporter.ConsumeMetrics(ctx, metrics))
+		b.StopTimer()
+	}
+	b.ReportMetric(
+		float64(runnerCfg.generatedCount.Load())/b.Elapsed().Seconds(),
+		"events/s",
+	)
+	require.NoError(b, exporter.Shutdown(ctx))
+}
+
+func benchmarkTraces(b *testing.B, batchSize int, mappingMode string) {
+	ctx, cancel := context.WithCancel(b.Context())
+	defer cancel()
+
+	exporterSettings := exportertest.NewNopSettings(metadata.Type)
+	exporterSettings.Logger = zaptest.NewLogger(b, zaptest.Level(zap.WarnLevel))
+	runnerCfg := prepareBenchmark(b, batchSize, mappingMode)
+	exporter, err := runnerCfg.factory.CreateTraces(
+		ctx, exporterSettings, runnerCfg.esCfg,
+	)
+	require.NoError(b, err)
+	require.NoError(b, exporter.Start(ctx, componenttest.NewNopHost()))
+
+	traces, _ := runnerCfg.provider.GenerateTraces()
+	traces.MarkReadOnly()
+	b.ReportAllocs()
+
+	for b.Loop() {
 		b.StartTimer()
 		require.NoError(b, exporter.ConsumeTraces(ctx, traces))
 		b.StopTimer()
@@ -131,12 +163,14 @@ func prepareBenchmark(
 
 	cfg.factory = elasticsearchexporter.NewFactory()
 	cfg.esCfg = cfg.factory.CreateDefaultConfig().(*elasticsearchexporter.Config)
-	cfg.esCfg.Mapping.Mode = mappingMode
+	cfg.esCfg.Mapping.Mode = mappingMode //nolint:staticcheck
 	cfg.esCfg.Endpoints = []string{receiver.endpoint}
 	cfg.esCfg.LogsIndex = TestLogsIndex
+	cfg.esCfg.MetricsIndex = TestMetricsIndex
 	cfg.esCfg.TracesIndex = TestTracesIndex
-	cfg.esCfg.Flush.Interval = 10 * time.Millisecond
-	cfg.esCfg.NumWorkers = 1
+	// sending_queue::batch is defined as a default config
+	cfg.esCfg.QueueBatchConfig.Get().Batch.Get().FlushTimeout = 10 * time.Millisecond
+	cfg.esCfg.QueueBatchConfig.Get().NumConsumers = 1
 
 	tc, err := consumer.NewTraces(func(context.Context, ptrace.Traces) error {
 		return nil

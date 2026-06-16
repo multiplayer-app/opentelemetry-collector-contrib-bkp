@@ -8,17 +8,21 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/pkg/samplingpolicy"
 )
 
 type subpolicy struct {
 	// the subpolicy evaluator
-	evaluator PolicyEvaluator
+	evaluator samplingpolicy.Evaluator
 
 	// spans per second allocated to each subpolicy
 	allocatedSPS int64
 
 	// spans per second that each subpolicy sampled in this period
 	sampledSPS int64
+
+	name string
 }
 
 // Composite evaluator and its internal data
@@ -35,15 +39,17 @@ type Composite struct {
 	// The time provider (can be different from clock for testing purposes)
 	timeProvider TimeProvider
 
-	logger *zap.Logger
+	logger          *zap.Logger
+	recordSubPolicy bool
 }
 
-var _ PolicyEvaluator = (*Composite)(nil)
+var _ samplingpolicy.Evaluator = (*Composite)(nil)
 
 // SubPolicyEvalParams defines the evaluator and max rate for a sub-policy
 type SubPolicyEvalParams struct {
-	Evaluator         PolicyEvaluator
+	Evaluator         samplingpolicy.Evaluator
 	MaxSpansPerSecond int64
+	Name              string
 }
 
 // NewComposite creates a policy evaluator that samples all subpolicies.
@@ -52,15 +58,14 @@ func NewComposite(
 	maxTotalSpansPerSecond int64,
 	subPolicyParams []SubPolicyEvalParams,
 	timeProvider TimeProvider,
-) PolicyEvaluator {
-
+	recordSubPolicy bool,
+) samplingpolicy.Evaluator {
 	var subpolicies []*subpolicy
-
-	for i := 0; i < len(subPolicyParams); i++ {
+	for i := range subPolicyParams {
 		sub := &subpolicy{}
 		sub.evaluator = subPolicyParams[i].Evaluator
 		sub.allocatedSPS = subPolicyParams[i].MaxSpansPerSecond
-
+		sub.name = subPolicyParams[i].Name
 		// We are just starting, so there is no previous input, set it to 0
 		sub.sampledSPS = 0
 
@@ -68,15 +73,16 @@ func NewComposite(
 	}
 
 	return &Composite{
-		maxTotalSPS:  maxTotalSpansPerSecond,
-		subpolicies:  subpolicies,
-		timeProvider: timeProvider,
-		logger:       logger,
+		maxTotalSPS:     maxTotalSpansPerSecond,
+		subpolicies:     subpolicies,
+		timeProvider:    timeProvider,
+		logger:          logger,
+		recordSubPolicy: recordSubPolicy,
 	}
 }
 
 // Evaluate looks at the trace data and returns a corresponding SamplingDecision.
-func (c *Composite) Evaluate(ctx context.Context, traceID pcommon.TraceID, trace *TraceData) (Decision, error) {
+func (c *Composite) Evaluate(ctx context.Context, traceID pcommon.TraceID, trace *samplingpolicy.TraceData) (samplingpolicy.Decision, error) {
 	// Rate limiting works by counting spans that are sampled during each 1 second
 	// time period. Until the total number of spans during a particular second
 	// exceeds the allocated number of spans-per-second the traces are sampled,
@@ -97,48 +103,43 @@ func (c *Composite) Evaluate(ctx context.Context, traceID pcommon.TraceID, trace
 	for _, sub := range c.subpolicies {
 		decision, err := sub.evaluator.Evaluate(ctx, traceID, trace)
 		if err != nil {
-			return Unspecified, err
+			return samplingpolicy.Unspecified, err
 		}
 
-		if decision == Sampled || decision == InvertSampled {
+		//nolint:staticcheck // SA1019: Use of inverted decisions until they are fully removed.
+		if decision == samplingpolicy.Sampled || decision == samplingpolicy.InvertSampled {
 			// The subpolicy made a decision to Sample. Now we need to make our decision.
 
 			// Calculate resulting SPS counter if we decide to sample this trace
-			spansInSecondIfSampled := sub.sampledSPS + trace.SpanCount.Load()
+			spansInSecondIfSampled := sub.sampledSPS + trace.SpanCount
 
 			// Check if the rate will be within the allocated bandwidth.
 			if spansInSecondIfSampled <= sub.allocatedSPS && spansInSecondIfSampled <= c.maxTotalSPS {
 				sub.sampledSPS = spansInSecondIfSampled
 
 				// Let the sampling happen
-				return Sampled, nil
+				if c.recordSubPolicy {
+					SetAttrOnScopeSpans(trace.ReceivedBatches, "tailsampling.composite_policy", sub.name)
+				}
+				return samplingpolicy.Sampled, nil
 			}
 
 			// We exceeded the rate limit. Don't sample this trace.
 			// Note that we will continue evaluating new incoming traces against
 			// allocated SPS, we do not update sub.sampledSPS here in order to give
 			// chance to another smaller trace to be accepted later.
-			return NotSampled, nil
+			return samplingpolicy.NotSampled, nil
 		}
 	}
 
-	return NotSampled, nil
+	return samplingpolicy.NotSampled, nil
 }
 
-// OnDroppedSpans is called when the trace needs to be dropped, due to memory
-// pressure, before the decision_wait time has been reached.
-func (c *Composite) OnDroppedSpans(pcommon.TraceID, *TraceData) (Decision, error) {
-	// Here we have a number of possible solutions:
-	// 1. Random sample traces based on maxTotalSPS.
-	// 2. Perform full composite sampling logic by calling Composite.Evaluate(), essentially
-	//    using partial trace data for sampling.
-	// 3. Sample everything.
-	//
-	// It seems that #2 may be the best choice from end user perspective, but
-	// it is not certain and it is also additional performance penalty when we are
-	// already under a memory (and possibly CPU) pressure situation.
-	//
-	// For now we are playing safe and go with #3. Investigating alternate options
-	// should be a future task.
-	return Sampled, nil
+func (c *Composite) IsStateful() bool {
+	for _, sub := range c.subpolicies {
+		if sub.evaluator.IsStateful() {
+			return true
+		}
+	}
+	return false
 }

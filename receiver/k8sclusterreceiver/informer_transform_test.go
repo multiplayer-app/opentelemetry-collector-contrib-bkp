@@ -10,7 +10,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver/internal/testutils"
 )
@@ -38,7 +37,6 @@ func TestTransformObject(t *testing.T) {
 					testutils.NewPodStatusWithContainer("container-name", "container-id"),
 				)
 				pod.Spec.Containers[0].Image = ""
-				pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: v1.Time{}}}
 				return pod
 			}(),
 			same: false,
@@ -109,9 +107,16 @@ func TestTransformObject(t *testing.T) {
 					Selector: map[string]string{
 						"app": "my-app",
 					},
+					Type: corev1.ServiceTypeClusterIP,
 				},
 			},
 			same: false,
+		},
+		{
+			name:   "endpointslice",
+			object: testutils.NewEndpointSlice("1"),
+			want:   testutils.NewEndpointSlice("1"),
+			same:   false,
 		},
 		{
 			// This is a case where we don't transform the object.

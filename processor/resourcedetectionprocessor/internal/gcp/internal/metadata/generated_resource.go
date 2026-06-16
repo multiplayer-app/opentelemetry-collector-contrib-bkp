@@ -56,13 +56,6 @@ func (rb *ResourceBuilder) SetCloudRegion(val string) {
 	}
 }
 
-// SetFaasID sets provided value as "faas.id" attribute.
-func (rb *ResourceBuilder) SetFaasID(val string) {
-	if rb.config.FaasID.Enabled {
-		rb.res.Attributes().PutStr("faas.id", val)
-	}
-}
-
 // SetFaasInstance sets provided value as "faas.instance" attribute.
 func (rb *ResourceBuilder) SetFaasInstance(val string) {
 	if rb.config.FaasInstance.Enabled {
@@ -109,6 +102,27 @@ func (rb *ResourceBuilder) SetGcpGceInstanceHostname(val string) {
 func (rb *ResourceBuilder) SetGcpGceInstanceName(val string) {
 	if rb.config.GcpGceInstanceName.Enabled {
 		rb.res.Attributes().PutStr("gcp.gce.instance.name", val)
+	}
+}
+
+// SetGcpGceInstanceGroupManagerName sets provided value as "gcp.gce.instance_group_manager.name" attribute.
+func (rb *ResourceBuilder) SetGcpGceInstanceGroupManagerName(val string) {
+	if rb.config.GcpGceInstanceGroupManagerName.Enabled {
+		rb.res.Attributes().PutStr("gcp.gce.instance_group_manager.name", val)
+	}
+}
+
+// SetGcpGceInstanceGroupManagerRegion sets provided value as "gcp.gce.instance_group_manager.region" attribute.
+func (rb *ResourceBuilder) SetGcpGceInstanceGroupManagerRegion(val string) {
+	if rb.config.GcpGceInstanceGroupManagerRegion.Enabled {
+		rb.res.Attributes().PutStr("gcp.gce.instance_group_manager.region", val)
+	}
+}
+
+// SetGcpGceInstanceGroupManagerZone sets provided value as "gcp.gce.instance_group_manager.zone" attribute.
+func (rb *ResourceBuilder) SetGcpGceInstanceGroupManagerZone(val string) {
+	if rb.config.GcpGceInstanceGroupManagerZone.Enabled {
+		rb.res.Attributes().PutStr("gcp.gce.instance_group_manager.zone", val)
 	}
 }
 

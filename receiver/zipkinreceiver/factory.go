@@ -8,18 +8,17 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/zipkinreceiver/internal/metadata"
 )
 
 // This file implements factory for Zipkin receiver.
 
 const (
-	defaultHTTPPort     = 9411
-	defaultBindEndpoint = "localhost:9411"
+	defaultHTTPEndpoint = "localhost:9411"
 )
 
 // NewFactory creates a new Zipkin receiver factory
@@ -33,10 +32,11 @@ func NewFactory() receiver.Factory {
 
 // createDefaultConfig creates the default configuration for Zipkin receiver.
 func createDefaultConfig() component.Config {
+	netAddr := confignet.NewDefaultAddrConfig()
+	netAddr.Transport = confignet.TransportTypeTCP
+	netAddr.Endpoint = defaultHTTPEndpoint
 	return &Config{
-		ServerConfig: confighttp.ServerConfig{
-			Endpoint: testutil.EndpointForPort(defaultHTTPPort),
-		},
+		ServerConfig:    confighttp.ServerConfig{NetAddr: netAddr},
 		ParseStringTags: false,
 	}
 }

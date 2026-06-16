@@ -5,6 +5,7 @@ package signalfxreceiver // import "github.com/open-telemetry/opentelemetry-coll
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -12,10 +13,10 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/signalfxreceiver/internal/metadata"
 )
 
@@ -23,8 +24,8 @@ import (
 
 const (
 
-	// Default port to bind to.
-	defaultPort = 9943
+	// Default endpoint to bind to.
+	defaultEndpoint = "localhost:9943"
 )
 
 // NewFactory creates a factory for SignalFx receiver.
@@ -37,10 +38,11 @@ func NewFactory() receiver.Factory {
 }
 
 func createDefaultConfig() component.Config {
+	netAddr := confignet.NewDefaultAddrConfig()
+	netAddr.Transport = confignet.TransportTypeTCP
+	netAddr.Endpoint = defaultEndpoint
 	return &Config{
-		ServerConfig: confighttp.ServerConfig{
-			Endpoint: testutil.EndpointForPort(defaultPort),
-		},
+		ServerConfig: confighttp.ServerConfig{NetAddr: netAddr},
 	}
 }
 
@@ -56,7 +58,7 @@ func extractPortFromEndpoint(endpoint string) (int, error) {
 		return 0, fmt.Errorf("endpoint port is not a number: %w", err)
 	}
 	if port < 1 || port > 65535 {
-		return 0, fmt.Errorf("port number must be between 1 and 65535")
+		return 0, errors.New("port number must be between 1 and 65535")
 	}
 	return int(port), nil
 }
@@ -113,5 +115,7 @@ func createLogsReceiver(
 	return r, nil
 }
 
-var receiverLock sync.Mutex
-var receivers = map[*Config]*sfxReceiver{}
+var (
+	receiverLock sync.Mutex
+	receivers    = map[*Config]*sfxReceiver{}
+)

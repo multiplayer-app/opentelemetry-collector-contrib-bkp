@@ -6,6 +6,7 @@ package aggregateutil // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"encoding/json"
 	"math"
+	"slices"
 	"sort"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -50,7 +51,7 @@ func FilterAttrs(metric pmetric.Metric, filterAttrKeys []string) {
 	// as normal.
 	RangeDataPointAttributes(metric, func(attrs pcommon.Map) bool {
 		attrs.RemoveIf(func(k string, _ pcommon.Value) bool {
-			return isNotPresent(k, filterAttrKeys)
+			return !slices.Contains(filterAttrKeys, k)
 		})
 		return true
 	})
@@ -140,15 +141,6 @@ func RangeDataPointAttributes(metric pmetric.Metric, f func(pcommon.Map) bool) {
 	}
 }
 
-func isNotPresent(target string, arr []string) bool {
-	for _, item := range arr {
-		if item == target {
-			return false
-		}
-	}
-	return true
-}
-
 func mergeNumberDataPoints(dpsMap map[string]pmetric.NumberDataPointSlice, agg AggregationType, to pmetric.NumberDataPointSlice) {
 	for _, dps := range dpsMap {
 		dp := to.AppendEmpty()
@@ -188,7 +180,6 @@ func mergeNumberDataPoints(dpsMap map[string]pmetric.NumberDataPointSlice, agg A
 						dp.SetDoubleValue((medianNumbers[mNumber-1] + medianNumbers[mNumber]) / 2)
 					}
 				}
-
 			}
 		case pmetric.NumberDataPointValueTypeInt:
 			medianNumbers := []int64{dp.IntValue()}
@@ -217,9 +208,7 @@ func mergeNumberDataPoints(dpsMap map[string]pmetric.NumberDataPointSlice, agg A
 				if len(medianNumbers) == 1 {
 					dp.SetIntValue(medianNumbers[0])
 				} else {
-					sort.Slice(medianNumbers, func(i, j int) bool {
-						return medianNumbers[i] < medianNumbers[j]
-					})
+					slices.Sort(medianNumbers)
 					mNumber := len(medianNumbers) / 2
 					if math.Mod(float64(len(medianNumbers)), 2) != 0 {
 						dp.SetIntValue(medianNumbers[mNumber])
@@ -284,7 +273,8 @@ func mergeHistogramDataPoints(dpsMap map[string]pmetric.HistogramDataPointSlice,
 }
 
 func mergeExponentialHistogramDataPoints(dpsMap map[string]pmetric.ExponentialHistogramDataPointSlice,
-	to pmetric.ExponentialHistogramDataPointSlice) {
+	to pmetric.ExponentialHistogramDataPointSlice,
+) {
 	for _, dps := range dpsMap {
 		dp := to.AppendEmpty()
 		dps.At(0).MoveTo(dp)
@@ -296,18 +286,31 @@ func mergeExponentialHistogramDataPoints(dpsMap map[string]pmetric.ExponentialHi
 			}
 			dp.SetCount(dp.Count() + dps.At(i).Count())
 			dp.SetSum(dp.Sum() + dps.At(i).Sum())
+			dp.SetZeroCount(dp.ZeroCount() + dps.At(i).ZeroCount())
 			if dp.HasMin() && dp.Min() > dps.At(i).Min() {
 				dp.SetMin(dps.At(i).Min())
 			}
 			if dp.HasMax() && dp.Max() < dps.At(i).Max() {
 				dp.SetMax(dps.At(i).Max())
 			}
-			for b := 0; b < dps.At(i).Negative().BucketCounts().Len(); b++ {
-				negatives.SetAt(b, negatives.At(b)+dps.At(i).Negative().BucketCounts().At(b))
+
+			// Check if offsets are different, indicating we need to adjust dp offsets and bucket counts after merging
+			negOffsetDiff := dp.Negative().Offset() != dps.At(i).Negative().Offset()
+			posOffsetDiff := dp.Positive().Offset() != dps.At(i).Positive().Offset()
+
+			mergeExponentialHistogramBuckets(negatives, dps.At(i).Negative().BucketCounts(), dp.Negative().Offset(), dps.At(i).Negative().Offset())
+			mergeExponentialHistogramBuckets(positives, dps.At(i).Positive().BucketCounts(), dp.Positive().Offset(), dps.At(i).Positive().Offset())
+
+			// Only adjust offsets and remove leading zero buckets if we had different offsets and the buckets are not empty
+			if negOffsetDiff && dps.At(i).Negative().BucketCounts().Len() != 0 {
+				dp.Negative().SetOffset(min(dp.Negative().Offset(), dps.At(i).Negative().Offset()))
+				trimBuckets(negatives)
 			}
-			for b := 0; b < dps.At(i).Positive().BucketCounts().Len(); b++ {
-				positives.SetAt(b, positives.At(b)+dps.At(i).Positive().BucketCounts().At(b))
+			if posOffsetDiff && dps.At(i).Positive().BucketCounts().Len() != 0 {
+				dp.Positive().SetOffset(min(dp.Positive().Offset(), dps.At(i).Positive().Offset()))
+				trimBuckets(positives)
 			}
+
 			dps.At(i).Exemplars().MoveAndAppendTo(dp.Exemplars())
 			if dps.At(i).StartTimestamp() < dp.StartTimestamp() {
 				dp.SetStartTimestamp(dps.At(i).StartTimestamp())
@@ -316,8 +319,75 @@ func mergeExponentialHistogramDataPoints(dpsMap map[string]pmetric.ExponentialHi
 	}
 }
 
+func mergeExponentialHistogramBuckets(tgt, src pcommon.UInt64Slice, tgtOff, srcOff int32) {
+	// Both data points have the same offset - simple element-wise addition
+	if tgtOff == srcOff {
+		for b := 0; b < src.Len(); b++ {
+			if b < tgt.Len() {
+				tgt.SetAt(b, tgt.At(b)+src.At(b))
+			} else {
+				tgt.Append(src.At(b))
+			}
+		}
+		return
+	}
+
+	// Source offset is less than target offset - source data point covers lower values
+	if srcOff < tgtOff {
+		for b := src.Len() - 1; b >= 0; b-- {
+			count := src.At(b)
+			if count > 0 {
+				tgt.Append(0)
+				for i := tgt.Len() - 1; i > 0; i-- {
+					tgt.SetAt(i, tgt.At(i-1))
+				}
+				tgt.SetAt(0, count)
+			}
+		}
+		return
+	}
+
+	// Source offset is greater than target offset - source data point covers higher values
+	for b := 0; b < src.Len(); b++ {
+		count := src.At(b)
+		if count == 0 {
+			continue
+		}
+
+		idx := b + int(srcOff-tgtOff)
+		if idx >= 0 {
+			if idx < tgt.Len() {
+				tgt.SetAt(idx, tgt.At(idx)+count)
+			} else {
+				for tgt.Len() <= idx {
+					tgt.Append(0)
+				}
+				tgt.SetAt(idx, tgt.At(idx)+count)
+			}
+		}
+	}
+}
+
+func trimBuckets(buckets pcommon.UInt64Slice) {
+	zeroCount := 0
+	for i := 0; i < buckets.Len() && buckets.At(i) == 0; i++ {
+		zeroCount++
+	}
+
+	if zeroCount == 0 {
+		return
+	}
+
+	newBuckets := make([]uint64, buckets.Len()-zeroCount)
+	for i := zeroCount; i < buckets.Len(); i++ {
+		newBuckets[i-zeroCount] = buckets.At(i)
+	}
+	buckets.FromRaw(newBuckets)
+}
+
 func groupNumberDataPoints(dps pmetric.NumberDataPointSlice, useStartTime bool,
-	dpsByAttrsAndTs map[string]pmetric.NumberDataPointSlice) {
+	dpsByAttrsAndTs map[string]pmetric.NumberDataPointSlice,
+) {
 	var keyHashParts []any
 	for i := 0; i < dps.Len(); i++ {
 		if useStartTime {
@@ -332,7 +402,8 @@ func groupNumberDataPoints(dps pmetric.NumberDataPointSlice, useStartTime bool,
 }
 
 func groupHistogramDataPoints(dps pmetric.HistogramDataPointSlice, useStartTime bool,
-	dpsByAttrsAndTs map[string]pmetric.HistogramDataPointSlice) {
+	dpsByAttrsAndTs map[string]pmetric.HistogramDataPointSlice,
+) {
 	for i := 0; i < dps.Len(); i++ {
 		dp := dps.At(i)
 		keyHashParts := make([]any, 0, dp.ExplicitBounds().Len()+4)
@@ -353,12 +424,12 @@ func groupHistogramDataPoints(dps pmetric.HistogramDataPointSlice, useStartTime 
 }
 
 func groupExponentialHistogramDataPoints(dps pmetric.ExponentialHistogramDataPointSlice, useStartTime bool,
-	dpsByAttrsAndTs map[string]pmetric.ExponentialHistogramDataPointSlice) {
+	dpsByAttrsAndTs map[string]pmetric.ExponentialHistogramDataPointSlice,
+) {
 	for i := 0; i < dps.Len(); i++ {
 		dp := dps.At(i)
-		keyHashParts := make([]any, 0, 5)
-		keyHashParts = append(keyHashParts, dp.Scale(), dp.HasMin(), dp.HasMax(), uint32(dp.Flags()), dp.Negative().Offset(),
-			dp.Positive().Offset())
+		keyHashParts := make([]any, 0, 4)
+		keyHashParts = append(keyHashParts, dp.Scale(), dp.HasMin(), dp.HasMax(), uint32(dp.Flags()))
 		if useStartTime {
 			keyHashParts = append(keyHashParts, dp.StartTimestamp().String())
 		}

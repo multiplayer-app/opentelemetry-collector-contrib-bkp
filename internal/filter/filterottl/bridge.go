@@ -4,6 +4,7 @@
 package filterottl // import "github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -58,7 +59,7 @@ const (
 	severityNumberStatement = `((severity_number == SEVERITY_NUMBER_UNSPECIFIED and %v) or (severity_number != SEVERITY_NUMBER_UNSPECIFIED and severity_number >= %d))`
 )
 
-func NewLogSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottllog.TransformContext], error) {
+func NewLogSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[*ottllog.TransformContext], error) {
 	statements := make([]string, 0, 2)
 	if mc.Include != nil {
 		if err := mc.Include.ValidateForLogs(); err != nil {
@@ -79,13 +80,13 @@ func NewLogSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottllog.T
 		if err != nil {
 			return nil, err
 		}
-		statements = append(statements, fmt.Sprintf("%v", statement))
+		statements = append(statements, statement)
 	}
 
 	return NewBoolExprForLog(statements, StandardLogFuncs(), ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
 }
 
-func NewResourceSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottlresource.TransformContext], error) {
+func NewResourceSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[*ottlresource.TransformContext], error) {
 	statements := make([]string, 0, 2)
 	if mc.Include != nil {
 		// OTTL treats resource attributes as attributes for the resource context.
@@ -108,13 +109,13 @@ func NewResourceSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottl
 		if err != nil {
 			return nil, err
 		}
-		statements = append(statements, fmt.Sprintf("%v", statement))
+		statements = append(statements, statement)
 	}
 
 	return NewBoolExprForResource(statements, StandardResourceFuncs(), ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
 }
 
-func NewSpanSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottlspan.TransformContext], error) {
+func NewSpanSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[*ottlspan.TransformContext], error) {
 	statements := make([]string, 0, 2)
 	if mc.Include != nil {
 		statement, err := createStatement(*mc.Include)
@@ -129,7 +130,7 @@ func NewSpanSkipExprBridge(mc *filterconfig.MatchConfig) (expr.BoolExpr[ottlspan
 		if err != nil {
 			return nil, err
 		}
-		statements = append(statements, fmt.Sprintf("%v", statement))
+		statements = append(statements, statement)
 	}
 
 	return NewBoolExprForSpan(statements, StandardSpanFuncs(), ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
@@ -183,10 +184,10 @@ func createStatement(mp filterconfig.MatchProperties) (string, error) {
 		conditions = append(conditions, fmt.Sprintf(format, strings.Join(c.scopeVersionConditions, " or ")))
 	}
 	if c.attributeConditions != nil {
-		conditions = append(conditions, fmt.Sprintf("%v", strings.Join(c.attributeConditions, " and ")))
+		conditions = append(conditions, strings.Join(c.attributeConditions, " and "))
 	}
 	if c.resourceAttributeConditions != nil {
-		conditions = append(conditions, fmt.Sprintf("%v", strings.Join(c.resourceAttributeConditions, " and ")))
+		conditions = append(conditions, strings.Join(c.resourceAttributeConditions, " and "))
 	}
 	if c.bodyConditions != nil {
 		if len(c.bodyConditions) > 1 {
@@ -304,7 +305,7 @@ func createBasicConditions(template string, input []string) []string {
 	return conditions
 }
 
-func createLibraryConditions(nameTemplate string, versionTemplate string, libraries []filterconfig.InstrumentationLibrary) ([]string, []string) {
+func createLibraryConditions(nameTemplate, versionTemplate string, libraries []filterconfig.InstrumentationLibrary) ([]string, []string) {
 	var scopeNameConditions []string
 	var scopeVersionConditions []string
 	for _, scope := range libraries {
@@ -347,7 +348,7 @@ func createSeverityNumberConditions(severityNumberProperties *filterconfig.LogSe
 	return &severityNumberCondition
 }
 
-func NewMetricSkipExprBridge(include *filterconfig.MetricMatchProperties, exclude *filterconfig.MetricMatchProperties) (expr.BoolExpr[ottlmetric.TransformContext], error) {
+func NewMetricSkipExprBridge(include, exclude *filterconfig.MetricMatchProperties) (expr.BoolExpr[*ottlmetric.TransformContext], error) {
 	statements := make([]string, 0, 2)
 	if include != nil {
 		statement, err := createMetricStatement(*include)
@@ -365,7 +366,7 @@ func NewMetricSkipExprBridge(include *filterconfig.MetricMatchProperties, exclud
 			return nil, err
 		}
 		if statement != nil {
-			statements = append(statements, fmt.Sprintf("%v", *statement))
+			statements = append(statements, *statement)
 		}
 	}
 
@@ -381,7 +382,7 @@ func createMetricStatement(mp filterconfig.MetricMatchProperties) (*string, erro
 		if len(mp.Expressions) == 0 {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("expressions configuration cannot be converted to OTTL - see https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/filterprocessor#configuration for OTTL configuration")
+		return nil, errors.New("expressions configuration cannot be converted to OTTL - see https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/filterprocessor#configuration for OTTL configuration")
 	}
 
 	if len(mp.MetricNames) == 0 {

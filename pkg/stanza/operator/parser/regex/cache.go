@@ -4,6 +4,7 @@
 package regex // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/parser/regex"
 
 import (
+	"maps"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -101,9 +102,7 @@ func (m *memoryCache) copy() map[string]any {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	for k, v := range m.cache {
-		cp[k] = v
-	}
+	maps.Copy(cp, m.cache)
 	return cp
 }
 
@@ -129,14 +128,14 @@ type limiter interface {
 }
 
 // newStartedAtomicLimiter returns a started atomicLimiter
-func newStartedAtomicLimiter(max uint64, interval uint64) *atomicLimiter {
+func newStartedAtomicLimiter(maxVal, interval uint64) *atomicLimiter {
 	if interval == 0 {
 		interval = 5
 	}
 
 	a := &atomicLimiter{
 		count:    &atomic.Uint64{},
-		max:      max,
+		max:      maxVal,
 		interval: time.Second * time.Duration(interval),
 		done:     make(chan struct{}),
 	}

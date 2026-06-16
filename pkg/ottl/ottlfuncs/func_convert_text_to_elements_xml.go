@@ -5,6 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/antchfx/xmlquery"
@@ -26,7 +27,7 @@ func createConvertTextToElementsXMLFunction[K any](_ ottl.FunctionContext, oArgs
 	args, ok := oArgs.(*ConvertTextToElementsXMLArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf("ConvertTextToElementsXML args must be of type *ConvertTextToElementsXMLAguments[K]")
+		return nil, errors.New("ConvertTextToElementsXML args must be of type *ConvertTextToElementsXMLAguments[K]")
 	}
 
 	xPath := args.XPath.Get()
@@ -45,7 +46,7 @@ func createConvertTextToElementsXMLFunction[K any](_ ottl.FunctionContext, oArgs
 }
 
 // convertTextToElementsXML returns a string that is a result of wrapping any extraneous text nodes with a dedicated element.
-func convertTextToElementsXML[K any](target ottl.StringGetter[K], xPath string, elementName string) ottl.ExprFunc[K] {
+func convertTextToElementsXML[K any](target ottl.StringGetter[K], xPath, elementName string) ottl.ExprFunc[K] {
 	return func(ctx context.Context, tCtx K) (any, error) {
 		var doc *xmlquery.Node
 		if targetVal, err := target.Get(ctx, tCtx); err != nil {
@@ -54,38 +55,47 @@ func convertTextToElementsXML[K any](target ottl.StringGetter[K], xPath string, 
 			return nil, err
 		}
 		for _, n := range xmlquery.Find(doc, xPath) {
-			convertTextToElementsForNode(n, elementName)
+			if err := convertTextToElementsForNode(n, elementName, 0); err != nil {
+				return nil, err
+			}
 		}
 		return doc.OutputXML(false), nil
 	}
 }
 
-func convertTextToElementsForNode(parent *xmlquery.Node, elementName string) {
+func convertTextToElementsForNode(parent *xmlquery.Node, elementName string, depth int) error {
+	if depth > maxXMLElementDepth {
+		return fmt.Errorf("exceeded maximum XML nesting depth of %d", maxXMLElementDepth)
+	}
+
 	switch parent.Type {
 	case xmlquery.ElementNode: // ok
 	case xmlquery.DocumentNode: // ok
 	default:
-		return
+		return nil
 	}
 
 	if parent.FirstChild == nil {
-		return
+		return nil
 	}
 
 	// Convert any child nodes and count text and element nodes.
 	var valueCount, elementCount int
 	for child := parent.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == xmlquery.ElementNode {
-			convertTextToElementsForNode(child, elementName)
+		switch child.Type {
+		case xmlquery.ElementNode:
+			if err := convertTextToElementsForNode(child, elementName, depth+1); err != nil {
+				return err
+			}
 			elementCount++
-		} else if child.Type == xmlquery.TextNode {
+		case xmlquery.TextNode:
 			valueCount++
 		}
 	}
 
 	// If there are no values to wrap, or if there is exactly one value OR one element, this node is all set.
 	if valueCount == 0 || elementCount+valueCount <= 1 {
-		return
+		return nil
 	}
 
 	// At this point, we either have multiple values, or a mix of values and elements.
@@ -104,4 +114,6 @@ func convertTextToElementsForNode(parent *xmlquery.Node, elementName string) {
 		child.FirstChild = newTextNode
 		child.LastChild = newTextNode
 	}
+
+	return nil
 }

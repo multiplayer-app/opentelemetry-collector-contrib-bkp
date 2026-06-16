@@ -4,21 +4,16 @@
 package k8sattributesprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"time"
 
-	"go.opentelemetry.io/collector/featuregate"
-	conventions "go.opentelemetry.io/collector/semconv/v1.6.1"
+	conventions "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/kube"
-)
-
-var disallowFieldExtractConfigRegex = featuregate.GlobalRegistry().MustRegister(
-	"k8sattr.fieldExtractConfigRegex.disallow",
-	featuregate.StageAlpha,
-	featuregate.WithRegisterDescription("When enabled, usage of the FieldExtractConfig.Regex field is disallowed"),
-	featuregate.WithRegisterFromVersion("v0.106.0"),
 )
 
 // Config defines configuration for k8s attributes processor.
@@ -46,11 +41,32 @@ type Config struct {
 	// Exclude section allows to define names of pod that should be
 	// ignored while tagging.
 	Exclude ExcludeConfig `mapstructure:"exclude"`
+
+	// WaitForMetadata is a flag that determines if the processor should wait k8s metadata to be synced when starting.
+	WaitForMetadata bool `mapstructure:"wait_for_metadata"`
+
+	// WaitForMetadataTimeout is the maximum time the processor will wait for the k8s metadata to be synced.
+	WaitForMetadataTimeout time.Duration `mapstructure:"wait_for_metadata_timeout"`
+
+	// WatchSyncPeriod determines the resync period for K8s informers.
+	// Reprocessing the informer cache periodically can cause significant memory churn and CPU spikes.
+	// Setting this to 0 disables resync.
+	WatchSyncPeriod time.Duration `mapstructure:"watch_sync_period"`
+
+	// PodDeleteGracePeriod is the duration to wait before deleting a pod from the cache after receiving a delete event.
+	PodDeleteGracePeriod time.Duration `mapstructure:"pod_delete_grace_period"`
 }
 
 func (cfg *Config) Validate() error {
 	if err := cfg.APIConfig.Validate(); err != nil {
 		return err
+	}
+
+	if cfg.WatchSyncPeriod < 0 {
+		return errors.New("watch_sync_period must be greater than or equal to 0")
+	}
+	if cfg.PodDeleteGracePeriod < 0 {
+		return errors.New("pod_delete_grace_period must be greater than or equal to 0")
 	}
 
 	for _, assoc := range cfg.Association {
@@ -65,23 +81,9 @@ func (cfg *Config) Validate() error {
 		}
 
 		switch f.From {
-		case "", kube.MetadataFromPod, kube.MetadataFromNamespace, kube.MetadataFromNode:
+		case "", kube.MetadataFromPod, kube.MetadataFromNamespace, kube.MetadataFromNode, kube.MetadataFromDeployment, kube.MetadataFromStatefulSet, kube.MetadataFromDaemonSet, kube.MetadataFromJob:
 		default:
-			return fmt.Errorf("%s is not a valid choice for From. Must be one of: pod, namespace, node", f.From)
-		}
-
-		if f.Regex != "" {
-			if disallowFieldExtractConfigRegex.IsEnabled() {
-				return fmt.Errorf("the extract.annotations.regex and extract.labels.regex fields have been deprecated, please use the `ExtractPatterns` function in the transform processor instead")
-			}
-			r, err := regexp.Compile(f.Regex)
-			if err != nil {
-				return err
-			}
-			names := r.SubexpNames()
-			if len(names) != 2 || names[1] != "value" {
-				return fmt.Errorf("regex must contain exactly one named submatch (value)")
-			}
+			return fmt.Errorf("%s is not a valid choice for From. Must be one of: pod, namespace, deployment, statefulset, daemonset, job, node", f.From)
 		}
 
 		if f.KeyRegex != "" {
@@ -94,18 +96,20 @@ func (cfg *Config) Validate() error {
 
 	for _, field := range cfg.Extract.Metadata {
 		switch field {
-		case conventions.AttributeK8SNamespaceName, conventions.AttributeK8SPodName, conventions.AttributeK8SPodUID,
-			specPodHostName, metadataPodStartTime, metadataPodIP,
-			conventions.AttributeK8SDeploymentName, conventions.AttributeK8SDeploymentUID,
-			conventions.AttributeK8SReplicaSetName, conventions.AttributeK8SReplicaSetUID,
-			conventions.AttributeK8SDaemonSetName, conventions.AttributeK8SDaemonSetUID,
-			conventions.AttributeK8SStatefulSetName, conventions.AttributeK8SStatefulSetUID,
-			conventions.AttributeK8SJobName, conventions.AttributeK8SJobUID,
-			conventions.AttributeK8SCronJobName,
-			conventions.AttributeK8SNodeName, conventions.AttributeK8SNodeUID,
-			conventions.AttributeK8SContainerName, conventions.AttributeContainerID,
-			conventions.AttributeContainerImageName, conventions.AttributeContainerImageTag,
-			containerImageRepoDigests, clusterUID:
+		case string(conventions.K8SNamespaceNameKey), string(conventions.K8SPodNameKey), string(conventions.K8SPodUIDKey),
+			string(conventions.K8SPodHostnameKey), string(conventions.K8SPodStartTimeKey), string(conventions.K8SPodIPKey),
+			string(conventions.K8SDeploymentNameKey), string(conventions.K8SDeploymentUIDKey),
+			string(conventions.K8SReplicaSetNameKey), string(conventions.K8SReplicaSetUIDKey),
+			string(conventions.K8SDaemonSetNameKey), string(conventions.K8SDaemonSetUIDKey),
+			string(conventions.K8SStatefulSetNameKey), string(conventions.K8SStatefulSetUIDKey),
+			string(conventions.K8SJobNameKey), string(conventions.K8SJobUIDKey),
+			string(conventions.K8SCronJobNameKey), string(conventions.K8SCronJobUIDKey),
+			string(conventions.K8SNodeNameKey), string(conventions.K8SNodeUIDKey),
+			string(conventions.K8SContainerNameKey), string(conventions.ContainerIDKey),
+			string(conventions.ContainerImageNameKey), containerImageTag, string(conventions.ContainerImageTagsKey),
+			string(conventions.ServiceNamespaceKey), string(conventions.ServiceNameKey),
+			string(conventions.ServiceVersionKey), string(conventions.ServiceInstanceIDKey),
+			string(conventions.ContainerImageRepoDigestsKey), string(conventions.K8SClusterUIDKey):
 		default:
 			return fmt.Errorf("\"%s\" is not a supported metadata field", field)
 		}
@@ -141,7 +145,8 @@ type ExtractConfig struct {
 	//   k8s.node.name, k8s.namespace.name, k8s.pod.start_time,
 	//   k8s.replicaset.name, k8s.replicaset.uid,
 	//   k8s.daemonset.name, k8s.daemonset.uid,
-	//   k8s.job.name, k8s.job.uid, k8s.cronjob.name,
+	//   k8s.job.name, k8s.job.uid,
+	//   k8s.cronjob.name, k8s.cronjob.uid,
 	//   k8s.statefulset.name, k8s.statefulset.uid,
 	//   k8s.container.name, container.id, container.image.name,
 	//   container.image.tag, container.image.repo_digests
@@ -157,7 +162,8 @@ type ExtractConfig struct {
 	//  - k8s.deployment.name (if the pod is controlled by a deployment)
 	//  - k8s.container.name (requires an additional attribute to be set: container.id)
 	//  - container.image.name (requires one of the following additional attributes to be set: container.id or k8s.container.name)
-	//  - container.image.tag (requires one of the following additional attributes to be set: container.id or k8s.container.name)
+	//  - container.image.tag (requires one of the following additional attributes to be set: container.id or k8s.container.name) — deprecated, use container.image.tags
+	//  - container.image.tags (requires one of the following additional attributes to be set: container.id or k8s.container.name)
 	Metadata []string `mapstructure:"metadata"`
 
 	// Annotations allows extracting data from pod annotations and record it
@@ -171,6 +177,15 @@ type ExtractConfig struct {
 	// It is a list of FieldExtractConfig type. See FieldExtractConfig
 	// documentation for more details.
 	Labels []FieldExtractConfig `mapstructure:"labels"`
+
+	// OtelAnnotations extracts all pod annotations with the prefix "resource.opentelemetry.io" as resource attributes
+	// E.g. "resource.opentelemetry.io/foo" becomes "foo"
+	OtelAnnotations bool `mapstructure:"otel_annotations"`
+
+	// DeploymentNameFromReplicaSet allows extracting deployment name from ReplicaSet name by trimming pod template hash.
+	//
+	// Deprecated: This option now defaults to true and will be removed in future releases.
+	DeploymentNameFromReplicaSet bool `mapstructure:"deployment_name_from_replicaset"`
 }
 
 // FieldExtractConfig allows specifying an extraction rule to extract a resource attribute from pod (or namespace)
@@ -178,10 +193,10 @@ type ExtractConfig struct {
 type FieldExtractConfig struct {
 	// TagName represents the name of the resource attribute that will be added to logs, metrics or spans.
 	// When not specified, a default tag name will be used of the format:
-	//   - k8s.pod.annotations.<annotation key>
-	//   - k8s.pod.labels.<label key>
+	//   - k8s.pod.annotations.<annotation key>  (or k8s.pod.annotation.<annotation key> when processor.k8sattributes.EmitV1K8sConventions is enabled)
+	//   - k8s.pod.labels.<label key>  (or k8s.pod.label.<label key> when processor.k8sattributes.EmitV1K8sConventions is enabled)
 	// For example, if tag_name is not specified and the key is git_sha,
-	// then the attribute name will be `k8s.pod.annotations.git_sha`.
+	// then the attribute name will be `k8s.pod.annotations.git_sha` (or `k8s.pod.annotation.git_sha` with the feature gate).
 	// When key_regex is present, tag_name supports back reference to both named capturing and positioned capturing.
 	// For example, if your pod spec contains the following labels,
 	//
@@ -197,6 +212,16 @@ type FieldExtractConfig struct {
 	//       key_regex: kubernetes.io/(.*)
 	//
 	// this will add the `component` and `version` tags to the spans or metrics.
+	// When key_regex is present without tag_name, the default tag name format will be used for each matched key.
+	// For example:
+	//
+	// extract:
+	//   labels:
+	//     - key_regex: environment\.(.*)
+	//       from: pod
+	//
+	// If labels like "environment.prod" and "environment.dev" exist, they will be extracted as
+	// k8s.pod.labels.environment.prod and k8s.pod.labels.environment.dev respectively.
 	TagName string `mapstructure:"tag_name"`
 
 	// Key represents the annotation (or label) name. This must exactly match an annotation (or label) name.
@@ -205,31 +230,8 @@ type FieldExtractConfig struct {
 	// Out of Key or KeyRegex, only one option is expected to be configured at a time.
 	KeyRegex string `mapstructure:"key_regex"`
 
-	// Regex is an optional field used to extract a sub-string from a complex field value.
-	// The supplied regular expression must contain one named parameter with the string "value"
-	// as the name. For example, if your pod spec contains the following annotation,
-	//
-	// kubernetes.io/change-cause: 2019-08-28T18:34:33Z APP_NAME=my-app GIT_SHA=58a1e39 CI_BUILD=4120
-	//
-	// and you'd like to extract the GIT_SHA and the CI_BUILD values as tags, then you must
-	// specify the following two extraction rules:
-	//
-	// extract:
-	//   annotations:
-	//     - tag_name: git.sha
-	//       key: kubernetes.io/change-cause
-	//       regex: GIT_SHA=(?P<value>\w+)
-	//     - tag_name: ci.build
-	//       key: kubernetes.io/change-cause
-	//       regex: JENKINS=(?P<value>[\w]+)
-	//
-	// this will add the `git.sha` and `ci.build` resource attributes.
-	// Deprecated: [v0.106.0] Use the `ExtractPatterns` function in the transform processor instead.
-	// More information about how to replace the regex field can be found in the k8sattributes processor readme.
-	Regex string `mapstructure:"regex"`
-
 	// From represents the source of the labels/annotations.
-	// Allowed values are "pod", "namespace", and "node". The default is pod.
+	// Allowed values are "pod", "namespace", "node", "deployment", "statefulset", "daemonset", and "job". The default is pod.
 	From string `mapstructure:"from"`
 }
 
@@ -283,6 +285,15 @@ type FilterConfig struct {
 	Labels []FieldFilterConfig `mapstructure:"labels"`
 }
 
+func (cfg *FilterConfig) Validate() error {
+	if cfg.NodeFromEnvVar != "" {
+		if _, ok := os.LookupEnv(cfg.NodeFromEnvVar); !ok {
+			return fmt.Errorf("`node_from_env_var` is configured but envvar %q is not set", cfg.NodeFromEnvVar)
+		}
+	}
+	return nil
+}
+
 // FieldFilterConfig allows specifying exactly one filter by a field.
 // It can be used to represent a label or generic field filter.
 type FieldFilterConfig struct {
@@ -306,16 +317,25 @@ type PodAssociationConfig struct {
 	// List of pod association sources which should be taken
 	// to identify pod
 	Sources []PodAssociationSourceConfig `mapstructure:"sources"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 // ExcludeConfig represent a list of Pods to exclude
 type ExcludeConfig struct {
 	Pods []ExcludePodConfig `mapstructure:"pods"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 // ExcludePodConfig represent a Pod name to ignore
 type ExcludePodConfig struct {
 	Name string `mapstructure:"name"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 type PodAssociationSourceConfig struct {
@@ -326,4 +346,7 @@ type PodAssociationSourceConfig struct {
 	// Name represents extracted key name.
 	// e.g. ip, pod_uid, k8s.pod.ip
 	Name string `mapstructure:"name"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
 }

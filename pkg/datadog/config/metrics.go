@@ -5,9 +5,12 @@ package config // import "github.com/open-telemetry/opentelemetry-collector-cont
 
 import (
 	"encoding"
+	"errors"
 	"fmt"
 
+	otlpmetrics "github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/metrics"
 	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/confmap"
 )
 
 // MetricsConfig defines the metrics exporter specific configuration options
@@ -69,6 +72,7 @@ type HistogramConfig struct {
 
 	// SendCountSum states if the export should send .sum and .count metrics for histograms.
 	// The default is false.
+	//
 	// Deprecated: [v0.75.0] Use `send_aggregation_metrics` (HistogramConfig.SendAggregations) instead.
 	SendCountSum bool `mapstructure:"send_count_sum_metrics"`
 
@@ -77,9 +81,22 @@ type HistogramConfig struct {
 	SendAggregations bool `mapstructure:"send_aggregation_metrics"`
 }
 
+var _ confmap.Marshaler = (*HistogramConfig)(nil)
+
+// Marshal emits only the canonical histogram aggregation setting.
+func (c HistogramConfig) Marshal(conf *confmap.Conf) error {
+	return conf.Marshal(struct {
+		Mode             HistogramMode `mapstructure:"mode"`
+		SendAggregations bool          `mapstructure:"send_aggregation_metrics"`
+	}{
+		Mode:             c.Mode,
+		SendAggregations: c.SendAggregations,
+	})
+}
+
 func (c *HistogramConfig) validate() error {
 	if c.Mode == HistogramModeNoBuckets && !c.SendAggregations {
-		return fmt.Errorf("'nobuckets' mode and `send_aggregation_metrics` set to false will send no histogram metrics")
+		return errors.New("'nobuckets' mode and `send_aggregation_metrics` set to false will send no histogram metrics")
 	}
 	return nil
 }
@@ -185,7 +202,7 @@ func (sm *SummaryMode) UnmarshalText(in []byte) error {
 
 // SummaryConfig customizes export of OTLP Summaries.
 type SummaryConfig struct {
-	// Mode is the the mode for exporting OTLP Summaries.
+	// Mode is the mode for exporting OTLP Summaries.
 	// Valid values are 'noquantiles' or 'gauges'.
 	//  - 'noquantiles' sends no `.quantile` metrics. `.sum` and `.count` metrics will still be sent.
 	//  - 'gauges' sends `.quantile` metrics as gauges tagged by the quantile.
@@ -193,6 +210,8 @@ type SummaryConfig struct {
 	// The default is 'gauges'.
 	// See https://docs.datadoghq.com/metrics/otlp/?tab=summary#mapping for details and examples.
 	Mode SummaryMode `mapstructure:"mode"`
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 // MetricsExporterConfig provides options for a user to customize the behavior of the
@@ -205,4 +224,41 @@ type MetricsExporterConfig struct {
 	// InstrumentationScopeMetadataAsTags, if set to true, adds the name and version of the
 	// instrumentation scope that created a metric to the metric tags
 	InstrumentationScopeMetadataAsTags bool `mapstructure:"instrumentation_scope_metadata_as_tags"`
+	// prevent unkeyed literal initialization
+	_ struct{}
+}
+
+// ToTranslatorOpts returns a list of metrics translator options from the metrics config
+func (mcfg MetricsConfig) ToTranslatorOpts() []otlpmetrics.TranslatorOption {
+	options := []otlpmetrics.TranslatorOption{
+		otlpmetrics.WithDeltaTTL(mcfg.DeltaTTL),
+	}
+
+	if mcfg.HistConfig.SendAggregations {
+		options = append(options, otlpmetrics.WithHistogramAggregations())
+	}
+
+	if mcfg.SummaryConfig.Mode == SummaryModeGauges {
+		options = append(options, otlpmetrics.WithQuantiles())
+	}
+
+	if mcfg.ExporterConfig.InstrumentationScopeMetadataAsTags {
+		options = append(options, otlpmetrics.WithInstrumentationScopeMetadataAsTags())
+	}
+
+	options = append(options, otlpmetrics.WithHistogramMode(otlpmetrics.HistogramMode(mcfg.HistConfig.Mode)))
+
+	var numberMode otlpmetrics.NumberMode
+	switch mcfg.SumConfig.CumulativeMonotonicMode {
+	case CumulativeMonotonicSumModeRawValue:
+		numberMode = otlpmetrics.NumberModeRawValue
+	case CumulativeMonotonicSumModeToDelta:
+		numberMode = otlpmetrics.NumberModeCumulativeToDelta
+	}
+	options = append(options,
+		otlpmetrics.WithNumberMode(numberMode),
+		otlpmetrics.WithInitialCumulMonoValueMode(
+			otlpmetrics.InitialCumulMonoValueMode(mcfg.SumConfig.InitialCumulativeMonotonicMode)))
+
+	return options
 }

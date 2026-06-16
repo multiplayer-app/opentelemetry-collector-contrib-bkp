@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-telemetry/otel-arrow/pkg/config"
+	"github.com/open-telemetry/otel-arrow/go/pkg/config"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
-	"go.opentelemetry.io/collector/exporter/exporterbatcher"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"google.golang.org/grpc"
 
@@ -27,16 +28,12 @@ type Config struct {
 	// inherited from exporterhelper using field names
 	// intentionally identical to the core OTLP exporter.
 
-	TimeoutSettings exporterhelper.TimeoutConfig `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
-	QueueSettings   exporterhelper.QueueConfig   `mapstructure:"sending_queue"`
+	TimeoutSettings exporterhelper.TimeoutConfig                             `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
+	QueueSettings   configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:"sending_queue"`
 
 	RetryConfig configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 
 	configgrpc.ClientConfig `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
-
-	// Experimental: This configuration is at the early stage of development and may change without backward compatibility
-	// until https://github.com/open-telemetry/opentelemetry-collector/issues/8122 is resolved
-	BatcherConfig exporterbatcher.Config `mapstructure:"batcher"`
 
 	// Arrow includes settings specific to OTel Arrow.
 	Arrow ArrowConfig `mapstructure:"arrow"`
@@ -106,7 +103,7 @@ type ArrowConfig struct {
 
 var _ component.Config = (*Config)(nil)
 
-var _ component.ConfigValidator = (*ArrowConfig)(nil)
+var _ xconfmap.Validator = (*ArrowConfig)(nil)
 
 func (cfg *Config) Validate() error {
 	err := cfg.Arrow.Validate()
@@ -163,5 +160,5 @@ func (cfg *ArrowConfig) toArrowProducerOptions() (arrowOpts []config.Option) {
 	default:
 		// Should have failed in validate, nothing we can do.
 	}
-	return
+	return arrowOpts
 }

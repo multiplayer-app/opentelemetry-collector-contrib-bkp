@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/zipkinreceiver/internal/metadata"
 )
@@ -34,7 +36,10 @@ func TestLoadConfig(t *testing.T) {
 			id: component.NewIDWithName(metadata.Type, "customname"),
 			expected: &Config{
 				ServerConfig: confighttp.ServerConfig{
-					Endpoint: "localhost:8765",
+					NetAddr: confignet.AddrConfig{
+						Transport: "tcp",
+						Endpoint:  "localhost:8765",
+					},
 				},
 				ParseStringTags: false,
 			},
@@ -43,7 +48,10 @@ func TestLoadConfig(t *testing.T) {
 			id: component.NewIDWithName(metadata.Type, "parse_strings"),
 			expected: &Config{
 				ServerConfig: confighttp.ServerConfig{
-					Endpoint: defaultBindEndpoint,
+					NetAddr: confignet.AddrConfig{
+						Transport: "tcp",
+						Endpoint:  defaultHTTPEndpoint,
+					},
 				},
 				ParseStringTags: true,
 			},
@@ -59,7 +67,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}

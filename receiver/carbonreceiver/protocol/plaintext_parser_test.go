@@ -201,9 +201,9 @@ func TestPlaintextParser_parsePath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &PlaintextPathParser{}
-			got := ParsedPath{}
-			err := p.ParsePath(tt.path, &got)
+			p := &plaintextPathParser{}
+			got := parsedPath{}
+			err := p.parsePath(tt.path, &got)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -247,7 +247,7 @@ func buildDoubleMetric(
 ) pmetric.Metric {
 	m := pmetric.NewMetric()
 	m.SetName(name)
-	var dp pmetric.NumberDataPoint = m.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
 	dp.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 	_ = dp.Attributes().FromRaw(attributes)
 	dp.SetDoubleValue(value)

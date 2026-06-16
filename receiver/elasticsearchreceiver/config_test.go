@@ -4,7 +4,6 @@
 package elasticsearchreceiver
 
 import (
-	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,10 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configauth"
 	"go.opentelemetry.io/collector/config/confighttp"
-	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/elasticsearchreceiver/internal/metadata"
 )
@@ -34,7 +35,7 @@ func TestValidateCredentials(t *testing.T) {
 
 				cfg := NewFactory().CreateDefaultConfig().(*Config)
 				cfg.Username = "user"
-				require.ErrorIs(t, component.ValidateConfig(cfg), errPasswordNotSpecified)
+				require.ErrorIs(t, xconfmap.Validate(cfg), errPasswordNotSpecified)
 			},
 		},
 		{
@@ -44,7 +45,7 @@ func TestValidateCredentials(t *testing.T) {
 
 				cfg := NewFactory().CreateDefaultConfig().(*Config)
 				cfg.Password = "pass"
-				require.ErrorIs(t, component.ValidateConfig(cfg), errUsernameNotSpecified)
+				require.ErrorIs(t, xconfmap.Validate(cfg), errUsernameNotSpecified)
 			},
 		},
 		{
@@ -55,7 +56,7 @@ func TestValidateCredentials(t *testing.T) {
 				cfg := NewFactory().CreateDefaultConfig().(*Config)
 				cfg.Username = "user"
 				cfg.Password = "pass"
-				require.NoError(t, component.ValidateConfig(cfg))
+				require.NoError(t, xconfmap.Validate(cfg))
 			},
 		},
 		{
@@ -64,7 +65,7 @@ func TestValidateCredentials(t *testing.T) {
 				t.Parallel()
 
 				cfg := NewFactory().CreateDefaultConfig().(*Config)
-				require.NoError(t, component.ValidateConfig(cfg))
+				require.NoError(t, xconfmap.Validate(cfg))
 			},
 		},
 	}
@@ -125,7 +126,7 @@ func TestValidateEndpoint(t *testing.T) {
 			cfg := NewFactory().CreateDefaultConfig().(*Config)
 			cfg.Endpoint = testCase.rawURL
 
-			err := component.ValidateConfig(cfg)
+			err := xconfmap.Validate(cfg)
 
 			switch {
 			case testCase.expectedErr != nil:
@@ -140,17 +141,12 @@ func TestValidateEndpoint(t *testing.T) {
 }
 
 func TestLoadConfig(t *testing.T) {
-	defaultMaxIdleConns := http.DefaultTransport.(*http.Transport).MaxIdleConns
-	defaultMaxIdleConnsPerHost := http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost
-	defaultMaxConnsPerHost := http.DefaultTransport.(*http.Transport).MaxConnsPerHost
-	defaultIdleConnTimeout := http.DefaultTransport.(*http.Transport).IdleConnTimeout
-
 	t.Parallel()
 
 	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
 	require.NoError(t, err)
 
-	defaultMetrics := metadata.DefaultMetricsBuilderConfig()
+	defaultMetrics := metadata.NewDefaultMetricsBuilderConfig()
 	defaultMetrics.Metrics.ElasticsearchNodeFsDiskAvailable.Enabled = false
 	tests := []struct {
 		id       component.ID
@@ -173,15 +169,12 @@ func TestLoadConfig(t *testing.T) {
 				MetricsBuilderConfig: defaultMetrics,
 				Username:             "otel",
 				Password:             "password",
-				ClientConfig: confighttp.ClientConfig{
-					Timeout:             10000000000,
-					Endpoint:            "http://example.com:9200",
-					Headers:             map[string]configopaque.String{},
-					MaxIdleConns:        &defaultMaxIdleConns,
-					MaxIdleConnsPerHost: &defaultMaxIdleConnsPerHost,
-					MaxConnsPerHost:     &defaultMaxConnsPerHost,
-					IdleConnTimeout:     &defaultIdleConnTimeout,
-				},
+				ClientConfig: func() confighttp.ClientConfig {
+					client := confighttp.NewDefaultClientConfig()
+					client.Timeout = 10000000000
+					client.Endpoint = "http://example.com:9200"
+					return client
+				}(),
 			},
 		},
 	}
@@ -195,8 +188,19 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
-			if diff := cmp.Diff(tt.expected, cfg, cmpopts.IgnoreUnexported(metadata.MetricConfig{}), cmpopts.IgnoreUnexported(metadata.ResourceAttributeConfig{})); diff != "" {
+			assert.NoError(t, xconfmap.Validate(cfg))
+			if diff := cmp.Diff(
+				tt.expected,
+				cfg,
+				cmp.FilterPath(
+					func(fp cmp.Path) bool {
+						return fp.Last().String() == ".enabledSetByUser"
+					},
+					cmp.Ignore(),
+				),
+				cmpopts.IgnoreUnexported(configoptional.Optional[configauth.Config]{}),
+				cmpopts.IgnoreUnexported(configoptional.Optional[confighttp.CookiesConfig]{}),
+				cmpopts.IgnoreUnexported(metadata.ResourceAttributeConfig{})); diff != "" {
 				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
 			}
 		})

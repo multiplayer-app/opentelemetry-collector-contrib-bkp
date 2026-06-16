@@ -12,7 +12,9 @@ import (
 	"go.opentelemetry.io/collector/config/configopaque"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/receiver/xreceiver"
+	"go.opentelemetry.io/collector/scraper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/splunkenterprisereceiver/internal/metadata"
 )
@@ -25,8 +27,8 @@ const (
 func createDefaultConfig() component.Config {
 	// Default HttpClient settings
 	httpCfg := confighttp.NewDefaultClientConfig()
-	httpCfg.Headers = map[string]configopaque.String{
-		"Content-Type": "application/x-www-form-urlencoded",
+	httpCfg.Headers = configopaque.MapList{
+		{Name: "Content-Type", Value: "application/x-www-form-urlencoded"},
 	}
 	httpCfg.Timeout = defaultMaxSearchWaitTime
 
@@ -40,15 +42,17 @@ func createDefaultConfig() component.Config {
 		SHEndpoint:           httpCfg,
 		CMEndpoint:           httpCfg,
 		ControllerConfig:     scfg,
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
+		VersionInfo:          false,
 	}
 }
 
 func NewFactory() receiver.Factory {
-	return receiver.NewFactory(
+	return xreceiver.NewFactory(
 		metadata.Type,
 		createDefaultConfig,
-		receiver.WithMetrics(createMetricsReceiver, metadata.MetricsStability),
+		xreceiver.WithMetrics(createMetricsReceiver, metadata.MetricsStability),
+		xreceiver.WithDeprecatedTypeAlias(metadata.DeprecatedType),
 	)
 }
 
@@ -61,17 +65,17 @@ func createMetricsReceiver(
 	cfg := baseCfg.(*Config)
 	splunkScraper := newSplunkMetricsScraper(params, cfg)
 
-	scraper, err := scraperhelper.NewScraper(metadata.Type,
+	s, err := scraper.NewMetrics(
 		splunkScraper.scrape,
-		scraperhelper.WithStart(splunkScraper.start))
+		scraper.WithStart(splunkScraper.start))
 	if err != nil {
 		return nil, err
 	}
 
-	return scraperhelper.NewScraperControllerReceiver(
+	return scraperhelper.NewMetricsController(
 		&cfg.ControllerConfig,
 		params,
 		consumer,
-		scraperhelper.AddScraper(scraper),
+		scraperhelper.AddMetricsScraper(metadata.Type, s),
 	)
 }

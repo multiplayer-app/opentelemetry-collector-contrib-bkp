@@ -4,172 +4,334 @@
 package kafkaexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter"
 
 import (
+	"errors"
 	"fmt"
-	"time"
+	"maps"
+	"slices"
 
-	"github.com/IBM/sarama"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/kafka"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter/internal/kafkaclient"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 )
-
-// Config defines configuration for Kafka exporter.
-type Config struct {
-	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
-	QueueSettings             exporterhelper.QueueConfig   `mapstructure:"sending_queue"`
-	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-
-	// The list of kafka brokers (default localhost:9092)
-	Brokers []string `mapstructure:"brokers"`
-
-	// ResolveCanonicalBootstrapServersOnly makes Sarama do a DNS lookup for
-	// each of the provided brokers. It will then do a PTR lookup for each
-	// returned IP, and that set of names becomes the broker list. This can be
-	// required in SASL environments.
-	ResolveCanonicalBootstrapServersOnly bool `mapstructure:"resolve_canonical_bootstrap_servers_only"`
-
-	// Kafka protocol version
-	ProtocolVersion string `mapstructure:"protocol_version"`
-
-	// ClientID to configure the Kafka client with. This can be leveraged by
-	// Kafka to enforce ACLs, throttling quotas, and more.
-	ClientID string `mapstructure:"client_id"`
-
-	// The name of the kafka topic to export to (default otlp_spans for traces, otlp_metrics for metrics)
-	Topic string `mapstructure:"topic"`
-
-	// TopicFromAttribute is the name of the attribute to use as the topic name.
-	TopicFromAttribute string `mapstructure:"topic_from_attribute"`
-
-	// Encoding of messages (default "otlp_proto")
-	Encoding string `mapstructure:"encoding"`
-
-	// PartitionTracesByID sets the message key of outgoing trace messages to the trace ID.
-	// Please note: does not have any effect on Jaeger encoding exporters since Jaeger exporters include
-	// trace ID as the message key by default.
-	PartitionTracesByID bool `mapstructure:"partition_traces_by_id"`
-
-	PartitionMetricsByResourceAttributes bool `mapstructure:"partition_metrics_by_resource_attributes"`
-
-	PartitionLogsByResourceAttributes bool `mapstructure:"partition_logs_by_resource_attributes"`
-
-	// Metadata is the namespace for metadata management properties used by the
-	// Client, and shared by the Producer/Consumer.
-	Metadata Metadata `mapstructure:"metadata"`
-
-	// Producer is the namespaces for producer properties used only by the Producer
-	Producer Producer `mapstructure:"producer"`
-
-	// Authentication defines used authentication mechanism.
-	Authentication kafka.Authentication `mapstructure:"auth"`
-}
-
-// Metadata defines configuration for retrieving metadata from the broker.
-type Metadata struct {
-	// Whether to maintain a full set of metadata for all topics, or just
-	// the minimal set that has been necessary so far. The full set is simpler
-	// and usually more convenient, but can take up a substantial amount of
-	// memory if you have many topics and partitions. Defaults to true.
-	Full bool `mapstructure:"full"`
-
-	// Retry configuration for metadata.
-	// This configuration is useful to avoid race conditions when broker
-	// is starting at the same time as collector.
-	Retry MetadataRetry `mapstructure:"retry"`
-}
-
-// Producer defines configuration for producer
-type Producer struct {
-	// Maximum message bytes the producer will accept to produce.
-	MaxMessageBytes int `mapstructure:"max_message_bytes"`
-
-	// RequiredAcks Number of acknowledgements required to assume that a message has been sent.
-	// https://pkg.go.dev/github.com/IBM/sarama@v1.30.0#RequiredAcks
-	// The options are:
-	//   0 -> NoResponse.  doesn't send any response
-	//   1 -> WaitForLocal. waits for only the local commit to succeed before responding ( default )
-	//   -1 -> WaitForAll. waits for all in-sync replicas to commit before responding.
-	RequiredAcks sarama.RequiredAcks `mapstructure:"required_acks"`
-
-	// Compression Codec used to produce messages
-	// https://pkg.go.dev/github.com/IBM/sarama@v1.30.0#CompressionCodec
-	// The options are: 'none', 'gzip', 'snappy', 'lz4', and 'zstd'
-	Compression string `mapstructure:"compression"`
-
-	// The maximum number of messages the producer will send in a single
-	// broker request. Defaults to 0 for unlimited. Similar to
-	// `queue.buffering.max.messages` in the JVM producer.
-	FlushMaxMessages int `mapstructure:"flush_max_messages"`
-}
-
-// MetadataRetry defines retry configuration for Metadata.
-type MetadataRetry struct {
-	// The total number of times to retry a metadata request when the
-	// cluster is in the middle of a leader election or at startup (default 3).
-	Max int `mapstructure:"max"`
-	// How long to wait for leader election to occur before retrying
-	// (default 250ms). Similar to the JVM's `retry.backoff.ms`.
-	Backoff time.Duration `mapstructure:"backoff"`
-}
 
 var _ component.Config = (*Config)(nil)
 
-// Validate checks if the exporter configuration is valid
-func (cfg *Config) Validate() error {
-	if cfg.Producer.RequiredAcks < -1 || cfg.Producer.RequiredAcks > 1 {
-		return fmt.Errorf("producer.required_acks has to be between -1 and 1. configured value %v", cfg.Producer.RequiredAcks)
-	}
+var (
+	errRecordPartitionerMultipleSet = errors.New("at most one record_partitioner strategy may be configured")
+	errRecordPartitionerMissing     = errors.New("no partitioner type configured")
+)
 
-	_, err := saramaProducerCompressionCodec(cfg.Producer.Compression)
-	if err != nil {
-		return err
-	}
+var errLogsPartitionExclusive = errors.New(
+	"partition_logs_by_resource_attributes and partition_logs_by_trace_id cannot both be enabled",
+)
 
-	return validateSASLConfig(cfg.Authentication.SASL)
+var (
+	errTracesMessageKeyExclusive        = errors.New("traces::message_key_from_metadata_key cannot be combined with partition_traces_by_id")
+	errMetricsMessageKeyExclusive       = errors.New("metrics::message_key_from_metadata_key cannot be combined with partition_metrics_by_resource_attributes")
+	errLogsMessageKeyExclusive          = errors.New("logs::message_key_from_metadata_key cannot be combined with partition_logs_by_resource_attributes or partition_logs_by_trace_id")
+	errMessageKeyMetadataKeyNotIncluded = errors.New("message_key_from_metadata_key must be present in sending_queue::batch::partition::metadata_keys if batching is enabled")
+)
+
+var (
+	errTopicMetadataKeyNotIncluded        = errors.New("topic_from_metadata_key must be present in sending_queue::batch::partition::metadata_keys if batching is enabled")
+	errBatchPartitionMetadataKeysRequired = errors.New("sending_queue::batch::partition::metadata_keys must be configured when include_metadata_keys is set and batching is enabled")
+	errIncludeMetadataKeysNotPartitioned  = errors.New("sending_queue::batch::partition::metadata_keys must include all include_metadata_keys values")
+)
+
+const (
+	HasherSaramaCompat = "sarama_compat"
+	HasherMurmur2      = "murmur2"
+)
+
+// RecordPartitionerConfig configures the strategy used to assign Kafka records to partitions.
+// At most one field should be set.
+type RecordPartitionerConfig struct {
+	// StickyKey uses StickyKeyPartitioner.
+	// When a record key is set, the partition is derived from the key hash.
+	StickyKey *StickyKeyPartitionerConfig `mapstructure:"sticky_key"`
+
+	// RoundRobin distributes records evenly across all available partitions in round-robin order.
+	RoundRobin *struct{} `mapstructure:"round_robin"`
+
+	// LeastBackup routes each record to the partition with the fewest buffered records.
+	LeastBackup *struct{} `mapstructure:"least_backup"`
+
+	// Extension is the component ID of an extension implementing RecordPartitionerExtension.
+	// Setting this field delegates partition assignment to that extension.
+	Extension *component.ID `mapstructure:"extension"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
-func validateSASLConfig(c *kafka.SASLConfig) error {
-	if c == nil {
+// StickyKeyPartitionerConfig configures the StickyKeyPartitioner.
+type StickyKeyPartitionerConfig struct {
+	// Hasher is the hash algorithm used for key-based partition assignment.
+	// Valid values: "sarama_compat" (default).
+	//   - "sarama_compat": Sarama-compatible FNV-1a hashing (SaramaCompatHasher).
+	//   - "murmur2": Murmur2 hashing.
+	Hasher string `mapstructure:"hasher"`
+
+	// prevent unkeyed literal initialization
+	_ struct{}
+}
+
+func (c *StickyKeyPartitionerConfig) Validate() error {
+	switch c.Hasher {
+	case HasherSaramaCompat, HasherMurmur2:
 		return nil
-	}
-
-	if c.Username == "" {
-		return fmt.Errorf("auth.sasl.username is required")
-	}
-
-	if c.Password == "" {
-		return fmt.Errorf("auth.sasl.password is required")
-	}
-
-	switch c.Mechanism {
-	case "PLAIN", "AWS_MSK_IAM", "SCRAM-SHA-256", "SCRAM-SHA-512":
-		// Do nothing, valid mechanism
 	default:
-		return fmt.Errorf("auth.sasl.mechanism should be one of 'PLAIN', 'AWS_MSK_IAM', 'SCRAM-SHA-256' or 'SCRAM-SHA-512'. configured value %v", c.Mechanism)
+		return fmt.Errorf("sticky_key: unknown hasher %q, valid values are %q, %q",
+			c.Hasher, HasherSaramaCompat, HasherMurmur2)
 	}
+}
 
-	if c.Version < 0 || c.Version > 1 {
-		return fmt.Errorf("auth.sasl.version has to be either 0 or 1. configured value %v", c.Version)
+func (c *RecordPartitionerConfig) Validate() error {
+	set := 0
+	if c.StickyKey != nil {
+		set++
+	}
+	if c.RoundRobin != nil {
+		set++
+	}
+	if c.LeastBackup != nil {
+		set++
+	}
+	if c.Extension != nil {
+		set++
+	}
+	if set > 1 {
+		return errRecordPartitionerMultipleSet
+	}
+	if set == 0 {
+		return errRecordPartitionerMissing
+	}
+	if c.StickyKey != nil {
+		return c.StickyKey.Validate()
 	}
 
 	return nil
 }
 
-func saramaProducerCompressionCodec(compression string) (sarama.CompressionCodec, error) {
-	switch compression {
-	case "none":
-		return sarama.CompressionNone, nil
-	case "gzip":
-		return sarama.CompressionGZIP, nil
-	case "snappy":
-		return sarama.CompressionSnappy, nil
-	case "lz4":
-		return sarama.CompressionLZ4, nil
-	case "zstd":
-		return sarama.CompressionZSTD, nil
-	default:
-		return sarama.CompressionNone, fmt.Errorf("producer.compression should be one of 'none', 'gzip', 'snappy', 'lz4', or 'zstd'. configured value %v", compression)
+func (c *RecordPartitionerConfig) Unmarshal(conf *confmap.Conf) error {
+	if len(conf.ToStringMap()) == 0 {
+		// no partitioner configured, will use default.
+		return nil
 	}
+	*c = RecordPartitionerConfig{}
+	return conf.Unmarshal(c)
+}
+
+// Config defines configuration for Kafka exporter.
+type Config struct {
+	TimeoutSettings           exporterhelper.TimeoutConfig                             `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
+	QueueBatchConfig          configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:"sending_queue"`
+	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
+	configkafka.ClientConfig  `mapstructure:",squash"`
+	Producer                  configkafka.ProducerConfig `mapstructure:"producer"`
+
+	// Logs holds configuration about how logs should be sent to Kafka.
+	Logs SignalConfig `mapstructure:"logs"`
+
+	// Metrics holds configuration about how metrics should be sent to Kafka.
+	Metrics SignalConfig `mapstructure:"metrics"`
+
+	// Traces holds configuration about how traces should be sent to Kafka.
+	Traces SignalConfig `mapstructure:"traces"`
+
+	// Profiles holds configuration about how profiles should be sent to Kafka.
+	Profiles SignalConfig `mapstructure:"profiles"`
+
+	// IncludeMetadataKeys indicates the receiver's client metadata keys to propagate as Kafka message headers.
+	IncludeMetadataKeys []string `mapstructure:"include_metadata_keys"`
+
+	// RecordHeaders sets static headers on every outgoing Kafka record.
+	RecordHeaders []kafkaclient.RecordHeader `mapstructure:"record_headers"`
+
+	// TopicFromAttribute is the name of the attribute to use as the topic name.
+	TopicFromAttribute string `mapstructure:"topic_from_attribute"`
+
+	// PartitionTracesByID sets the message key of outgoing trace messages to the trace ID.
+	//
+	// NOTE: this does not have any effect for Jaeger encodings. Jaeger encodings always use
+	// use the trace ID for the message key.
+	PartitionTracesByID bool `mapstructure:"partition_traces_by_id"`
+
+	// PartitionMetricsByResourceAttributes controls the partitioning of metrics messages by
+	// resource. If this is true, then the message key will be set to a hash of the resource's
+	// identifying attributes.
+	PartitionMetricsByResourceAttributes bool `mapstructure:"partition_metrics_by_resource_attributes"`
+
+	// PartitionLogsByResourceAttributes controls the partitioning of logs messages by resource.
+	// If this is true, then the message key will be set to a hash of the resource's identifying
+	// attributes.
+	PartitionLogsByResourceAttributes bool `mapstructure:"partition_logs_by_resource_attributes"`
+
+	// PartitionLogsByTraceID controls partitioning of log messages by trace ID only.
+	// When enabled, the exporter splits incoming logs per TraceID (using SplitLogs)
+	// and sets the Kafka message key to the 16-byte hex string of that TraceID.
+	// If a LogRecord has an empty TraceID, the key may be empty and partition
+	// selection falls back to the Kafka client’s default strategy. Resource
+	// attributes are not used for the key when this option is enabled.
+	PartitionLogsByTraceID bool `mapstructure:"partition_logs_by_trace_id"`
+
+	// RecordPartitioner configures how Kafka records are assigned to partitions.
+	// The default ("sarama_compatible") retains the legacy Sarama-compatible hashing
+	// behavior. Set to "sticky", "round_robin", or "least_backup" to use one of the
+	// built-in franz-go partitioners, or "extension" to delegate to a custom extension.
+	RecordPartitioner RecordPartitionerConfig `mapstructure:"record_partitioner"`
+}
+
+func (c *Config) Validate() error {
+	if c.PartitionLogsByResourceAttributes && c.PartitionLogsByTraceID {
+		return errLogsPartitionExclusive
+	}
+	if c.Traces.MessageKeyFromMetadataKey != "" && c.PartitionTracesByID {
+		return errTracesMessageKeyExclusive
+	}
+	if c.Metrics.MessageKeyFromMetadataKey != "" && c.PartitionMetricsByResourceAttributes {
+		return errMetricsMessageKeyExclusive
+	}
+	if c.Logs.MessageKeyFromMetadataKey != "" && (c.PartitionLogsByResourceAttributes || c.PartitionLogsByTraceID) {
+		return errLogsMessageKeyExclusive
+	}
+	if err := c.RecordPartitioner.Validate(); err != nil {
+		return fmt.Errorf("record_partitioner: %w", err)
+	}
+	if err := validateBatchPartitionerKeys(c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SignalConfig holds signal-specific configuration for the Kafka exporter.
+type SignalConfig struct {
+	// Topic holds the name of the Kafka topic to which messages of the
+	// signal type should be produced.
+	//
+	// The default depends on the signal type:
+	//  - "otlp_spans" for traces
+	//  - "otlp_metrics" for metrics
+	//  - "otlp_logs" for logs
+	//  - "otlp_profiles" for profiles
+	Topic string `mapstructure:"topic"`
+
+	// TopicFromMetadataKey holds the name of the metadata key to use as the
+	// topic name for this signal type. If this is set, it takes precedence
+	// over the topic name set in the topic field.
+	TopicFromMetadataKey string `mapstructure:"topic_from_metadata_key"`
+
+	// MessageKeyFromMetadataKey holds the name of the metadata key whose value
+	// will be used as the Kafka record key for this signal type. If the metadata
+	// key is absent or empty the record key is left nil.
+	// Mutually exclusive with the partition_* flags for the same signal.
+	MessageKeyFromMetadataKey string `mapstructure:"message_key_from_metadata_key"`
+
+	// Encoding holds the encoding of messages for the signal type.
+	//
+	// Defaults to "otlp_proto".
+	Encoding string `mapstructure:"encoding"`
+}
+
+// validateBatchPartitionerKeys validates the partition keys if sending_queue::batch is enabled.
+// The exporter relies on a few client metadata keys to be present, if configured, in the final
+// batch that needs to be exported, however, since batching removes all client metadata keys by
+// default we need to ensure proper partitioning is configured to keep the required metadata.
+func validateBatchPartitionerKeys(c *Config) error {
+	if !isBatchingEnabled(c.QueueBatchConfig) {
+		return nil
+	}
+
+	partitionMetadataKeys := c.QueueBatchConfig.Get().Batch.Get().Partition.MetadataKeys
+	partitionMetadataKeySet := make(map[string]struct{}, len(partitionMetadataKeys))
+	for _, key := range partitionMetadataKeys {
+		partitionMetadataKeySet[key] = struct{}{}
+	}
+
+	// Validate if include_metadata_keys are included in partition keys
+	if len(c.IncludeMetadataKeys) != 0 {
+		if len(partitionMetadataKeys) == 0 {
+			return errBatchPartitionMetadataKeysRequired
+		}
+		for _, includeKey := range c.IncludeMetadataKeys {
+			if _, ok := partitionMetadataKeySet[includeKey]; !ok {
+				return fmt.Errorf("%w: missing %q from sending_queue::batch::partition::metadata_keys=%v",
+					errIncludeMetadataKeysNotPartitioned,
+					includeKey,
+					partitionMetadataKeys,
+				)
+			}
+		}
+	}
+
+	// Validate if topic_from_metadata_key is included in partition_keys
+	if err := validateTopicFromMetadataKey(c.Logs.TopicFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("logs::topic_from_metadata_key: %w", err)
+	}
+	if err := validateTopicFromMetadataKey(c.Metrics.TopicFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("metrics::topic_from_metadata_key: %w", err)
+	}
+	if err := validateTopicFromMetadataKey(c.Traces.TopicFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("traces::topic_from_metadata_key: %w", err)
+	}
+	if err := validateTopicFromMetadataKey(c.Profiles.TopicFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("profiles::topic_from_metadata_key: %w", err)
+	}
+
+	// Validate if message_key_from_metadata_key is included in partition_keys
+	if err := validateMessageKeyFromMetadataKey(c.Logs.MessageKeyFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("logs::message_key_from_metadata_key: %w", err)
+	}
+	if err := validateMessageKeyFromMetadataKey(c.Metrics.MessageKeyFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("metrics::message_key_from_metadata_key: %w", err)
+	}
+	if err := validateMessageKeyFromMetadataKey(c.Traces.MessageKeyFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("traces::message_key_from_metadata_key: %w", err)
+	}
+	if err := validateMessageKeyFromMetadataKey(c.Profiles.MessageKeyFromMetadataKey, partitionMetadataKeySet); err != nil {
+		return fmt.Errorf("profiles::message_key_from_metadata_key: %w", err)
+	}
+
+	return nil
+}
+
+func isBatchingEnabled(queueBatchConfig configoptional.Optional[exporterhelper.QueueBatchConfig]) bool {
+	if !queueBatchConfig.HasValue() {
+		return false
+	}
+
+	return queueBatchConfig.Get().Batch.HasValue()
+}
+
+func validateTopicFromMetadataKey(topicFromMetadataKey string, partitionKeysSet map[string]struct{}) error {
+	if topicFromMetadataKey == "" {
+		return nil
+	}
+	if _, ok := partitionKeysSet[topicFromMetadataKey]; !ok {
+		return fmt.Errorf("%w: %q not found in partition keys=%v",
+			errTopicMetadataKeyNotIncluded,
+			topicFromMetadataKey,
+			slices.Collect(maps.Keys(partitionKeysSet)),
+		)
+	}
+	return nil
+}
+
+func validateMessageKeyFromMetadataKey(messageKeyFromMetadataKey string, partitionKeysSet map[string]struct{}) error {
+	if messageKeyFromMetadataKey == "" {
+		return nil
+	}
+	if _, ok := partitionKeysSet[messageKeyFromMetadataKey]; !ok {
+		return fmt.Errorf("%w: %q not found in partition keys=%v",
+			errMessageKeyMetadataKeyNotIncluded,
+			messageKeyFromMetadataKey,
+			slices.Collect(maps.Keys(partitionKeysSet)),
+		)
+	}
+	return nil
 }

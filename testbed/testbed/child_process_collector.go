@@ -13,16 +13,20 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"testing"
 	"text/template"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/process"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 )
 
 // childProcessCollector implements the OtelcolRunner interface as a child process on the same machine executing
@@ -112,12 +116,13 @@ func WithEnvVar(k, v string) ChildProcessOption {
 	}
 }
 
-func (cp *childProcessCollector) PrepareConfig(configStr string) (configCleanup func(), err error) {
+func (cp *childProcessCollector) PrepareConfig(t *testing.T, configStr string) (configCleanup func(), err error) {
 	configCleanup = func() {
 		// NoOp
 	}
+
 	var file *os.File
-	file, err = os.CreateTemp("", "agent*.yaml")
+	file, err = os.CreateTemp(testutil.TempDir(t), "agent*.yaml")
 	if err != nil {
 		log.Printf("%s", err)
 		return configCleanup, err
@@ -176,7 +181,6 @@ func expandExeFileName(exeName string) string {
 // the process to.
 // cmdArgs is the command line arguments to pass to the process.
 func (cp *childProcessCollector) Start(params StartParams) error {
-
 	cp.name = params.Name
 	cp.doneSignal = make(chan struct{})
 	cp.resourceSpec = params.resourceSpec
@@ -210,8 +214,7 @@ func (cp *childProcessCollector) Start(params StartParams) error {
 				return err
 			}
 		}
-		args = append(args, "--config")
-		args = append(args, cp.configFileName)
+		args = append(args, "--config", cp.configFileName)
 	}
 	// #nosec
 	cp.cmd = exec.Command(exePath, args...)
@@ -249,7 +252,6 @@ func (cp *childProcessCollector) Stop() (stopped bool, err error) {
 		return false, nil
 	}
 	cp.stopOnce.Do(func() {
-
 		if !cp.isStarted {
 			// Process wasn't started, nothing to stop.
 			return
@@ -336,12 +338,12 @@ func (cp *childProcessCollector) WatchResourceConsumption() error {
 	for start := time.Now(); time.Since(start) < time.Minute; {
 		cp.fetchRAMUsage()
 		cp.fetchCPUUsage()
-		if err := cp.checkAllowedResourceUsage(); err != nil {
-			log.Printf("Allowed usage of resources is too high before test starts wait for one second : %v", err)
-			time.Sleep(time.Second)
-		} else {
+		err := cp.checkAllowedResourceUsage()
+		if err == nil {
 			break
 		}
+		log.Printf("Allowed usage of resources is too high before test starts wait for one second : %v", err)
+		time.Sleep(time.Second)
 	}
 
 	remainingFailures := cp.resourceSpec.MaxConsecutiveFailures
@@ -468,7 +470,10 @@ func (cp *childProcessCollector) GetResourceConsumption() string {
 
 // GetTotalConsumption returns total resource consumption since start of process
 func (cp *childProcessCollector) GetTotalConsumption() *ResourceConsumption {
-	rc := &ResourceConsumption{}
+	rc := &ResourceConsumption{
+		CPUPercentLimit: float64(cp.resourceSpec.ExpectedMaxCPU),
+		RAMMiBLimit:     cp.resourceSpec.ExpectedMaxRAM,
+	}
 
 	if cp.processMon != nil {
 		// Get total elapsed time since process start
@@ -491,12 +496,7 @@ func (cp *childProcessCollector) GetTotalConsumption() *ResourceConsumption {
 }
 
 func containsConfig(s []string) bool {
-	for _, a := range s {
-		if a == "--config" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, "--config")
 }
 
 // Copied from cpu.TimesStat.Total(), since that func is deprecated.

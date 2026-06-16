@@ -11,58 +11,75 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componentstatus"
+	"go.opentelemetry.io/collector/config/confighttp"
+	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	rcvr "go.opentelemetry.io/collector/receiver"
+	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/errorutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/cloudflarereceiver/internal/metadata"
 )
 
 type logsReceiver struct {
 	logger            *zap.Logger
 	cfg               *LogsConfig
+	serverConfig      *confighttp.ServerConfig
 	server            *http.Server
 	consumer          consumer.Logs
 	wg                *sync.WaitGroup
-	id                component.ID // ID of the receiver component
 	telemetrySettings component.TelemetrySettings
+	id                component.ID // ID of the receiver component
+	obsrecv           *receiverhelper.ObsReport
 }
 
 const secretHeaderName = "X-CF-Secret"
 
 func newLogsReceiver(params rcvr.Settings, cfg *Config, consumer consumer.Logs) (*logsReceiver, error) {
+	obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
+		ReceiverID:             params.ID,
+		Transport:              "http",
+		ReceiverCreateSettings: params,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	recv := &logsReceiver{
 		cfg:               &cfg.Logs,
 		consumer:          consumer,
 		logger:            params.Logger,
 		wg:                &sync.WaitGroup{},
+		obsrecv:           obsrecv,
 		telemetrySettings: params.TelemetrySettings,
 		id:                params.ID,
 	}
 
-	recv.server = &http.Server{
-		Handler:           http.HandlerFunc(recv.handleRequest),
+	serverConfig := confighttp.ServerConfig{
+		NetAddr: confignet.AddrConfig{
+			Endpoint:  recv.cfg.Endpoint,
+			Transport: "tcp",
+		},
 		ReadHeaderTimeout: 20 * time.Second,
 	}
 
-	if recv.cfg.TLS != nil {
-		tlsConfig, err := recv.cfg.TLS.LoadTLSConfig(context.Background())
-		if err != nil {
-			return nil, err
-		}
-
-		recv.server.TLSConfig = tlsConfig
+	if tlsConfig := recv.cfg.TLS; tlsConfig != nil {
+		serverConfig.TLS = configoptional.Some(*tlsConfig)
 	}
+
+	recv.serverConfig = &serverConfig
 
 	return recv, nil
 }
@@ -73,9 +90,11 @@ func (l *logsReceiver) Start(ctx context.Context, host component.Host) error {
 
 func (l *logsReceiver) Shutdown(ctx context.Context) error {
 	l.logger.Debug("Shutting down server")
-	err := l.server.Shutdown(ctx)
-	if err != nil {
-		return err
+	if l.server != nil {
+		err := l.server.Shutdown(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	l.logger.Debug("Waiting for shutdown to complete.")
@@ -85,49 +104,47 @@ func (l *logsReceiver) Shutdown(ctx context.Context) error {
 
 func (l *logsReceiver) startListening(ctx context.Context, host component.Host) error {
 	l.logger.Debug("starting receiver HTTP server")
-	// We use l.server.Serve* over l.server.ListenAndServe*
-	// So that we can catch and return errors relating to binding to network interface on start.
-	var lc net.ListenConfig
+	server, err := l.serverConfig.ToServer(
+		ctx,
+		host.GetExtensions(),
+		l.telemetrySettings,
+		http.HandlerFunc(l.handleRequest),
+	)
+	if err != nil {
+		return err
+	}
+	l.server = server
 
-	listener, err := lc.Listen(ctx, "tcp", l.cfg.Endpoint)
+	listener, err := l.serverConfig.ToListener(ctx)
 	if err != nil {
 		return err
 	}
 
-	l.wg.Add(1)
-	go func() {
-		defer l.wg.Done()
-
-		if l.cfg.TLS != nil {
-			l.logger.Debug("Starting ServeTLS",
-				zap.String("address", l.cfg.Endpoint),
-				zap.String("certfile", l.cfg.TLS.CertFile),
-				zap.String("keyfile", l.cfg.TLS.KeyFile))
-
-			err := l.server.ServeTLS(listener, l.cfg.TLS.CertFile, l.cfg.TLS.KeyFile)
-
-			l.logger.Debug("ServeTLS done")
-
-			if !errors.Is(err, http.ErrServerClosed) {
-				l.logger.Error("ServeTLS failed", zap.Error(err))
-				componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
-			}
-
+	l.wg.Go(func() {
+		if l.serverConfig.TLS.HasValue() {
+			tlsConfig := l.serverConfig.TLS.Get()
+			l.logger.Debug(
+				"Starting ServeTLS",
+				zap.String("address", l.serverConfig.NetAddr.Endpoint),
+				zap.String("certfile", tlsConfig.CertFile),
+				zap.String("keyfile", tlsConfig.KeyFile),
+			)
 		} else {
-			l.logger.Debug("Starting Serve",
-				zap.String("address", l.cfg.Endpoint))
-
-			err := l.server.Serve(listener)
-
-			l.logger.Debug("Serve done")
-
-			if !errors.Is(err, http.ErrServerClosed) {
-				l.logger.Error("Serve failed", zap.Error(err))
-				componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
-			}
-
+			l.logger.Debug(
+				"Starting Serve",
+				zap.String("address", l.serverConfig.NetAddr.Endpoint),
+			)
 		}
-	}()
+
+		err := server.Serve(listener)
+
+		l.logger.Debug("Serve done")
+
+		if !errors.Is(err, http.ErrServerClosed) {
+			l.logger.Error("Serve failed", zap.Error(err))
+			componentstatus.ReportStatus(host, componentstatus.NewFatalErrorEvent(err))
+		}
+	})
 	return nil
 }
 
@@ -144,6 +161,9 @@ func (l *logsReceiver) handleRequest(rw http.ResponseWriter, req *http.Request) 
 			return
 		}
 	}
+
+	// Limit request body size
+	req.Body = http.MaxBytesReader(rw, req.Body, l.cfg.MaxRequestBodySize)
 
 	var payload []byte
 	if req.Header.Get("Content-Encoding") == "gzip" {
@@ -184,12 +204,16 @@ func (l *logsReceiver) handleRequest(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	if err := l.consumer.ConsumeLogs(req.Context(), l.processLogs(pcommon.NewTimestampFromTime(time.Now()), logs)); err != nil {
-		rw.WriteHeader(http.StatusInternalServerError)
+	pLogs := l.processLogs(pcommon.NewTimestampFromTime(time.Now()), logs)
+	obsCtx := l.obsrecv.StartLogsOp(req.Context())
+	if err := l.consumer.ConsumeLogs(obsCtx, pLogs); err != nil {
+		l.obsrecv.EndLogsOp(obsCtx, metadata.Type.String(), pLogs.LogRecordCount(), err)
+		errorutil.HTTPError(rw, err)
 		l.logger.Error("Failed to consumer alert as log", zap.Error(err))
 		return
 	}
 
+	l.obsrecv.EndLogsOp(obsCtx, metadata.Type.String(), pLogs.LogRecordCount(), nil)
 	rw.WriteHeader(http.StatusOK)
 }
 
@@ -239,16 +263,66 @@ func (l *logsReceiver) processLogs(now pcommon.Timestamp, logs []map[string]any)
 			logRecord.SetObservedTimestamp(now)
 
 			if v, ok := log[l.cfg.TimestampField]; ok {
-				if stringV, ok := v.(string); ok {
-					ts, err := time.Parse(time.RFC3339, stringV)
-					if err != nil {
-						l.logger.Warn(fmt.Sprintf("unable to parse %s", l.cfg.TimestampField), zap.Error(err), zap.String("value", stringV))
-					} else {
-						logRecord.SetTimestamp(pcommon.NewTimestampFromTime(ts))
+				switch l.cfg.TimestampFormat {
+				case "unix":
+					var sec int64
+					switch val := v.(type) {
+					case int:
+						sec = int64(val)
+					case int64:
+						sec = val
+					case float64:
+						sec = int64(val)
+					case string:
+						i, err := strconv.ParseInt(val, 10, 64)
+						if err != nil {
+							l.logger.Warn("unable to parse "+l.cfg.TimestampField+" as unix seconds", zap.Error(err), zap.String("value", val))
+							continue
+						}
+						sec = i
+					default:
+						l.logger.Warn("unable to parse "+l.cfg.TimestampField, zap.String("unsupported type", fmt.Sprintf("%T", v)))
+						continue
 					}
-				} else {
-					l.logger.Warn(fmt.Sprintf("unable to parse %s", l.cfg.TimestampField), zap.Any("value", v))
+					logRecord.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(sec, 0)))
+				case "unixnano":
+					var nano int64
+					switch val := v.(type) {
+					case int:
+						nano = int64(val)
+					case int64:
+						nano = val
+					case float64:
+						nano = int64(val)
+					case string:
+						i, err := strconv.ParseInt(val, 10, 64)
+						if err != nil {
+							l.logger.Warn("unable to parse "+l.cfg.TimestampField+" as unixnano", zap.Error(err), zap.String("value", val))
+							continue
+						}
+						nano = i
+					default:
+						l.logger.Warn("unable to parse "+l.cfg.TimestampField, zap.String("unsupported type", fmt.Sprintf("%T", v)))
+						continue
+					}
+					logRecord.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, nano)))
+				case "rfc3339":
+					strVal, ok := v.(string)
+					if !ok {
+						l.logger.Warn("unable to parse "+l.cfg.TimestampField+" as rfc3339, not a string", zap.Any("value", v), zap.String("type", fmt.Sprintf("%T", v)))
+						continue
+					}
+					ts, err := time.Parse(time.RFC3339, strVal)
+					if err != nil {
+						l.logger.Warn("unable to parse "+l.cfg.TimestampField+" as rfc3339", zap.Error(err), zap.String("value", strVal))
+						continue
+					}
+					logRecord.SetTimestamp(pcommon.NewTimestampFromTime(ts))
+				default:
+					l.logger.Warn("unknown timestamp_format configuration", zap.String("timestamp_format", l.cfg.TimestampFormat))
 				}
+			} else {
+				l.logger.Warn("unable to parse "+l.cfg.TimestampField, zap.Any("value", v))
 			}
 
 			if v, ok := log["EdgeResponseStatus"]; ok {
@@ -273,22 +347,72 @@ func (l *logsReceiver) processLogs(now pcommon.Timestamp, logs []map[string]any)
 			}
 
 			attrs := logRecord.Attributes()
-			for field, attribute := range l.cfg.Attributes {
-				if v, ok := log[field]; ok {
-					switch v := v.(type) {
-					case string:
-						attrs.PutStr(attribute, v)
-					case int:
-						attrs.PutInt(attribute, int64(v))
-					case int64:
-						attrs.PutInt(attribute, v)
-					case float64:
-						attrs.PutDouble(attribute, v)
-					case bool:
-						attrs.PutBool(attribute, v)
-					default:
-						l.logger.Warn("unable to translate field to attribute, unsupported type", zap.String("field", field), zap.Any("value", v), zap.String("type", fmt.Sprintf("%T", v)))
+			for field, v := range log {
+				attrName := field
+				if len(l.cfg.Attributes) != 0 {
+					// Only process fields that are in the config mapping
+					mappedAttr, ok := l.cfg.Attributes[field]
+					if !ok {
+						// Skip fields not in mapping when we have a config
+						continue
 					}
+					attrName = mappedAttr
+				}
+				// else if l.cfg.Attributes is empty, default to processing all fields with no renaming
+
+				switch v := v.(type) {
+				case string:
+					attrs.PutStr(attrName, v)
+				case int:
+					attrs.PutInt(attrName, int64(v))
+				case int64:
+					attrs.PutInt(attrName, v)
+				case float64:
+					attrs.PutDouble(attrName, v)
+				case bool:
+					attrs.PutBool(attrName, v)
+				case []any:
+					if err := attrs.PutEmptySlice(attrName).FromRaw(v); err != nil {
+						l.logger.Warn("unable to translate field to attribute, unsupported array value",
+							zap.String("field", field),
+							zap.Any("value", v),
+							zap.Error(err))
+					}
+				case map[string]any:
+					// Flatten the map and add each field with a prefixed key
+					flattened := make(map[string]any)
+					flattenMap(v, attrName+l.cfg.Separator, l.cfg.Separator, flattened)
+					for k, val := range flattened {
+						switch v := val.(type) {
+						case string:
+							attrs.PutStr(k, v)
+						case int:
+							attrs.PutInt(k, int64(v))
+						case int64:
+							attrs.PutInt(k, v)
+						case float64:
+							attrs.PutDouble(k, v)
+						case bool:
+							attrs.PutBool(k, v)
+						case []any:
+							if err := attrs.PutEmptySlice(k).FromRaw(v); err != nil {
+								l.logger.Warn("unable to translate flattened field to attribute, unsupported array value",
+									zap.String("field", k),
+									zap.Any("value", v),
+									zap.Error(err))
+							}
+						default:
+							l.logger.Warn("unable to translate flattened field to attribute, unsupported type",
+								zap.String("field", k),
+								zap.Any("value", v),
+								zap.String("type", fmt.Sprintf("%T", v)))
+						}
+					}
+				default:
+					l.logger.Warn("unable to translate field to attribute, unsupported type",
+						zap.String("field", field),
+						zap.Any("value", v),
+						zap.String("type", fmt.Sprintf("%T", v)))
 				}
 			}
 
@@ -315,5 +439,22 @@ func severityFromStatusCode(statusCode int64) plog.SeverityNumber {
 		return plog.SeverityNumberError
 	default:
 		return plog.SeverityNumberUnspecified
+	}
+}
+
+// flattenMap recursively flattens a map[string]any into a single level map
+// with keys joined by the specified separator
+func flattenMap(input map[string]any, prefix, separator string, result map[string]any) {
+	for k, v := range input {
+		// Replace hyphens with underscores in the key. Content-Type becomes Content_Type
+		k = strings.ReplaceAll(k, "-", "_")
+		newKey := prefix + k
+		switch val := v.(type) {
+		case map[string]any:
+			// Recursively flatten nested maps
+			flattenMap(val, newKey+separator, separator, result)
+		default:
+			result[newKey] = v
+		}
 	}
 }

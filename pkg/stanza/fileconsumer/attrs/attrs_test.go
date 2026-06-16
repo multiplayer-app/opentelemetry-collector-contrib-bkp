@@ -11,16 +11,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/filetest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/internal/filetest"
 )
 
 func TestResolver(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 64; i++ {
-
-		// Create a 6 bit string where each bit represents the value of a config option
-		bitString := fmt.Sprintf("%06b", i)
+	for i := range 128 {
+		// Create a 7 bit string where each bit represents the value of a config option
+		bitString := fmt.Sprintf("%07b", i)
 
 		// Create a resolver with a config that matches the bit pattern of i
 		r := Resolver{
@@ -30,6 +29,7 @@ func TestResolver(t *testing.T) {
 			IncludeFilePathResolved:   bitString[3] == '1',
 			IncludeFileOwnerName:      bitString[4] == '1' && runtime.GOOS != "windows",
 			IncludeFileOwnerGroupName: bitString[5] == '1' && runtime.GOOS != "windows",
+			IncludeFilePermissions:    bitString[6] == '1' && runtime.GOOS != "windows",
 		}
 
 		t.Run(bitString, func(t *testing.T) {
@@ -85,6 +85,13 @@ func TestResolver(t *testing.T) {
 			} else {
 				assert.Empty(t, attributes[LogFileOwnerGroupName])
 				assert.Empty(t, attributes[LogFileOwnerGroupName])
+			}
+			if r.IncludeFilePermissions {
+				expectLen++
+				assert.NotNil(t, attributes[LogFilePermissions])
+				assert.IsType(t, "", attributes[LogFilePermissions])
+			} else {
+				assert.Empty(t, attributes[LogFilePermissions])
 			}
 			assert.Len(t, attributes, expectLen)
 		})

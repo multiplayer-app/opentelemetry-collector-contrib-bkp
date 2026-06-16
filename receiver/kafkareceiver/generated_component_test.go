@@ -13,10 +13,13 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receivertest"
+	"go.opentelemetry.io/collector/receiver/xreceiver"
 )
 
+var typ = component.MustNewType("kafka")
+
 func TestComponentFactoryType(t *testing.T) {
-	require.Equal(t, "kafka", NewFactory().Type().String())
+	require.Equal(t, typ, NewFactory().Type())
 }
 
 func TestComponentConfigStruct(t *testing.T) {
@@ -27,8 +30,8 @@ func TestComponentLifecycle(t *testing.T) {
 	factory := NewFactory()
 
 	tests := []struct {
-		name     string
 		createFn func(ctx context.Context, set receiver.Settings, cfg component.Config) (component.Component, error)
+		name     string
 	}{
 
 		{
@@ -51,6 +54,13 @@ func TestComponentLifecycle(t *testing.T) {
 				return factory.CreateTraces(ctx, set, cfg, consumertest.NewNop())
 			},
 		},
+
+		{
+			name: "profiles",
+			createFn: func(ctx context.Context, set receiver.Settings, cfg component.Config) (component.Component, error) {
+				return factory.(xreceiver.Factory).CreateProfiles(ctx, set, cfg, consumertest.NewNop())
+			},
+		},
 	}
 
 	cm, err := confmaptest.LoadConf("metadata.yaml")
@@ -62,7 +72,7 @@ func TestComponentLifecycle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name+"-shutdown", func(t *testing.T) {
-			c, err := tt.createFn(context.Background(), receivertest.NewNopSettings(), cfg)
+			c, err := tt.createFn(context.Background(), receivertest.NewNopSettings(typ), cfg)
 			require.NoError(t, err)
 			err = c.Shutdown(context.Background())
 			require.NoError(t, err)

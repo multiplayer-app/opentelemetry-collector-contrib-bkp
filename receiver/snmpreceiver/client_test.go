@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
@@ -16,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/snmpreceiver/internal/mocks"
@@ -83,9 +82,9 @@ func TestNewClient(t *testing.T) {
 func compareConfigToClient(t *testing.T, client *snmpClient, cfg *Config) {
 	t.Helper()
 
-	require.True(t, strings.Contains(cfg.Endpoint, client.client.GetTarget()))
-	require.True(t, strings.Contains(cfg.Endpoint, strconv.FormatInt(int64(client.client.GetPort()), 10)))
-	require.True(t, strings.Contains(cfg.Endpoint, client.client.GetTransport()))
+	require.Contains(t, cfg.Endpoint, client.client.GetTarget())
+	require.Contains(t, cfg.Endpoint, strconv.FormatInt(int64(client.client.GetPort()), 10))
+	require.Contains(t, cfg.Endpoint, client.client.GetTransport())
 	switch cfg.Version {
 	case "v1":
 		require.Equal(t, gosnmp.Version1, client.client.GetVersion())
@@ -204,7 +203,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "No OIDs does nothing",
 			testFunc: func(t *testing.T) {
-				var expectedSNMPData []SNMPData
+				var expectedSNMPData []snmpData
 				mockGoSNMP := new(mocks.MockGoSNMPWrapper)
 				client := &snmpClient{
 					logger: zap.NewNop(),
@@ -238,7 +237,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "GoSNMP Client timeout failures tries to reset connection",
 			testFunc: func(t *testing.T) {
-				var expectedSNMPData []SNMPData
+				var expectedSNMPData []snmpData
 				getError := errors.New("request timeout (after 0 retries)")
 				mockGoSNMP := new(mocks.MockGoSNMPWrapper)
 				mockGoSNMP.On("Get", []string{"1"}).Return(nil, getError)
@@ -284,7 +283,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "GoSNMP Client partial failures still return successes",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						oid:       "2",
 						value:     int64(1),
@@ -369,7 +368,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "Large amount of OIDs handled in chunks",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						oid:       "1",
 						value:     int64(1),
@@ -429,7 +428,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "GoSNMP Client float data type properly converted",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						oid:       "1",
 						value:     1.0,
@@ -473,7 +472,7 @@ func TestGetScalarData(t *testing.T) {
 				var scraperErrors scrapererror.ScrapeErrors
 				oidSlice := []string{"1"}
 				returnedSNMPData := client.GetScalarData(oidSlice, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting scalar data: data for OID '1' not a supported type")
+				expectedErr := errors.New("problem with getting scalar data: data for OID '1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -496,7 +495,7 @@ func TestGetScalarData(t *testing.T) {
 				var scraperErrors scrapererror.ScrapeErrors
 				oidSlice := []string{"1"}
 				returnedSNMPData := client.GetScalarData(oidSlice, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting scalar data: data for OID '1' not a supported type")
+				expectedErr := errors.New("problem with getting scalar data: data for OID '1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -519,7 +518,7 @@ func TestGetScalarData(t *testing.T) {
 				var scraperErrors scrapererror.ScrapeErrors
 				oidSlice := []string{"1"}
 				returnedSNMPData := client.GetScalarData(oidSlice, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting scalar data: data for OID '1' not a supported type")
+				expectedErr := errors.New("problem with getting scalar data: data for OID '1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -527,7 +526,7 @@ func TestGetScalarData(t *testing.T) {
 		{
 			desc: "GoSNMP Client string data type properly converted",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						oid:       "1",
 						value:     "test",
@@ -646,7 +645,7 @@ func TestGetIndexedData(t *testing.T) {
 		{
 			desc: "GoSNMP Client partial failures still returns successes",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						columnOID: "2",
 						oid:       "2.1",
@@ -727,7 +726,7 @@ func TestGetIndexedData(t *testing.T) {
 		{
 			desc: "Return multiple good values",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						columnOID: "1",
 						oid:       "1.1",
@@ -791,7 +790,7 @@ func TestGetIndexedData(t *testing.T) {
 		{
 			desc: "GoSNMP Client float data type properly converted",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						columnOID: "1",
 						oid:       "1.1",
@@ -834,7 +833,7 @@ func TestGetIndexedData(t *testing.T) {
 				}
 				var scraperErrors scrapererror.ScrapeErrors
 				returnedSNMPData := client.GetIndexedData([]string{"1"}, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting indexed data: data for OID '1.1' not a supported type")
+				expectedErr := errors.New("problem with getting indexed data: data for OID '1.1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -856,7 +855,7 @@ func TestGetIndexedData(t *testing.T) {
 				}
 				var scraperErrors scrapererror.ScrapeErrors
 				returnedSNMPData := client.GetIndexedData([]string{"1"}, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting indexed data: data for OID '1.1' not a supported type")
+				expectedErr := errors.New("problem with getting indexed data: data for OID '1.1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -878,7 +877,7 @@ func TestGetIndexedData(t *testing.T) {
 				}
 				var scraperErrors scrapererror.ScrapeErrors
 				returnedSNMPData := client.GetIndexedData([]string{"1"}, &scraperErrors)
-				expectedErr := fmt.Errorf("problem with getting indexed data: data for OID '1.1' not a supported type")
+				expectedErr := errors.New("problem with getting indexed data: data for OID '1.1' not a supported type")
 				require.EqualError(t, scraperErrors.Combine(), expectedErr.Error())
 				require.Nil(t, returnedSNMPData)
 			},
@@ -886,7 +885,7 @@ func TestGetIndexedData(t *testing.T) {
 		{
 			desc: "GoSNMP Client string data type properly converted",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						columnOID: "1",
 						oid:       "1.1",
@@ -915,7 +914,7 @@ func TestGetIndexedData(t *testing.T) {
 		{
 			desc: "GoSNMP Client v1 uses normal Walk function",
 			testFunc: func(t *testing.T) {
-				expectedSNMPData := []SNMPData{
+				expectedSNMPData := []snmpData{
 					{
 						columnOID: "1",
 						oid:       "1.1",

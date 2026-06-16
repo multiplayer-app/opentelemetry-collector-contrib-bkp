@@ -4,7 +4,7 @@
 package ecsutil
 
 import (
-	"fmt"
+	"errors"
 	"net/url"
 	"testing"
 
@@ -17,13 +17,13 @@ import (
 
 type fakeClient struct{}
 
-func (f *fakeClient) Get(path string) ([]byte, error) {
+func (*fakeClient) Get(path string) ([]byte, error) {
 	return []byte(path), nil
 }
 
 func TestRestClient(t *testing.T) {
 	u, _ := url.Parse("http://www.test.com")
-	rest, err := NewRestClient(*u, confighttp.ClientConfig{}, componenttest.NewNopTelemetrySettings())
+	rest, err := NewRestClient(*u, confighttp.NewDefaultClientConfig(), componenttest.NewNopTelemetrySettings())
 	require.NoError(t, err)
 	require.NotNil(t, rest)
 }
@@ -38,8 +38,8 @@ func TestRestClientFromClient(t *testing.T) {
 
 type fakeErrorClient struct{}
 
-func (f *fakeErrorClient) Get(_ string) ([]byte, error) {
-	return nil, fmt.Errorf("")
+func (*fakeErrorClient) Get(_ string) ([]byte, error) {
+	return nil, errors.New("")
 }
 
 func TestRestClientError(t *testing.T) {
@@ -52,8 +52,8 @@ func TestRestClientError(t *testing.T) {
 
 type fakeMetadataErrorClient struct{}
 
-func (f *fakeMetadataErrorClient) Get(_ string) ([]byte, error) {
-	return nil, fmt.Errorf("")
+func (*fakeMetadataErrorClient) Get(_ string) ([]byte, error) {
+	return nil, errors.New("")
 }
 
 func TestRestClientMetadataError(t *testing.T) {

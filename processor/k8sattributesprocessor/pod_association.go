@@ -6,10 +6,11 @@ package k8sattributesprocessor // import "github.com/open-telemetry/opentelemetr
 import (
 	"context"
 	"net"
+	"strings"
 
 	"go.opentelemetry.io/collector/client"
 	"go.opentelemetry.io/collector/pdata/pcommon"
-	conventions "go.opentelemetry.io/collector/semconv/v1.6.1"
+	conventions "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/clientutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor/internal/kube"
@@ -29,14 +30,14 @@ func extractPodID(ctx context.Context, attrs pcommon.Map, associations []kube.As
 		ret := kube.PodIdentifier{}
 		for i, source := range asso.Sources {
 			// If association configured to take IP address from connection
-			switch {
-			case source.From == kube.ConnectionSource:
+			switch source.From {
+			case kube.ConnectionSource:
 				if connectionIP == "" {
 					skip = true
 					break
 				}
 				ret[i] = kube.PodIdentifierAttributeFromConnection(connectionIP)
-			case source.From == kube.ResourceSource:
+			case kube.ResourceSource:
 				// Extract values based on configured resource_attribute.
 				attributeValue := stringAttributeFromMap(attrs, source.Name)
 				if attributeValue == "" {
@@ -47,7 +48,7 @@ func extractPodID(ctx context.Context, attrs pcommon.Map, associations []kube.As
 				// If association configured by resource_attribute
 				// In k8s environment, host.name label set to a pod IP address.
 				// If the value doesn't represent an IP address, we skip it.
-				if asso.Name == conventions.AttributeHostName && net.ParseIP(attributeValue) == nil {
+				if source.Name == string(conventions.HostNameKey) && net.ParseIP(attributeValue) == nil {
 					skip = true
 					break
 				}
@@ -67,7 +68,7 @@ func extractPodID(ctx context.Context, attrs pcommon.Map, associations []kube.As
 // extractPodIds returns pod identifier for first association matching all sources
 func extractPodIDNoAssociations(ctx context.Context, attrs pcommon.Map) kube.PodIdentifier {
 	var podIP, labelIP string
-	podIP = stringAttributeFromMap(attrs, kube.K8sIPLabelName)
+	podIP = stringAttributeFromMap(attrs, string(conventions.K8SPodIPKey))
 	if podIP != "" {
 		return kube.PodIdentifier{
 			kube.PodIdentifierAttributeFromConnection(podIP),
@@ -88,7 +89,7 @@ func extractPodIDNoAssociations(ctx context.Context, attrs pcommon.Map) kube.Pod
 		}
 	}
 
-	hostname := stringAttributeFromMap(attrs, conventions.AttributeHostName)
+	hostname := stringAttributeFromMap(attrs, string(conventions.HostNameKey))
 	if net.ParseIP(hostname) != nil {
 		return kube.PodIdentifier{
 			kube.PodIdentifierAttributeFromConnection(hostname),
@@ -96,6 +97,27 @@ func extractPodIDNoAssociations(ctx context.Context, attrs pcommon.Map) kube.Pod
 	}
 
 	return kube.PodIdentifier{}
+}
+
+// buildPodIdentifierString returns a low-cardinality string representing which sources
+// were used to build the PodIdentifier, formatted as "from" or "from/name" for each
+// non-empty slot, joined by "+". Actual identifier values are intentionally excluded
+// to avoid unbounded metric cardinality.
+// Examples: "connection", "resource_attribute/k8s.pod.ip",
+// "resource_attribute/k8s.pod.uid+resource_attribute/container.id"
+func buildPodIdentifierString(id kube.PodIdentifier) string {
+	var parts []string
+	for _, attr := range id {
+		if attr.Source.From == "" {
+			break
+		}
+		if attr.Source.Name != "" {
+			parts = append(parts, attr.Source.From+"/"+attr.Source.Name)
+		} else {
+			parts = append(parts, attr.Source.From)
+		}
+	}
+	return strings.Join(parts, "+")
 }
 
 func stringAttributeFromMap(attrs pcommon.Map, key string) string {

@@ -12,11 +12,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jaegertracing/jaeger/thrift-gen/zipkincore"
+	"github.com/jaegertracing/jaeger-idl/thrift-gen/zipkincore"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	conventions "go.opentelemetry.io/collector/semconv/v1.6.1"
+	conventionsv125 "go.opentelemetry.io/otel/semconv/v1.25.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/zipkin/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/zipkin/internal/zipkin"
 )
 
@@ -167,7 +169,6 @@ func jsonBinAnnotationsToSpanAttributes(span ptrace.Span, binAnnotations []*bina
 	sMapper := &statusMapper{}
 	var localComponent string
 	for _, binAnnotation := range binAnnotations {
-
 		if binAnnotation.Endpoint != nil && binAnnotation.Endpoint.ServiceName != "" {
 			fallbackServiceName = binAnnotation.Endpoint.ServiceName
 		}
@@ -184,7 +185,20 @@ func jsonBinAnnotationsToSpanAttributes(span ptrace.Span, binAnnotations []*bina
 			continue
 		}
 
-		val.CopyTo(span.Attributes().PutEmpty(key))
+		keys := []string{key}
+		if key == string(conventionsv125.HTTPStatusCodeKey) {
+			keys = nil
+			if !metadata.PkgTranslatorZipkinDontEmitV0HTTPConventionsFeatureGate.IsEnabled() {
+				keys = append(keys, key)
+			}
+			if metadata.PkgTranslatorZipkinEmitV1HTTPConventionsFeatureGate.IsEnabled() {
+				keys = append(keys, string(conventions.HTTPResponseStatusCodeKey))
+			}
+		}
+
+		for _, k := range keys {
+			val.CopyTo(span.Attributes().PutEmpty(k))
+		}
 	}
 
 	if fallbackServiceName == "" {
@@ -360,7 +374,7 @@ func getOrCreateNodeRequest(m map[string]ptrace.SpanSlice, td ptrace.Traces, end
 	}
 
 	rs := td.ResourceSpans().AppendEmpty()
-	rs.Resource().Attributes().PutStr(conventions.AttributeServiceName, endpoint.ServiceName)
+	rs.Resource().Attributes().PutStr(string(conventions.ServiceNameKey), endpoint.ServiceName)
 	endpoint.setAttributes(rs.Resource().Attributes())
 	ss = rs.ScopeSpans().AppendEmpty().Spans()
 	m[nodeKey] = ss

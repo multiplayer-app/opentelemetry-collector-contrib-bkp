@@ -47,7 +47,7 @@ type dnsResolver struct {
 	endpoints         []string
 	onChangeCallbacks []func([]string)
 
-	stopCh             chan (struct{})
+	stopCh             chan struct{}
 	updateLock         sync.Mutex
 	shutdownWg         sync.WaitGroup
 	changeCallbackLock sync.RWMutex
@@ -66,7 +66,7 @@ func newDNSResolver(
 	timeout time.Duration,
 	tb *metadata.TelemetryBuilder,
 ) (*dnsResolver, error) {
-	if len(hostname) == 0 {
+	if hostname == "" {
 		return nil, errNoHostname
 	}
 	if interval == 0 {
@@ -93,7 +93,8 @@ func (r *dnsResolver) start(ctx context.Context) error {
 		r.logger.Warn("failed to resolve", zap.Error(err))
 	}
 
-	go r.periodicallyResolve()
+	r.shutdownWg.Add(1)
+	go r.periodicallyResolve(ctx)
 
 	r.logger.Debug("DNS resolver started",
 		zap.String("hostname", r.hostname), zap.String("port", r.port),
@@ -111,14 +112,16 @@ func (r *dnsResolver) shutdown(_ context.Context) error {
 	return nil
 }
 
-func (r *dnsResolver) periodicallyResolve() {
+func (r *dnsResolver) periodicallyResolve(ctx context.Context) {
 	ticker := time.NewTicker(r.resInterval)
+	defer ticker.Stop()
+	defer r.shutdownWg.Done()
 
 	for {
 		select {
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), r.resTimeout)
-			if _, err := r.resolve(ctx); err != nil {
+			innerCtx, cancel := context.WithTimeout(ctx, r.resTimeout)
+			if _, err := r.resolve(innerCtx); err != nil {
 				r.logger.Warn("failed to resolve", zap.Error(err))
 			} else {
 				r.logger.Debug("resolved successfully")
@@ -131,9 +134,6 @@ func (r *dnsResolver) periodicallyResolve() {
 }
 
 func (r *dnsResolver) resolve(ctx context.Context) ([]string, error) {
-	r.shutdownWg.Add(1)
-	defer r.shutdownWg.Done()
-
 	addrs, err := r.resolver.LookupIPAddr(ctx, r.hostname)
 	if err != nil {
 		r.telemetry.LoadbalancerNumResolutions.Add(ctx, 1, metric.WithAttributeSet(dnsResolverFailureAttrSet))

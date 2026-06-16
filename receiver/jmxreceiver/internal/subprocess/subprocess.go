@@ -6,6 +6,7 @@ package subprocess // import "github.com/open-telemetry/opentelemetry-collector-
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -78,6 +79,7 @@ func NewSubprocess(conf *Config, logger *zap.Logger) *Subprocess {
 	if conf.RestartDelay == nil {
 		restartDelay := defaultRestartDelay
 		conf.RestartDelay = &restartDelay
+		conf.RestartOnError = true
 	}
 	if conf.ShutdownTimeout == nil {
 		shutdownTimeout := defaultShutdownTimeout
@@ -123,7 +125,7 @@ func (subprocess *Subprocess) Start(ctx context.Context) error {
 // Shutdown is invoked during service shutdown.
 func (subprocess *Subprocess) Shutdown(ctx context.Context) error {
 	if subprocess.cancel == nil {
-		return fmt.Errorf("no subprocess.cancel().  Has it been started properly?")
+		return errors.New("no subprocess.cancel().  Has it been started properly?")
 	}
 
 	timeout := defaultShutdownTimeout
@@ -140,7 +142,7 @@ func (subprocess *Subprocess) Shutdown(ctx context.Context) error {
 	case <-subprocess.shutdownSignal:
 	case <-t.C:
 		subprocess.logger.Warn("subprocess hasn't returned within shutdown timeout. May be zombied.",
-			zap.String("timeout", fmt.Sprintf("%v", timeout)))
+			zap.String("timeout", timeout.String()))
 	}
 
 	return nil

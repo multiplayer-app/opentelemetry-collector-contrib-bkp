@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/riakreceiver/internal/metadata"
@@ -43,7 +43,7 @@ func newScraper(logger *zap.Logger, cfg *Config, settings receiver.Settings) *ri
 // start starts the scraper by creating a new HTTP Client on the scraper
 func (r *riakScraper) start(ctx context.Context, host component.Host) (err error) {
 	r.client, err = newClient(ctx, r.cfg, host, r.settings, r.logger)
-	return
+	return err
 }
 
 // scrape collects metrics from the Riak API

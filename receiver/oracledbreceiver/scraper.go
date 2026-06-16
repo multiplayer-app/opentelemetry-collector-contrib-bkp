@@ -6,67 +6,204 @@ package oracledbreceiver // import "github.com/open-telemetry/opentelemetry-coll
 import (
 	"context"
 	"database/sql"
+	_ "embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"net"
+	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/sqlcomments"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/oracledbreceiver/internal/metadata"
 )
 
 const (
-	statsSQL                = "select * from v$sysstat"
-	enqueueDeadlocks        = "enqueue deadlocks"
-	exchangeDeadlocks       = "exchange deadlocks"
-	executeCount            = "execute count"
-	parseCountTotal         = "parse count (total)"
-	parseCountHard          = "parse count (hard)"
-	userCommits             = "user commits"
-	userRollbacks           = "user rollbacks"
-	physicalReads           = "physical reads"
-	sessionLogicalReads     = "session logical reads"
-	cpuTime                 = "CPU used by this session"
-	pgaMemory               = "session pga memory"
-	dbBlockGets             = "db block gets"
-	consistentGets          = "consistent gets"
+	statsSQL     = "select * from v$sysstat"
+	sysmetricSQL = "SELECT metric_name, value FROM v$sysmetric WHERE group_id = 2"
+
+	// V$SYSMETRIC metric_name values (group_id=2, 60-second interval)
+	sysmetricBufferCacheHitRatio      = "Buffer Cache Hit Ratio"
+	sysmetricHostCPUUtilization       = "Host CPU Utilization (%)"
+	sysmetricDatabaseCPUTimeRatio     = "Database CPU Time Ratio"
+	sysmetricLibraryCacheHitRatio     = "Library Cache Hit Ratio"
+	sysmetricSharedPoolFreePct        = "Shared Pool Free %"
+	sysmetricDatabaseWaitTimeRatio    = "Database Wait Time Ratio"
+	sysmetricSoftParseRatio           = "Soft Parse Ratio"
+	sysmetricSQLServiceResponseTime   = "SQL Service Response Time"
+	sysmetricMemorySortsRatio         = "Memory Sorts Ratio"
+	sysmetricRedoAllocationHitRatio   = "Redo Allocation Hit Ratio"
+	sysmetricParseFailureCount        = "Parse Failure Count Per Sec"
+	sysmetricExecuteWithoutParseRatio = "Execute Without Parse Ratio"
+
+	enqueueDeadlocks               = "enqueue deadlocks"
+	exchangeDeadlocks              = "exchange deadlocks"
+	executeCount                   = "execute count"
+	parseCountTotal                = "parse count (total)"
+	parseCountHard                 = "parse count (hard)"
+	logons                         = "logons cumulative"
+	userCommits                    = "user commits"
+	userRollbacks                  = "user rollbacks"
+	physicalReads                  = "physical reads"
+	physicalReadsDirect            = "physical reads direct"
+	physicalReadIORequests         = "physical read IO requests"
+	physicalWrites                 = "physical writes"
+	physicalWritesDirect           = "physical writes direct"
+	physicalWriteIORequests        = "physical write IO requests"
+	queriesParallelized            = "queries parallelized"
+	ddlStatementsParallelized      = "DDL statements parallelized"
+	dmlStatementsParallelized      = "DML statements parallelized"
+	parallelOpsNotDowngraded       = "Parallel operations not downgraded"
+	parallelOpsDowngradedToSerial  = "Parallel operations downgraded to serial"
+	parallelOpsDowngraded1To25Pct  = "Parallel operations downgraded 1 to 25 pct"
+	parallelOpsDowngraded25To50Pct = "Parallel operations downgraded 25 to 50 pct"
+	parallelOpsDowngraded50To75Pct = "Parallel operations downgraded 50 to 75 pct"
+	parallelOpsDowngraded75To99Pct = "Parallel operations downgraded 75 to 99 pct"
+	sessionLogicalReads            = "session logical reads"
+	cpuTime                        = "CPU used by this session"
+	pgaMemory                      = "session pga memory"
+	dbBlockGets                    = "db block gets"
+	consistentGets                 = "consistent gets"
+
+	// I/O performance v$sysstat names
+	physicalReadBytesStat            = "physical read bytes"
+	physicalWriteBytesStat           = "physical write bytes"
+	physicalReadTotalBytesStat       = "physical read total bytes"
+	physicalWriteTotalBytesStat      = "physical write total bytes"
+	physicalReadTotalIORequestsStat  = "physical read total IO requests"
+	physicalWriteTotalIORequestsStat = "physical write total IO requests"
+	physicalReadMultiBlockReqStat    = "physical read total multi block requests"
+	physicalWriteMultiBlockReqStat   = "physical write total multi block requests"
+	physicalWritesFromCacheStat      = "physical writes from cache"
+	sqlnetBytesRecvFromClient        = "bytes received via SQL*Net from client"
+	sqlnetBytesSentToClient          = "bytes sent via SQL*Net to client"
+	sqlnetBytesRecvFromDBLink        = "bytes received via SQL*Net from dblink"
+	sqlnetBytesSentToDBLink          = "bytes sent via SQL*Net to dblink"
+
 	sessionCountSQL         = "select status, type, count(*) as VALUE FROM v$session GROUP BY status, type"
 	systemResourceLimitsSQL = "select RESOURCE_NAME, CURRENT_UTILIZATION, LIMIT_VALUE, CASE WHEN TRIM(INITIAL_ALLOCATION) LIKE 'UNLIMITED' THEN '-1' ELSE TRIM(INITIAL_ALLOCATION) END as INITIAL_ALLOCATION, CASE WHEN TRIM(LIMIT_VALUE) LIKE 'UNLIMITED' THEN '-1' ELSE TRIM(LIMIT_VALUE) END as LIMIT_VALUE from v$resource_limit"
 	tablespaceUsageSQL      = `
 		select um.TABLESPACE_NAME, um.USED_SPACE, um.TABLESPACE_SIZE, ts.BLOCK_SIZE
 		FROM DBA_TABLESPACE_USAGE_METRICS um INNER JOIN DBA_TABLESPACES ts
 		ON um.TABLESPACE_NAME = ts.TABLESPACE_NAME`
+	dataDictHitRatioSQL = "SELECT (1-(SUM(getmisses)/SUM(gets))) * 100 as DATA_DICTIONARY_HIT_RATIO FROM v$rowcache WHERE getmisses + gets <> 0"
+	recycleBinSizeSQL   = "SELECT nvl(SUM(SPACE*(SELECT value FROM v$parameter WHERE name = 'db_block_size')),0) as RECYCLE_BIN_SIZE_BYTES FROM dba_recyclebin"
+	storageUsageSQL     = "WITH total_bytes AS (SELECT SUM(bytes) AS total FROM dba_data_files) SELECT (total - (SELECT SUM(bytes) FROM dba_free_space)) AS USED_DB_SIZE, total AS ALLOCATED_DB_SIZE FROM total_bytes"
+
+	colDataDictHitRatio    = "DATA_DICTIONARY_HIT_RATIO"
+	colRecycleBinSizeBytes = "RECYCLE_BIN_SIZE_BYTES"
+	colUsedDBSize          = "USED_DB_SIZE"
+	colAllocatedDBSize     = "ALLOCATED_DB_SIZE"
+
+	sqlIDAttr        = "SQL_ID"
+	childAddressAttr = "CHILD_ADDRESS"
+	childNumberAttr  = "CHILD_NUMBER"
+	sqlTextAttr      = "SQL_FULLTEXT"
+	dbSystemNameVal  = "oracle"
+
+	queryExecutionMetric        = "EXECUTIONS"
+	elapsedTimeMetric           = "ELAPSED_TIME"
+	cpuTimeMetric               = "CPU_TIME"
+	applicationWaitTimeMetric   = "APPLICATION_WAIT_TIME"
+	concurrencyWaitTimeMetric   = "CONCURRENCY_WAIT_TIME"
+	userIoWaitTimeMetric        = "USER_IO_WAIT_TIME"
+	clusterWaitTimeMetric       = "CLUSTER_WAIT_TIME"
+	rowsProcessedMetric         = "ROWS_PROCESSED"
+	bufferGetsMetric            = "BUFFER_GETS"
+	physicalReadRequestsMetric  = "PHYSICAL_READ_REQUESTS"
+	physicalWriteRequestsMetric = "PHYSICAL_WRITE_REQUESTS"
+	physicalReadBytesMetric     = "PHYSICAL_READ_BYTES"
+	physicalWriteBytesMetric    = "PHYSICAL_WRITE_BYTES"
+	queryDiskReadsMetric        = "DISK_READS"
+	queryDirectReadsMetric      = "DIRECT_READS"
+	queryDirectWritesMetric     = "DIRECT_WRITES"
+	procedureExecutionsMetric   = "PROCEDURE_EXECUTIONS"
+
+	// Stored procedure columns
+	objectIDAttr    = "PROGRAM_ID"
+	objectNameAttr  = "PROCEDURE_NAME"
+	objectTypeAttr  = "PROCEDURE_TYPE"
+	commandTypeAttr = "COMMAND_TYPE"
+
+	// Plan metadata columns
+	firstLoadTimeAttr = "FIRST_LOAD_TIME"
+	lastLoadTimeAttr  = "LAST_LOAD_TIME"
+	planHashValueAttr = "PLAN_HASH_VALUE"
+)
+
+var (
+	//go:embed templates/oracleQuerySampleSql.tmpl
+	samplesQuery string
+	//go:embed templates/oracleQueryMetricsAndTextSql.tmpl
+	oracleQueryMetricsSQL string
+	//go:embed templates/oracleQueryPlanSql.tmpl
+	oracleQueryPlanDataSQL string
+	//go:embed templates/oracleSessionEventSql.tmpl
+	sessionEventQuery string
 )
 
 type dbProviderFunc func() (*sql.DB, error)
 
 type clientProviderFunc func(*sql.DB, string, *zap.Logger) dbClient
 
-type scraper struct {
+type oracleScraper struct {
 	statsClient                dbClient
 	tablespaceUsageClient      dbClient
 	systemResourceLimitsClient dbClient
 	sessionCountClient         dbClient
+	oracleQueryMetricsClient   dbClient
+	oraclePlanDataClient       dbClient
+	samplesQueryClient         dbClient
+	sessionEventClient         dbClient
+	dataDictHitRatioClient     dbClient
+	recycleBinSizeClient       dbClient
+	storageUsageClient         dbClient
+	sysmetricClient            dbClient
 	db                         *sql.DB
 	clientProviderFunc         clientProviderFunc
 	mb                         *metadata.MetricsBuilder
+	lb                         *metadata.LogsBuilder
 	dbProviderFunc             dbProviderFunc
 	logger                     *zap.Logger
 	id                         component.ID
 	instanceName               string
+	hostName                   string
 	scrapeCfg                  scraperhelper.ControllerConfig
 	startTime                  pcommon.Timestamp
 	metricsBuilderConfig       metadata.MetricsBuilderConfig
+	logsBuilderConfig          metadata.LogsBuilderConfig
+	metricCache                *lru.Cache[string, map[string]int64]
+	topQueryCollectCfg         TopQueryCollection
+	obfuscator                 *obfuscator
+	querySampleCfg             QuerySample
+	sessionWaitEventCfg        SessionWaitEvent
+	serviceInstanceID          string
+	lastExecutionTimestamp     time.Time
+	// instanceInfo holds Oracle deployment metadata detected once at start().
+	// All fields are best-effort: detection failures are logged and leave the
+	// field at its zero value; they never prevent the receiver from starting.
+	instanceInfo oracleInstanceInfo
 }
 
-func newScraper(metricsBuilder *metadata.MetricsBuilder, metricsBuilderConfig metadata.MetricsBuilderConfig, scrapeCfg scraperhelper.ControllerConfig, logger *zap.Logger, providerFunc dbProviderFunc, clientProviderFunc clientProviderFunc, instanceName string) (scraperhelper.Scraper, error) {
-	s := &scraper{
+func newScraper(metricsBuilder *metadata.MetricsBuilder, metricsBuilderConfig metadata.MetricsBuilderConfig, scrapeCfg scraperhelper.ControllerConfig, logger *zap.Logger, providerFunc dbProviderFunc, clientProviderFunc clientProviderFunc, instanceName, hostName string) (scraper.Metrics, error) {
+	s := &oracleScraper{
 		mb:                   metricsBuilder,
 		metricsBuilderConfig: metricsBuilderConfig,
 		scrapeCfg:            scrapeCfg,
@@ -74,25 +211,69 @@ func newScraper(metricsBuilder *metadata.MetricsBuilder, metricsBuilderConfig me
 		dbProviderFunc:       providerFunc,
 		clientProviderFunc:   clientProviderFunc,
 		instanceName:         instanceName,
+		hostName:             hostName,
+		serviceInstanceID:    getInstanceID(instanceName, logger),
 	}
-	return scraperhelper.NewScraper(metadata.Type, s.scrape, scraperhelper.WithShutdown(s.shutdown), scraperhelper.WithStart(s.start))
+	return scraper.NewMetrics(s.scrape, scraper.WithShutdown(s.shutdown), scraper.WithStart(s.start))
 }
 
-func (s *scraper) start(context.Context, component.Host) error {
+func newLogsScraper(logsBuilder *metadata.LogsBuilder, logsBuilderConfig metadata.LogsBuilderConfig, scrapeCfg scraperhelper.ControllerConfig,
+	logger *zap.Logger, providerFunc dbProviderFunc, clientProviderFunc clientProviderFunc, instanceName string, metricCache *lru.Cache[string, map[string]int64],
+	topQueryCollectCfg TopQueryCollection, querySampleCfg QuerySample, sessionWaitEventCfg SessionWaitEvent, hostName string,
+) (scraper.Logs, error) {
+	s := &oracleScraper{
+		lb:                  logsBuilder,
+		logsBuilderConfig:   logsBuilderConfig,
+		scrapeCfg:           scrapeCfg,
+		logger:              logger,
+		dbProviderFunc:      providerFunc,
+		clientProviderFunc:  clientProviderFunc,
+		instanceName:        instanceName,
+		metricCache:         metricCache,
+		topQueryCollectCfg:  topQueryCollectCfg,
+		querySampleCfg:      querySampleCfg,
+		sessionWaitEventCfg: sessionWaitEventCfg,
+		hostName:            hostName,
+		obfuscator:          newObfuscator(),
+		serviceInstanceID:   getInstanceID(instanceName, logger),
+	}
+	return scraper.NewLogs(s.scrapeLogs, scraper.WithShutdown(s.shutdown), scraper.WithStart(s.start))
+}
+
+func (s *oracleScraper) start(ctx context.Context, _ component.Host) error {
 	s.startTime = pcommon.NewTimestampFromTime(time.Now())
 	var err error
 	s.db, err = s.dbProviderFunc()
 	if err != nil {
 		return fmt.Errorf("failed to open db connection: %w", err)
 	}
+	if s.db != nil {
+		s.instanceInfo = detectInstanceInfo(
+			ctx,
+			s.clientProviderFunc(s.db, instanceVersionSQL, s.logger),
+			s.clientProviderFunc(s.db, instanceCDBSQL, s.logger),
+			s.clientProviderFunc(s.db, instanceConTypeSQL, s.logger),
+			s.clientProviderFunc(s.db, instanceConNameSQL, s.logger),
+			s.clientProviderFunc(s.db, instanceRDSSQL, s.logger),
+			s.clientProviderFunc(s.db, instanceOCISQL, s.logger),
+			s.clientProviderFunc(s.db, instanceOCICDBServicesSQL, s.logger),
+			s.logger,
+		)
+	}
 	s.statsClient = s.clientProviderFunc(s.db, statsSQL, s.logger)
 	s.sessionCountClient = s.clientProviderFunc(s.db, sessionCountSQL, s.logger)
 	s.systemResourceLimitsClient = s.clientProviderFunc(s.db, systemResourceLimitsSQL, s.logger)
 	s.tablespaceUsageClient = s.clientProviderFunc(s.db, tablespaceUsageSQL, s.logger)
+	s.samplesQueryClient = s.clientProviderFunc(s.db, samplesQuery, s.logger)
+	s.sessionEventClient = s.clientProviderFunc(s.db, sessionEventQuery, s.logger)
+	s.dataDictHitRatioClient = s.clientProviderFunc(s.db, dataDictHitRatioSQL, s.logger)
+	s.recycleBinSizeClient = s.clientProviderFunc(s.db, recycleBinSizeSQL, s.logger)
+	s.storageUsageClient = s.clientProviderFunc(s.db, storageUsageSQL, s.logger)
+	s.sysmetricClient = s.clientProviderFunc(s.db, sysmetricSQL, s.logger)
 	return nil
 }
 
-func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
+func (s *oracleScraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 	s.logger.Debug("Begin scrape")
 
 	var scrapeErrors []error
@@ -105,11 +286,30 @@ func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 		s.metricsBuilderConfig.Metrics.OracledbUserCommits.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbUserRollbacks.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbPhysicalReads.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalReadsDirect.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalReadIoRequests.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalWrites.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalWritesDirect.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalWriteIoRequests.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbQueriesParallelized.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbDdlStatementsParallelized.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbDmlStatementsParallelized.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsNotDowngraded.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsDowngradedToSerial.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsDowngraded1To25Pct.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsDowngraded25To50Pct.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsDowngraded50To75Pct.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParallelOperationsDowngraded75To99Pct.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbLogicalReads.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbCPUTime.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbPgaMemory.Enabled ||
 		s.metricsBuilderConfig.Metrics.OracledbDbBlockGets.Enabled ||
-		s.metricsBuilderConfig.Metrics.OracledbConsistentGets.Enabled
+		s.metricsBuilderConfig.Metrics.OracledbConsistentGets.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbLogons.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalIoCacheWrites.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalIoRequests.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbPhysicalIoTransferred.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbSqlnetIoTransferred.Enabled
 	if runStats {
 		now := pcommon.NewTimestampFromTime(time.Now())
 		rows, execError := s.statsClient.metricRows(ctx)
@@ -159,6 +359,76 @@ func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 				if err != nil {
 					scrapeErrors = append(scrapeErrors, err)
 				}
+			case physicalReadsDirect:
+				err := s.mb.RecordOracledbPhysicalReadsDirectDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalReadIORequests:
+				err := s.mb.RecordOracledbPhysicalReadIoRequestsDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWrites:
+				err := s.mb.RecordOracledbPhysicalWritesDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWritesDirect:
+				err := s.mb.RecordOracledbPhysicalWritesDirectDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWriteIORequests:
+				err := s.mb.RecordOracledbPhysicalWriteIoRequestsDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case queriesParallelized:
+				err := s.mb.RecordOracledbQueriesParallelizedDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case ddlStatementsParallelized:
+				err := s.mb.RecordOracledbDdlStatementsParallelizedDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case dmlStatementsParallelized:
+				err := s.mb.RecordOracledbDmlStatementsParallelizedDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsNotDowngraded:
+				err := s.mb.RecordOracledbParallelOperationsNotDowngradedDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsDowngradedToSerial:
+				err := s.mb.RecordOracledbParallelOperationsDowngradedToSerialDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsDowngraded1To25Pct:
+				err := s.mb.RecordOracledbParallelOperationsDowngraded1To25PctDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsDowngraded25To50Pct:
+				err := s.mb.RecordOracledbParallelOperationsDowngraded25To50PctDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsDowngraded50To75Pct:
+				err := s.mb.RecordOracledbParallelOperationsDowngraded50To75PctDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case parallelOpsDowngraded75To99Pct:
+				err := s.mb.RecordOracledbParallelOperationsDowngraded75To99PctDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
 			case sessionLogicalReads:
 				err := s.mb.RecordOracledbLogicalReadsDataPoint(now, row["VALUE"])
 				if err != nil {
@@ -186,6 +456,63 @@ func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 			case consistentGets:
 				err := s.mb.RecordOracledbConsistentGetsDataPoint(now, row["VALUE"])
 				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case logons:
+				err := s.mb.RecordOracledbLogonsDataPoint(now, row["VALUE"])
+				if err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalReadBytesStat:
+				if err := s.mb.RecordOracledbPhysicalIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionRead, metadata.AttributeDiskIoTypeBuffered); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWriteBytesStat:
+				if err := s.mb.RecordOracledbPhysicalIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionWrite, metadata.AttributeDiskIoTypeBuffered); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalReadTotalBytesStat:
+				if err := s.mb.RecordOracledbPhysicalIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionRead, metadata.AttributeDiskIoTypeTotal); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWriteTotalBytesStat:
+				if err := s.mb.RecordOracledbPhysicalIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionWrite, metadata.AttributeDiskIoTypeTotal); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalReadTotalIORequestsStat:
+				if err := s.mb.RecordOracledbPhysicalIoRequestsDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionRead, metadata.AttributeDiskIoBlockSizeAll); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWriteTotalIORequestsStat:
+				if err := s.mb.RecordOracledbPhysicalIoRequestsDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionWrite, metadata.AttributeDiskIoBlockSizeAll); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalReadMultiBlockReqStat:
+				if err := s.mb.RecordOracledbPhysicalIoRequestsDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionRead, metadata.AttributeDiskIoBlockSizeMulti); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWriteMultiBlockReqStat:
+				if err := s.mb.RecordOracledbPhysicalIoRequestsDataPoint(now, row["VALUE"], metadata.AttributeDiskIoDirectionWrite, metadata.AttributeDiskIoBlockSizeMulti); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case physicalWritesFromCacheStat:
+				if err := s.mb.RecordOracledbPhysicalIoCacheWritesDataPoint(now, row["VALUE"]); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case sqlnetBytesRecvFromClient:
+				if err := s.mb.RecordOracledbSqlnetIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeNetworkIoDirectionReceive, metadata.AttributeDestinationTypeClient); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case sqlnetBytesSentToClient:
+				if err := s.mb.RecordOracledbSqlnetIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeNetworkIoDirectionTransmit, metadata.AttributeDestinationTypeClient); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case sqlnetBytesRecvFromDBLink:
+				if err := s.mb.RecordOracledbSqlnetIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeNetworkIoDirectionReceive, metadata.AttributeDestinationTypeDblink); err != nil {
+					scrapeErrors = append(scrapeErrors, err)
+				}
+			case sqlnetBytesSentToDBLink:
+				if err := s.mb.RecordOracledbSqlnetIoTransferredDataPoint(now, row["VALUE"], metadata.AttributeNetworkIoDirectionTransmit, metadata.AttributeDestinationTypeDblink); err != nil {
 					scrapeErrors = append(scrapeErrors, err)
 				}
 			}
@@ -321,8 +648,13 @@ func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 		}
 	}
 
-	rb := s.mb.NewResourceBuilder()
-	rb.SetOracledbInstanceName(s.instanceName)
+	s.collectDataDictHitRatio(ctx, &scrapeErrors)
+	s.collectRecycleBinSize(ctx, &scrapeErrors)
+	s.collectStorageUsage(ctx, &scrapeErrors)
+	s.collectSysMetrics(ctx, &scrapeErrors)
+
+	rb := s.setupResourceBuilder(s.mb.NewResourceBuilder())
+
 	out := s.mb.Emit(metadata.WithResource(rb.Emit()))
 	s.logger.Debug("Done scraping")
 	if len(scrapeErrors) > 0 {
@@ -331,9 +663,681 @@ func (s *scraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 	return out, nil
 }
 
-func (s *scraper) shutdown(_ context.Context) error {
+func (s *oracleScraper) collectDataDictHitRatio(ctx context.Context, scrapeErrors *[]error) {
+	if !s.metricsBuilderConfig.Metrics.OracledbDataDictionaryHitRatio.Enabled {
+		return
+	}
+	now := pcommon.NewTimestampFromTime(time.Now())
+	rows, err := s.dataDictHitRatioClient.metricRows(ctx)
+	if err != nil {
+		*scrapeErrors = append(*scrapeErrors, fmt.Errorf("error executing %s: %w", dataDictHitRatioSQL, err))
+		return
+	}
+	for _, row := range rows {
+		val, err := strconv.ParseFloat(row[colDataDictHitRatio], 64)
+		if err != nil {
+			*scrapeErrors = append(*scrapeErrors, fmt.Errorf("failed to parse float64 for OracledbDataDictionaryHitRatio, value was %s: %w", row[colDataDictHitRatio], err))
+			continue
+		}
+		s.mb.RecordOracledbDataDictionaryHitRatioDataPoint(now, val)
+	}
+}
+
+func (s *oracleScraper) collectRecycleBinSize(ctx context.Context, scrapeErrors *[]error) {
+	if !s.metricsBuilderConfig.Metrics.OracledbRecycleBinLimit.Enabled {
+		return
+	}
+	now := pcommon.NewTimestampFromTime(time.Now())
+	rows, err := s.recycleBinSizeClient.metricRows(ctx)
+	if err != nil {
+		*scrapeErrors = append(*scrapeErrors, fmt.Errorf("error executing %s: %w", recycleBinSizeSQL, err))
+		return
+	}
+	for _, row := range rows {
+		val, err := strconv.ParseFloat(row[colRecycleBinSizeBytes], 64)
+		if err != nil {
+			*scrapeErrors = append(*scrapeErrors, fmt.Errorf("failed to parse float64 for OracledbRecycleBinLimit, value was %s: %w", row[colRecycleBinSizeBytes], err))
+			continue
+		}
+		s.mb.RecordOracledbRecycleBinLimitDataPoint(now, val)
+	}
+}
+
+func (s *oracleScraper) collectStorageUsage(ctx context.Context, scrapeErrors *[]error) {
+	if !s.metricsBuilderConfig.Metrics.OracledbStorageUsage.Enabled &&
+		!s.metricsBuilderConfig.Metrics.OracledbStorageUtilization.Enabled {
+		return
+	}
+	now := pcommon.NewTimestampFromTime(time.Now())
+	rows, err := s.storageUsageClient.metricRows(ctx)
+	if err != nil {
+		*scrapeErrors = append(*scrapeErrors, fmt.Errorf("error executing %s: %w", storageUsageSQL, err))
+		return
+	}
+	for _, row := range rows {
+		allocatedBytes, err := strconv.ParseFloat(row[colAllocatedDBSize], 64)
+		if err != nil {
+			*scrapeErrors = append(*scrapeErrors, fmt.Errorf("failed to parse float64 for OracledbStorageUsage, value was %s: %w", row[colAllocatedDBSize], err))
+			continue
+		}
+		usedBytes, err := strconv.ParseFloat(row[colUsedDBSize], 64)
+		if err != nil {
+			*scrapeErrors = append(*scrapeErrors, fmt.Errorf("failed to parse float64 for OracledbStorageUtilization, value was %s: %w", row[colUsedDBSize], err))
+			continue
+		}
+		if s.metricsBuilderConfig.Metrics.OracledbStorageUsage.Enabled {
+			s.mb.RecordOracledbStorageUsageDataPoint(now, usedBytes)
+		}
+		if s.metricsBuilderConfig.Metrics.OracledbStorageUtilization.Enabled && allocatedBytes > 0 {
+			utilization := usedBytes / allocatedBytes
+			s.mb.RecordOracledbStorageUtilizationDataPoint(now, utilization)
+		}
+	}
+}
+
+func (s *oracleScraper) collectSysMetrics(ctx context.Context, scrapeErrors *[]error) {
+	anySysmetricEnabled := s.metricsBuilderConfig.Metrics.OracledbBufferCacheUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbHostCPUUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbDatabaseCPUUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbLibraryCacheUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbSharedPoolUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbDatabaseWaitUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParseUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbSQLServiceResponseDuration.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbSortRatio.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbRedoAllocationUtilization.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbParseRate.Enabled ||
+		s.metricsBuilderConfig.Metrics.OracledbExecutionUtilization.Enabled
+	if !anySysmetricEnabled {
+		return
+	}
+
+	now := pcommon.NewTimestampFromTime(time.Now())
+	rows, err := s.sysmetricClient.metricRows(ctx)
+	if err != nil {
+		*scrapeErrors = append(*scrapeErrors, fmt.Errorf("error executing %s: %w", sysmetricSQL, err))
+		return
+	}
+
+	for _, row := range rows {
+		metricName := row["METRIC_NAME"]
+		rawVal := row["VALUE"]
+		val, parseErr := strconv.ParseFloat(rawVal, 64)
+		if parseErr != nil {
+			*scrapeErrors = append(*scrapeErrors, fmt.Errorf("sysmetric %q: failed to parse float64 from %q: %w", metricName, rawVal, parseErr))
+			continue
+		}
+		switch metricName {
+		case sysmetricBufferCacheHitRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbBufferCacheUtilization.Enabled {
+				s.mb.RecordOracledbBufferCacheUtilizationDataPoint(now, val)
+			}
+		case sysmetricHostCPUUtilization:
+			if s.metricsBuilderConfig.Metrics.OracledbHostCPUUtilization.Enabled {
+				s.mb.RecordOracledbHostCPUUtilizationDataPoint(now, val)
+			}
+		case sysmetricDatabaseCPUTimeRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbDatabaseCPUUtilization.Enabled {
+				s.mb.RecordOracledbDatabaseCPUUtilizationDataPoint(now, val)
+			}
+		case sysmetricLibraryCacheHitRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbLibraryCacheUtilization.Enabled {
+				s.mb.RecordOracledbLibraryCacheUtilizationDataPoint(now, val)
+			}
+		case sysmetricSharedPoolFreePct:
+			if s.metricsBuilderConfig.Metrics.OracledbSharedPoolUtilization.Enabled {
+				s.mb.RecordOracledbSharedPoolUtilizationDataPoint(now, val)
+			}
+		case sysmetricDatabaseWaitTimeRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbDatabaseWaitUtilization.Enabled {
+				s.mb.RecordOracledbDatabaseWaitUtilizationDataPoint(now, val)
+			}
+		case sysmetricSoftParseRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbParseUtilization.Enabled {
+				s.mb.RecordOracledbParseUtilizationDataPoint(now, val)
+			}
+		case sysmetricSQLServiceResponseTime:
+			if s.metricsBuilderConfig.Metrics.OracledbSQLServiceResponseDuration.Enabled {
+				// Oracle reports SQL Service Response Time in centiseconds; convert to seconds.
+				s.mb.RecordOracledbSQLServiceResponseDurationDataPoint(now, val/100)
+			}
+		case sysmetricMemorySortsRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbSortRatio.Enabled {
+				s.mb.RecordOracledbSortRatioDataPoint(now, val, metadata.AttributeOracledbSortTypeMemory)
+			}
+		case sysmetricRedoAllocationHitRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbRedoAllocationUtilization.Enabled {
+				s.mb.RecordOracledbRedoAllocationUtilizationDataPoint(now, val)
+			}
+		case sysmetricParseFailureCount:
+			if s.metricsBuilderConfig.Metrics.OracledbParseRate.Enabled {
+				s.mb.RecordOracledbParseRateDataPoint(now, val, metadata.AttributeOracledbParseResultFailure)
+			}
+		case sysmetricExecuteWithoutParseRatio:
+			if s.metricsBuilderConfig.Metrics.OracledbExecutionUtilization.Enabled {
+				s.mb.RecordOracledbExecutionUtilizationDataPoint(now, val, metadata.AttributeOracledbParseTypeSoft)
+			}
+		}
+	}
+}
+
+type queryMetricCacheHit struct {
+	sqlID         string
+	childNumber   string
+	childAddress  string
+	queryText     string
+	queryComments string
+	metrics       map[string]int64
+	objectID      int64
+	objectName    string
+	objectType    string
+	commandType   int64
+	firstLoadTime string
+	lastLoadTime  string
+	planHashValue string
+}
+
+func (s *oracleScraper) scrapeLogs(ctx context.Context) (plog.Logs, error) {
+	logs := plog.NewLogs()
+	var scrapeErrors []error
+
+	if s.logsBuilderConfig.Events.DbServerTopQuery.Enabled {
+		currentCollectionTime := time.Now()
+		lookbackTimeCounter := s.calculateLookbackSeconds()
+		if lookbackTimeCounter < int(s.topQueryCollectCfg.CollectionInterval.Seconds()) {
+			s.logger.Debug("Skipping the collection of top queries because collection interval has not yet elapsed.")
+		} else {
+			topNCollectionErrors := s.collectTopNMetricData(ctx, logs, currentCollectionTime, lookbackTimeCounter)
+			if topNCollectionErrors != nil {
+				scrapeErrors = append(scrapeErrors, topNCollectionErrors)
+			}
+			s.lastExecutionTimestamp = currentCollectionTime
+		}
+	}
+
+	if s.logsBuilderConfig.Events.DbServerQuerySample.Enabled {
+		samplesCollectionErrors := s.collectQuerySamples(ctx, logs)
+		if samplesCollectionErrors != nil {
+			scrapeErrors = append(scrapeErrors, samplesCollectionErrors)
+		}
+	}
+
+	if s.logsBuilderConfig.Events.DbServerSessionWaitSample.Enabled {
+		sessionEventErrors := s.collectSessionWaitEvents(ctx, logs)
+		if sessionEventErrors != nil {
+			scrapeErrors = append(scrapeErrors, sessionEventErrors)
+		}
+	}
+
+	return logs, errors.Join(scrapeErrors...)
+}
+
+func (s *oracleScraper) collectTopNMetricData(ctx context.Context, logs plog.Logs, collectionTime time.Time, lookbackTimeSeconds int) error {
+	var errs []error
+	// get metrics and query texts from DB
+	s.oracleQueryMetricsClient = s.clientProviderFunc(s.db, oracleQueryMetricsSQL, s.logger)
+	metricRows, metricError := s.oracleQueryMetricsClient.metricRows(ctx, lookbackTimeSeconds, s.topQueryCollectCfg.MaxQuerySampleCount)
+
+	if metricError != nil {
+		return fmt.Errorf("error executing oracleQueryMetricsSQL: %w", metricError)
+	}
+	if len(metricRows) == 0 {
+		return errors.New("no data returned from oracleQueryMetricsClient")
+	}
+
+	metricNames := s.getTopNMetricNames()
+	var hits []queryMetricCacheHit
+	var cacheUpdates, discardedHits int
+	for _, row := range metricRows {
+		newCacheVal := make(map[string]int64, len(metricNames))
+		for _, columnName := range metricNames {
+			val := row[columnName]
+			valInt64, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				newCacheVal[columnName] = valInt64
+			}
+		}
+
+		cacheKey := fmt.Sprintf("%v:%v", row[sqlIDAttr], row[childNumberAttr])
+		// if we have a cache hit and the query doesn't belong to top N, cache is updated anyway
+		// as a result, once it finally makes its way to the top N queries, only the latest delta will be sent downstream
+		if oldCacheVal, ok := s.metricCache.Get(cacheKey); ok {
+			// Parse stored procedure PROGRAM_ID
+			var objectID int64
+			if row[objectIDAttr] != "" {
+				objectID, _ = strconv.ParseInt(row[objectIDAttr], 10, 64)
+			}
+
+			var commandType int64
+			if row[commandTypeAttr] != "" {
+				commandType, _ = strconv.ParseInt(row[commandTypeAttr], 10, 64)
+			}
+
+			// Extract and filter comments from original SQL before obfuscation
+			queryComments := sqlcomments.ExtractAndFilterComments(row[sqlTextAttr], s.topQueryCollectCfg.AllowedCommentKeys)
+
+			hit := queryMetricCacheHit{
+				sqlID:         row[sqlIDAttr],
+				queryText:     row[sqlTextAttr],
+				queryComments: queryComments,
+				childNumber:   row[childNumberAttr],
+				childAddress:  row[childAddressAttr],
+				metrics:       make(map[string]int64, len(metricNames)),
+				objectID:      objectID,
+				objectName:    row[objectNameAttr],
+				objectType:    row[objectTypeAttr],
+				commandType:   commandType,
+				firstLoadTime: row[firstLoadTimeAttr],
+				lastLoadTime:  row[lastLoadTimeAttr],
+				planHashValue: hex.EncodeToString([]byte(row[planHashValueAttr])),
+			}
+
+			var possiblePurge bool
+			for _, columnName := range metricNames {
+				delta := newCacheVal[columnName] - oldCacheVal[columnName]
+
+				// if any of the deltas is less than zero, cursor was likely purged from the shared pool
+				if delta < 0 {
+					possiblePurge = true
+					break
+				}
+
+				hit.metrics[columnName] = delta
+			}
+
+			// skip if possible purge or no new executions since last scrape
+			if !possiblePurge && hit.metrics[queryExecutionMetric] > 0 {
+				hits = append(hits, hit)
+			} else {
+				discardedHits++
+			}
+		}
+		s.metricCache.Add(cacheKey, newCacheVal)
+		cacheUpdates++
+	}
+
+	// if cache updates is not equal to rows returned, that indicates there is problem somewhere
+	s.logger.Debug("Cache update", zap.Int("update-count", cacheUpdates), zap.Int("new-size", s.metricCache.Len()))
+
+	if len(hits) == 0 {
+		s.logger.Info("No log records for this scrape")
+		return errors.Join(errs...)
+	}
+
+	s.logger.Debug("Cache hits", zap.Int("hit-count", len(hits)), zap.Int("discarded-hit-count", discardedHits))
+
+	// order by elapsed time delta, descending
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].metrics[elapsedTimeMetric] > hits[j].metrics[elapsedTimeMetric]
+	})
+
+	// keep at most maxHitSize
+	maxHitsSize := min(len(hits), int(s.topQueryCollectCfg.TopQueryCount))
+	hits = hits[:maxHitsSize]
+
+	hits = s.obfuscateCacheHits(hits)
+	childAddressToPlanMap := s.getChildAddressToPlanMap(ctx, hits)
+
+	rb := s.setupResourceBuilder(s.lb.NewResourceBuilder())
+
+	for i := range hits {
+		hit := &hits[i]
+		planBytes, err := json.Marshal(childAddressToPlanMap[hit.childAddress])
+		if err != nil {
+			s.logger.Error("Error marshaling plan data to JSON", zap.Error(err))
+		}
+		planString := string(planBytes)
+
+		s.lb.RecordDbServerTopQueryEvent(context.Background(),
+			pcommon.NewTimestampFromTime(collectionTime),
+			dbSystemNameVal,
+			s.hostName,
+			hit.queryText,
+			planString, hit.sqlID, hit.childNumber,
+			hit.childAddress,
+			asFloatInSeconds(hit.metrics[applicationWaitTimeMetric]),
+			hit.metrics[bufferGetsMetric],
+			asFloatInSeconds(hit.metrics[clusterWaitTimeMetric]),
+			hit.commandType,
+			asFloatInSeconds(hit.metrics[concurrencyWaitTimeMetric]),
+			asFloatInSeconds(hit.metrics[cpuTimeMetric]),
+			hit.metrics[queryDirectReadsMetric],
+			hit.metrics[queryDirectWritesMetric],
+			hit.metrics[queryDiskReadsMetric],
+			asFloatInSeconds(hit.metrics[elapsedTimeMetric]),
+			hit.metrics[queryExecutionMetric],
+			hit.metrics[physicalReadBytesMetric],
+			hit.metrics[physicalReadRequestsMetric],
+			hit.metrics[physicalWriteBytesMetric],
+			hit.metrics[physicalWriteRequestsMetric],
+			hit.metrics[rowsProcessedMetric],
+			asFloatInSeconds(hit.metrics[userIoWaitTimeMetric]),
+			hit.metrics[procedureExecutionsMetric],
+			hit.objectID,
+			hit.objectName,
+			hit.objectType,
+			hit.queryComments,
+			hit.planHashValue,
+			hit.firstLoadTime,
+			hit.lastLoadTime)
+	}
+
+	hitCount := len(hits)
+	if hitCount > 0 {
+		s.logger.Debug("Log records for this scrape", zap.Int("count", hitCount))
+	}
+
+	s.lb.Emit(metadata.WithLogsResource(rb.Emit())).ResourceLogs().MoveAndAppendTo(logs.ResourceLogs())
+
+	return errors.Join(errs...)
+}
+
+func (s *oracleScraper) collectQuerySamples(ctx context.Context, logs plog.Logs) error {
+	const action = "ACTION"
+	const duration = "DURATION_SEC"
+	const event = "EVENT"
+	const hostName = "MACHINE"
+	const module = "MODULE"
+	const osUser = "OSUSER"
+	const objectID = "PROCEDURE_ID"
+	const objectName = "PROCEDURE_NAME"
+	const objectType = "PROCEDURE_TYPE"
+	const process = "PROCESS"
+	const program = "PROGRAM"
+	const planHashValue = "PLAN_HASH_VALUE"
+	const sqlID = "SQL_ID"
+	const schemaName = "SCHEMANAME"
+	const sqlChildNumber = "SQL_CHILD_NUMBER"
+	const childAddress = "CHILD_ADDRESS"
+	const sid = "SID"
+	const serialNumber = "SERIAL#"
+	const status = "STATUS"
+	const state = "STATE"
+	const sqlText = "SQL_FULLTEXT"
+	const username = "USERNAME"
+	const waitclass = "WAIT_CLASS"
+	const waitTimeSec = "WAIT_TIME_SEC"
+	const port = "PORT"
+	const serviceName = "SERVICE_NAME"
+	const sqlExecStart = "SQL_EXEC_START"
+	const logonTime = "LOGON_TIME"
+	const sessionDuration = "SESSION_DURATION_SEC"
+	// Blocking session columns
+	const blockingSession = "BLOCKING_SESSION"
+	const finalBlockingSession = "FINAL_BLOCKING_SESSION"
+	const blockingSessionStatus = "BLOCKING_SESSION_STATUS"
+	const secondsInWait = "SECONDS_IN_WAIT"
+	const blockingStartTime = "BLOCKING_START_TIME"
+	const lockType = "LOCK_TYPE"
+	const lockMode = "LOCK_MODE"
+	const blockedObjectOwner = "BLOCKED_OBJECT_OWNER"
+	const blockedObjectName = "BLOCKED_OBJECT_NAME"
+
+	var scrapeErrors []error
+
+	dbClients := s.samplesQueryClient
+	propagator := propagation.TraceContext{}
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
+
+	rows, err := dbClients.metricRows(ctx, s.querySampleCfg.MaxRowsPerQuery)
+	if err != nil {
+		scrapeErrors = append(scrapeErrors, fmt.Errorf("error executing %s: %w", samplesQuery, err))
+	}
+
+	rb := s.setupResourceBuilder(s.lb.NewResourceBuilder())
+
+	for _, row := range rows {
+		if row[sqlText] == "" {
+			continue
+		}
+
+		obfuscatedSQL, err := s.obfuscator.obfuscateSQLString(row[sqlText])
+		if err != nil {
+			s.logger.Error(fmt.Sprintf("oracleScraper failed updating this log record: %s", err))
+			continue
+		}
+
+		queryPlanHashVal := hex.EncodeToString([]byte(row[planHashValue]))
+
+		queryDuration, err := strconv.ParseFloat(row[duration], 64)
+		if err != nil {
+			scrapeErrors = append(scrapeErrors, fmt.Errorf("failed to parse int64 for Duration, value was %s: %w", row[duration], err))
+		}
+
+		sessionDurationSec, err := strconv.ParseFloat(row[sessionDuration], 64)
+		if err != nil {
+			sessionDurationSec = 0
+		}
+
+		clientPort, err := strconv.ParseInt(row[port], 10, 64)
+		if err != nil {
+			clientPort = 0
+		}
+
+		// Parse stored procedure PROCEDURE_ID
+		var objID int64
+		if row[objectID] != "" {
+			objID, _ = strconv.ParseInt(row[objectID], 10, 64)
+		}
+
+		// Parse wait time in seconds
+		waitTime, err := strconv.ParseFloat(row[waitTimeSec], 64)
+		if err != nil {
+			waitTime = 0
+		}
+
+		var secondsInWaitVal int64
+		if row[secondsInWait] != "" {
+			secondsInWaitVal, err = strconv.ParseInt(row[secondsInWait], 10, 64)
+			if err != nil {
+				scrapeErrors = append(scrapeErrors, fmt.Errorf("failed to parse int64 for SECONDS_IN_WAIT, value was %s: %w", row[secondsInWait], err))
+			}
+		}
+
+		queryContext := propagator.Extract(context.Background(), propagation.MapCarrier{
+			"traceparent": row[action],
+		})
+
+		// Extract and filter query comments from original SQL (before obfuscation)
+		queryComments := sqlcomments.ExtractAndFilterComments(row[sqlText], s.querySampleCfg.AllowedCommentKeys)
+
+		s.lb.RecordDbServerQuerySampleEvent(queryContext, timestamp, obfuscatedSQL, dbSystemNameVal, row[username], row[serviceName], row[hostName],
+			clientPort, row[hostName], clientPort, queryPlanHashVal, row[sqlID], row[sqlChildNumber], row[childAddress], row[sid], row[serialNumber], row[process],
+			row[schemaName], row[program], row[module], row[status], row[state], row[waitclass], row[event], waitTime, objID, row[objectName], row[objectType],
+			row[osUser], queryDuration, queryComments, row[sqlExecStart], row[logonTime], sessionDurationSec,
+			row[blockingSession], row[finalBlockingSession], row[blockingSessionStatus], row[blockingStartTime], secondsInWaitVal,
+			row[lockMode], row[lockType], row[blockedObjectOwner], row[blockedObjectName])
+	}
+
+	s.lb.Emit(metadata.WithLogsResource(rb.Emit())).ResourceLogs().MoveAndAppendTo(logs.ResourceLogs())
+
+	return errors.Join(scrapeErrors...)
+}
+
+func (s *oracleScraper) collectSessionWaitEvents(ctx context.Context, logs plog.Logs) error {
+	const sid = "SID"
+	const serial = "SERIAL#"
+	const event = "EVENT"
+	const waitClass = "WAIT_CLASS"
+	const totalWaits = "TOTAL_WAITS"
+	const totalTimeWaitedSecs = "TOTAL_TIME_WAITED_SECS"
+
+	var scrapeErrors []error
+
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
+
+	rows, err := s.sessionEventClient.metricRows(ctx, s.sessionWaitEventCfg.MaxRowsPerQuery)
+	if err != nil {
+		scrapeErrors = append(scrapeErrors, fmt.Errorf("error executing %s: %w", sessionEventQuery, err))
+	}
+
+	rb := s.setupResourceBuilder(s.lb.NewResourceBuilder())
+
+	for _, row := range rows {
+		totalWaitsVal, err := strconv.ParseInt(row[totalWaits], 10, 64)
+		if err != nil {
+			scrapeErrors = append(scrapeErrors, fmt.Errorf("failed to parse int64 for oracledb.wait.count, value was %s: %w", row[totalWaits], err))
+			continue
+		}
+
+		totalTimeWaitedSecsVal, err := strconv.ParseFloat(row[totalTimeWaitedSecs], 64)
+		if err != nil {
+			scrapeErrors = append(scrapeErrors, fmt.Errorf("failed to parse float64 for oracledb.wait.duration, value was %s: %w", row[totalTimeWaitedSecs], err))
+			continue
+		}
+
+		s.lb.RecordDbServerSessionWaitSampleEvent(ctx, timestamp, row[sid], row[serial], row[event], row[waitClass], totalWaitsVal, totalTimeWaitedSecsVal)
+	}
+
+	s.lb.Emit(metadata.WithLogsResource(rb.Emit())).ResourceLogs().MoveAndAppendTo(logs.ResourceLogs())
+
+	return errors.Join(scrapeErrors...)
+}
+
+func asFloatInSeconds(value int64) float64 {
+	return float64(value) / 1_000_000
+}
+
+func (s *oracleScraper) obfuscateCacheHits(hits []queryMetricCacheHit) []queryMetricCacheHit {
+	var obfuscatedHits []queryMetricCacheHit
+	for i := range hits {
+		hit := &hits[i]
+		// obfuscate and normalize the query text
+		obfuscatedSQL, err := s.obfuscator.obfuscateSQLString(hit.queryText)
+		if err != nil {
+			s.logger.Warn("oracleScraper failed to obfuscate SQL query, skipping entry", zap.String("sql_id", hit.sqlID), zap.Error(err))
+		} else {
+			hit.queryText = obfuscatedSQL
+			obfuscatedHits = append(obfuscatedHits, *hit)
+		}
+	}
+	return obfuscatedHits
+}
+
+func (s *oracleScraper) getChildAddressToPlanMap(ctx context.Context, hits []queryMetricCacheHit) map[string][]metricRow {
+	childAddressToPlanMap := map[string][]metricRow{}
+	if len(hits) == 0 {
+		return childAddressToPlanMap
+	}
+
+	var childAddressSlice []any
+	placeholders := make([]string, len(hits))
+	for i := range hits {
+		placeholders[i] = fmt.Sprintf("HEXTORAW(:%d)", i+1)
+		childAddressSlice = append(childAddressSlice, hits[i].childAddress)
+	}
+
+	placeholdersCombined := strings.Join(placeholders, ", ")
+	sqlQuery := fmt.Sprintf(oracleQueryPlanDataSQL, placeholdersCombined)
+
+	s.logger.Debug("Fetching execution plans")
+	s.oraclePlanDataClient = s.clientProviderFunc(s.db, sqlQuery, s.logger)
+	planData, _ := s.oraclePlanDataClient.metricRows(ctx, childAddressSlice...)
+
+	for _, row := range planData {
+		currentChildAddress := row[childAddressAttr]
+		jsonPlansSlice, ok := childAddressToPlanMap[currentChildAddress]
+		// child address was for internal use only, it's not going to be used beyond this point
+		delete(row, childAddressAttr)
+		if ok {
+			childAddressToPlanMap[currentChildAddress] = append(jsonPlansSlice, row)
+		} else {
+			childAddressToPlanMap[currentChildAddress] = []metricRow{row}
+		}
+	}
+
+	return childAddressToPlanMap
+}
+
+func (*oracleScraper) getTopNMetricNames() []string {
+	return []string{
+		elapsedTimeMetric, queryExecutionMetric, cpuTimeMetric, applicationWaitTimeMetric,
+		concurrencyWaitTimeMetric, userIoWaitTimeMetric, clusterWaitTimeMetric, rowsProcessedMetric, bufferGetsMetric,
+		physicalReadRequestsMetric, physicalWriteRequestsMetric, physicalReadBytesMetric, physicalWriteBytesMetric,
+		queryDirectReadsMetric, queryDirectWritesMetric, queryDiskReadsMetric, procedureExecutionsMetric,
+	}
+}
+
+func (s *oracleScraper) shutdown(_ context.Context) error {
 	if s.db == nil {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *oracleScraper) setupResourceBuilder(rb *metadata.ResourceBuilder) *metadata.ResourceBuilder {
+	rb.SetOracledbInstanceName(s.instanceName)
+	rb.SetHostName(s.hostName)
+	rb.SetServiceInstanceID(s.serviceInstanceID)
+	if s.instanceInfo.dbVersion != "" {
+		rb.SetOracleDbVersion(s.instanceInfo.dbVersion)
+	}
+	if s.instanceInfo.databaseRole != "" {
+		rb.SetOracleDbRole(s.instanceInfo.databaseRole)
+	}
+	if s.instanceInfo.openMode != "" {
+		rb.SetOracleDbOpenMode(s.instanceInfo.openMode)
+	}
+	if s.instanceInfo.hostingType != "" {
+		rb.SetOracleDbHostingType(s.instanceInfo.hostingType)
+	}
+	if s.instanceInfo.connectedToPDB && s.instanceInfo.pdbName != "" {
+		rb.SetOracleDbPdb(s.instanceInfo.pdbName)
+	}
+	return rb
+}
+
+func getInstanceID(instanceString string, logger *zap.Logger) string {
+	hostAndPort, service, found := strings.Cut(instanceString, "/")
+	if !found {
+		logger.Info("No service name found in the connection string", zap.String("instanceString", instanceString))
+	}
+
+	host, port, err := net.SplitHostPort(hostAndPort)
+	if err != nil {
+		logger.Warn("Computing service.instance.id failed. Couldn't extract host and port from the connection data.", zap.Error(err))
+		return constructInstanceID("unknown", "1521", service)
+	}
+
+	// Replace the host value with machine name if connecting to localhost target
+	if strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback() {
+		localhost, err := os.Hostname()
+		if err != nil {
+			logger.Warn("Failed getting localhost machine name for the service.instance.id.")
+		} else {
+			host = localhost
+		}
+	}
+
+	return constructInstanceID(host, port, service)
+}
+
+func constructInstanceID(host, port, service string) string {
+	if strings.TrimSpace(host) == "" {
+		host = "unknown"
+	}
+	if strings.TrimSpace(port) == "" {
+		port = "1521"
+	}
+
+	if service != "" {
+		return fmt.Sprintf("%s:%s/%s", host, port, service)
+	}
+	return fmt.Sprintf("%s:%s", host, port)
+}
+
+func (s *oracleScraper) calculateLookbackSeconds() int {
+	if s.lastExecutionTimestamp.IsZero() {
+		return int(s.topQueryCollectCfg.CollectionInterval.Seconds())
+	}
+
+	// vsqlRefreshLag is the buffer to account for v$sql maximum refresh latency (5 seconds) + 5 seconds to offset any collection delays.
+	// PS: https://docs.oracle.com/en/database/oracle/oracle-database/21/refrn/V-SQL.html
+	const vsqlRefreshLag = 10 * time.Second
+
+	return int(math.Ceil(time.Now().
+		Add(vsqlRefreshLag).
+		Sub(s.lastExecutionTimestamp).Seconds()))
 }

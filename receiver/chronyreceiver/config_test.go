@@ -4,7 +4,6 @@
 package chronyreceiver
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/chronyreceiver/internal/chrony"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/chronyreceiver/internal/metadata"
@@ -38,7 +37,7 @@ func TestLoadConfig(t *testing.T) {
 
 	assert.Equal(t, &Config{
 		ControllerConfig:     scs,
-		MetricsBuilderConfig: metadata.DefaultMetricsBuilderConfig(),
+		MetricsBuilderConfig: metadata.NewDefaultMetricsBuilderConfig(),
 		Endpoint:             "udp://localhost:3030",
 	}, cfg)
 }
@@ -90,7 +89,7 @@ func TestValidate(t *testing.T) {
 		{
 			scenario: "Valid unix path",
 			conf: Config{
-				Endpoint: fmt.Sprintf("unix://%s", t.TempDir()),
+				Endpoint: "unix://" + t.TempDir(),
 				ControllerConfig: scraperhelper.ControllerConfig{
 					CollectionInterval: time.Minute,
 					InitialDelay:       time.Second,
@@ -110,6 +109,62 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			err: os.ErrNotExist,
+		},
+		{
+			scenario: "Valid file_mount_path",
+			conf: Config{
+				Endpoint: "unix://" + t.TempDir(),
+				ControllerConfig: scraperhelper.ControllerConfig{
+					CollectionInterval: time.Minute,
+					InitialDelay:       time.Second,
+					Timeout:            10 * time.Second,
+				},
+				FileMountPath: t.TempDir(),
+			},
+			err: nil,
+		},
+		{
+			scenario: "file_mount_path with non-unix endpoint",
+			conf: Config{
+				Endpoint: "udp://localhost:323",
+				ControllerConfig: scraperhelper.ControllerConfig{
+					CollectionInterval: time.Minute,
+					InitialDelay:       time.Second,
+					Timeout:            10 * time.Second,
+				},
+				FileMountPath: t.TempDir(),
+			},
+			err: errInvalidValue,
+		},
+		{
+			scenario: "file_mount_path missing directory",
+			conf: Config{
+				Endpoint: "unix://" + t.TempDir(),
+				ControllerConfig: scraperhelper.ControllerConfig{
+					CollectionInterval: time.Minute,
+					InitialDelay:       time.Second,
+					Timeout:            10 * time.Second,
+				},
+				FileMountPath: "/nonexistent/dir",
+			},
+			err: os.ErrNotExist,
+		},
+		{
+			scenario: "file_mount_path is a regular file",
+			conf: func() Config {
+				f := filepath.Join(t.TempDir(), "not-a-dir")
+				require.NoError(t, os.WriteFile(f, nil, 0o600))
+				return Config{
+					Endpoint: "unix://" + t.TempDir(),
+					ControllerConfig: scraperhelper.ControllerConfig{
+						CollectionInterval: time.Minute,
+						InitialDelay:       time.Second,
+						Timeout:            10 * time.Second,
+					},
+					FileMountPath: f,
+				}
+			}(),
+			err: errInvalidValue,
 		},
 		{
 			scenario: "Invalid timeout set",

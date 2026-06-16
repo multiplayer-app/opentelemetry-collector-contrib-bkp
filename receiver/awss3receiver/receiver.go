@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -33,7 +35,7 @@ type receiverProcessor interface {
 }
 
 type awss3Receiver struct {
-	s3Reader        *s3Reader
+	reader          s3Reader
 	logger          *zap.Logger
 	cancel          context.CancelFunc
 	obsrecv         *receiverhelper.ObsReport
@@ -46,10 +48,25 @@ type awss3Receiver struct {
 
 func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, settings receiver.Settings, processor receiverProcessor) (*awss3Receiver, error) {
 	notifier := newNotifier(cfg, settings.Logger)
-	reader, err := newS3Reader(ctx, notifier, settings.Logger, cfg)
-	if err != nil {
-		return nil, err
+	var reader s3Reader
+	var err error
+
+	// Create the appropriate reader based on configuration
+	switch {
+	case cfg.StartTime != "" && cfg.EndTime != "":
+		reader, err = newS3TimeBasedReader(ctx, notifier, settings.Logger, cfg)
+		if err != nil {
+			return nil, err
+		}
+	case cfg.SQS != nil:
+		reader, err = newS3SQSReader(ctx, settings.Logger, cfg)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.New("invalid configuration: either time-based (StartTime/EndTime) or SQS-based configuration must be provided")
 	}
+
 	obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
 		ReceiverID:             settings.ID,
 		Transport:              "s3",
@@ -60,7 +77,7 @@ func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, se
 	}
 
 	return &awss3Receiver{
-		s3Reader:        reader,
+		reader:          reader,
 		telemetryType:   telemetryType,
 		logger:          settings.Logger,
 		cancel:          nil,
@@ -74,7 +91,8 @@ func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, se
 func (r *awss3Receiver) Start(ctx context.Context, host component.Host) error {
 	var err error
 	if r.notifier != nil {
-		if err = r.notifier.Start(ctx, host); err != nil {
+		err = r.notifier.Start(ctx, host)
+		if err != nil {
 			return err
 		}
 	}
@@ -86,10 +104,11 @@ func (r *awss3Receiver) Start(ctx context.Context, host component.Host) error {
 	var cancelCtx context.Context
 	cancelCtx, r.cancel = context.WithCancel(context.Background())
 	go func() {
-		_ = r.s3Reader.readAll(cancelCtx, r.telemetryType, r.receiveBytes)
+		_ = r.reader.readAll(cancelCtx, r.telemetryType, r.receiveBytes)
 	}()
 	return nil
 }
+
 func (r *awss3Receiver) Shutdown(ctx context.Context) error {
 	if r.notifier != nil {
 		if err := r.notifier.Shutdown(ctx); err != nil {
@@ -102,17 +121,47 @@ func (r *awss3Receiver) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (r *awss3Receiver) receiveBytes(ctx context.Context, key string, data []byte) error {
+func (r *awss3Receiver) receiveBytes(ctx context.Context, key string, data []byte) (err error) {
 	if data == nil {
 		return nil
 	}
 	if strings.HasSuffix(key, ".gz") {
-		reader, err := gzip.NewReader(bytes.NewReader(data))
+		var reader *gzip.Reader
+		reader, err = gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return err
 		}
+		defer func() {
+			if closeErr := reader.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}()
 		key = strings.TrimSuffix(key, ".gz")
 		data, err = io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+	} else if strings.HasSuffix(key, ".zst") {
+		var reader *zstd.Decoder
+		reader, err = zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		decompressedReader := reader.IOReadCloser()
+		defer func() {
+			if closeErr := decompressedReader.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}()
+		// Strip the compression suffix so the downstream format
+		// detection sees the underlying marshaler's suffix (.json /
+		// .binpb). Matches the .gz branch; without it, a file written
+		// by awss3exporter with compression: zstd (e.g. foo.binpb.zst)
+		// loops back through processReceivedData with key still ending
+		// in .zst, falls through every format check, and is dropped
+		// with "Unsupported file format" (#47802).
+		key = strings.TrimSuffix(key, ".zst")
+		data, err = io.ReadAll(decompressedReader)
 		if err != nil {
 			return err
 		}
@@ -250,11 +299,11 @@ func newEncodingExtensions(encodingsConfig []Encoding, host component.Host) (enc
 	encodings := make(encodingExtensions, 0)
 	extensions := host.GetExtensions()
 	for _, configItem := range encodingsConfig {
-		if e, ok := extensions[configItem.Extension]; ok {
-			encodings = append(encodings, encodingExtension{extension: e, suffix: configItem.Suffix})
-		} else {
+		e, ok := extensions[configItem.Extension]
+		if !ok {
 			return nil, fmt.Errorf("extension %q not found", configItem.Extension)
 		}
+		encodings = append(encodings, encodingExtension{extension: e, suffix: configItem.Suffix})
 	}
 	return encodings, nil
 }

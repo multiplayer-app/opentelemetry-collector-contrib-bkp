@@ -29,6 +29,7 @@ func TestResourceAttributesConfig(t *testing.T) {
 				AzureVMScalesetName:    ResourceAttributeConfig{Enabled: true},
 				AzureVMSize:            ResourceAttributeConfig{Enabled: true},
 				CloudAccountID:         ResourceAttributeConfig{Enabled: true},
+				CloudAvailabilityZone:  ResourceAttributeConfig{Enabled: true},
 				CloudPlatform:          ResourceAttributeConfig{Enabled: true},
 				CloudProvider:          ResourceAttributeConfig{Enabled: true},
 				CloudRegion:            ResourceAttributeConfig{Enabled: true},
@@ -44,6 +45,7 @@ func TestResourceAttributesConfig(t *testing.T) {
 				AzureVMScalesetName:    ResourceAttributeConfig{Enabled: false},
 				AzureVMSize:            ResourceAttributeConfig{Enabled: false},
 				CloudAccountID:         ResourceAttributeConfig{Enabled: false},
+				CloudAvailabilityZone:  ResourceAttributeConfig{Enabled: false},
 				CloudPlatform:          ResourceAttributeConfig{Enabled: false},
 				CloudProvider:          ResourceAttributeConfig{Enabled: false},
 				CloudRegion:            ResourceAttributeConfig{Enabled: false},
@@ -55,9 +57,8 @@ func TestResourceAttributesConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := loadResourceAttributesConfig(t, tt.name)
-			if diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{})); diff != "" {
-				t.Errorf("Config mismatch (-expected +actual):\n%s", diff)
-			}
+			diff := cmp.Diff(tt.want, cfg, cmpopts.IgnoreUnexported(ResourceAttributeConfig{}))
+			require.Emptyf(t, diff, "Config mismatch (-expected +actual):\n%s", diff)
 		})
 	}
 }

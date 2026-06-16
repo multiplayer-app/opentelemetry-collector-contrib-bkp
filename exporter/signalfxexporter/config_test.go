@@ -10,17 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
-	"go.uber.org/zap"
 
 	apmcorrelation "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/signalfxexporter/internal/apm/correlations"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/signalfxexporter/internal/correlation"
@@ -55,13 +56,13 @@ func TestLoadConfig(t *testing.T) {
 				Realm:       "ap0",
 				ClientConfig: confighttp.ClientConfig{
 					Timeout:              10 * time.Second,
-					Headers:              map[string]configopaque.String{},
-					MaxIdleConns:         &hundred,
-					MaxIdleConnsPerHost:  &hundred,
-					MaxConnsPerHost:      &defaultMaxConnsPerHost,
-					IdleConnTimeout:      &idleConnTimeout,
+					MaxIdleConns:         hundred,
+					MaxIdleConnsPerHost:  hundred,
+					MaxConnsPerHost:      defaultMaxConnsPerHost,
+					IdleConnTimeout:      idleConnTimeout,
 					HTTP2ReadIdleTimeout: 10 * time.Second,
 					HTTP2PingTimeout:     10 * time.Second,
+					ForceAttemptHTTP2:    true,
 				},
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
@@ -71,7 +72,7 @@ func TestLoadConfig(t *testing.T) {
 					RandomizationFactor: backoff.DefaultRandomizationFactor,
 					Multiplier:          backoff.DefaultMultiplier,
 				},
-				QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+				QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 				AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{
 					AccessTokenPassthrough: true,
 				},
@@ -84,8 +85,9 @@ func TestLoadConfig(t *testing.T) {
 					MaxConnsPerHost:     20,
 					IdleConnTimeout:     30 * time.Second,
 					Timeout:             10 * time.Second,
+					DropTags:            false,
+					StripK8sLabelPrefix: true,
 				},
-				TranslationRules:    nil,
 				ExcludeMetrics:      nil,
 				IncludeMetrics:      nil,
 				DeltaTranslationTTL: 3600,
@@ -94,11 +96,11 @@ func TestLoadConfig(t *testing.T) {
 					ClientConfig: confighttp.ClientConfig{
 						Endpoint:            "",
 						Timeout:             5 * time.Second,
-						Headers:             map[string]configopaque.String{},
-						MaxIdleConns:        &defaultMaxIdleConns,
-						MaxIdleConnsPerHost: &defaultMaxIdleConnsPerHost,
-						MaxConnsPerHost:     &defaultMaxConnsPerHost,
-						IdleConnTimeout:     &defaultIdleConnTimeout,
+						MaxIdleConns:        defaultMaxIdleConns,
+						MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
+						MaxConnsPerHost:     defaultMaxConnsPerHost,
+						IdleConnTimeout:     defaultIdleConnTimeout,
+						ForceAttemptHTTP2:   true,
 					},
 					StaleServiceTimeout: 5 * time.Minute,
 					SyncAttributes: map[string]string{
@@ -125,16 +127,17 @@ func TestLoadConfig(t *testing.T) {
 				Realm:       "us1",
 				ClientConfig: confighttp.ClientConfig{
 					Timeout: 2 * time.Second,
-					Headers: map[string]configopaque.String{
-						"added-entry": "added value",
-						"dot.test":    "test",
+					Headers: configopaque.MapList{
+						{Name: "added-entry", Value: "added value"},
+						{Name: "dot.test", Value: "test"},
 					},
-					MaxIdleConns:         &seventy,
-					MaxIdleConnsPerHost:  &seventy,
-					MaxConnsPerHost:      &defaultMaxConnsPerHost,
-					IdleConnTimeout:      &idleConnTimeout,
+					MaxIdleConns:         seventy,
+					MaxIdleConnsPerHost:  seventy,
+					MaxConnsPerHost:      defaultMaxConnsPerHost,
+					IdleConnTimeout:      idleConnTimeout,
 					HTTP2ReadIdleTimeout: 10 * time.Second,
 					HTTP2PingTimeout:     10 * time.Second,
+					ForceAttemptHTTP2:    true,
 				},
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
@@ -144,11 +147,13 @@ func TestLoadConfig(t *testing.T) {
 					RandomizationFactor: backoff.DefaultRandomizationFactor,
 					Multiplier:          backoff.DefaultMultiplier,
 				},
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:      true,
-					NumConsumers: 2,
-					QueueSize:    10,
-				}, AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{
+				QueueSettings: configoptional.Some(func() exporterhelper.QueueBatchConfig {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 2
+					queue.QueueSize = 10
+					return queue
+				}()),
+				AccessTokenPassthroughConfig: splunk.AccessTokenPassthroughConfig{
 					AccessTokenPassthrough: false,
 				},
 				LogDimensionUpdates: true,
@@ -160,40 +165,12 @@ func TestLoadConfig(t *testing.T) {
 					MaxConnsPerHost:     10000,
 					IdleConnTimeout:     2 * time.Hour,
 					Timeout:             20 * time.Second,
+					DropTags:            false,
+					StripK8sLabelPrefix: true,
 				},
-				TranslationRules: []translation.Rule{
-					{
-						Action: translation.ActionRenameDimensionKeys,
-						Mapping: map[string]string{
-							"k8s.cluster.name": "kubernetes_cluster",
-						},
-					},
-					{
-						Action: translation.ActionDropDimensions,
-						DimensionPairs: map[string]map[string]bool{
-							"foo":  nil,
-							"foo1": {"bar": true},
-						},
-					},
-					{
-						Action:     translation.ActionDropDimensions,
-						MetricName: "metric",
-						DimensionPairs: map[string]map[string]bool{
-							"foo":  nil,
-							"foo1": {"bar": true},
-						},
-					},
-					{
-						Action: translation.ActionDropDimensions,
-						MetricNames: map[string]bool{
-							"metric1": true,
-							"metric2": true,
-						},
-						DimensionPairs: map[string]map[string]bool{
-							"foo":  nil,
-							"foo1": {"bar": true},
-						},
-					},
+				DefaultProperties: map[string]string{
+					"foo":    "bar",
+					"_index": "baz",
 				},
 				ExcludeMetrics: []dpfilters.MetricFilter{
 					{
@@ -260,11 +237,11 @@ func TestLoadConfig(t *testing.T) {
 					ClientConfig: confighttp.ClientConfig{
 						Endpoint:            "",
 						Timeout:             5 * time.Second,
-						Headers:             map[string]configopaque.String{},
-						MaxIdleConns:        &defaultMaxIdleConns,
-						MaxIdleConnsPerHost: &defaultMaxIdleConnsPerHost,
-						MaxConnsPerHost:     &defaultMaxConnsPerHost,
-						IdleConnTimeout:     &defaultIdleConnTimeout,
+						MaxIdleConns:        defaultMaxIdleConns,
+						MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
+						MaxConnsPerHost:     defaultMaxConnsPerHost,
+						IdleConnTimeout:     defaultIdleConnTimeout,
+						ForceAttemptHTTP2:   true,
 					},
 					StaleServiceTimeout: 5 * time.Minute,
 					SyncAttributes: map[string]string{
@@ -295,7 +272,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			// We need to add the default exclude rules.
 			assert.NoError(t, setDefaultExcludes(tt.expected))
 			assert.Equal(t, tt.expected, cfg)
@@ -312,24 +289,12 @@ func TestConfigGetMetricTranslator(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Test empty config",
+			name: "Test default translation rules",
 			cfg: &Config{
 				DeltaTranslationTTL: 3600,
 			},
 			want: func() *translation.MetricTranslator {
 				translator, err := translation.NewMetricTranslator(defaultTranslationRules, 3600, done)
-				require.NoError(t, err)
-				return translator
-			}(),
-		},
-		{
-			name: "Test empty rules",
-			cfg: &Config{
-				TranslationRules:    []translation.Rule{},
-				DeltaTranslationTTL: 3600,
-			},
-			want: func() *translation.MetricTranslator {
-				translator, err := translation.NewMetricTranslator([]translation.Rule{}, 3600, done)
 				require.NoError(t, err)
 				return translator
 			}(),
@@ -346,37 +311,10 @@ func TestConfigGetMetricTranslator(t *testing.T) {
 				return translator
 			}(),
 		},
-		{
-			name: "Test disable rules overrides rules",
-			cfg: &Config{
-				TranslationRules:               []translation.Rule{{Action: translation.ActionDropDimensions}},
-				DisableDefaultTranslationRules: true,
-				DeltaTranslationTTL:            3600,
-			},
-			want: func() *translation.MetricTranslator {
-				translator, err := translation.NewMetricTranslator([]translation.Rule{}, 3600, done)
-				require.NoError(t, err)
-				return translator
-			}(),
-		},
-		{
-			name: "Test invalid translation rules",
-			cfg: &Config{
-				Realm:       "us0",
-				AccessToken: "access_token",
-				TranslationRules: []translation.Rule{
-					{
-						Action: translation.ActionRenameDimensionKeys,
-					},
-				},
-				DeltaTranslationTTL: 3600,
-			},
-			wantErr: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.cfg.getMetricTranslator(zap.NewNop(), done)
+			got, err := tt.cfg.getMetricTranslator(done)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -401,7 +339,7 @@ func TestConfigGetIngestURL(t *testing.T) {
 			},
 			want: &url.URL{
 				Scheme: "https",
-				Host:   "ingest.us0.signalfx.com",
+				Host:   "ingest.us0.observability.splunkcloud.com",
 				Path:   "",
 			},
 		},
@@ -409,11 +347,11 @@ func TestConfigGetIngestURL(t *testing.T) {
 			name: "Test URL overrides",
 			cfg: &Config{
 				Realm:     "us0",
-				IngestURL: "https://ingest.us1.signalfx.com/",
+				IngestURL: "https://ingest.us1.observability.splunkcloud.com/",
 			},
 			want: &url.URL{
 				Scheme: "https",
-				Host:   "ingest.us1.signalfx.com",
+				Host:   "ingest.us1.observability.splunkcloud.com",
 				Path:   "/",
 			},
 		},
@@ -452,18 +390,18 @@ func TestConfigGetAPIURL(t *testing.T) {
 			},
 			want: &url.URL{
 				Scheme: "https",
-				Host:   "api.us0.signalfx.com",
+				Host:   "api.us0.observability.splunkcloud.com",
 			},
 		},
 		{
 			name: "Test URL overrides",
 			cfg: &Config{
 				Realm:  "us0",
-				APIURL: "https://api.us1.signalfx.com/",
+				APIURL: "https://api.us1.observability.splunkcloud.com/",
 			},
 			want: &url.URL{
 				Scheme: "https",
-				Host:   "api.us1.signalfx.com",
+				Host:   "api.us1.observability.splunkcloud.com",
 				Path:   "/",
 			},
 		},
@@ -501,14 +439,14 @@ func TestConfigValidateErrors(t *testing.T) {
 			name: "Test empty realm and API URL",
 			cfg: &Config{
 				AccessToken: "access_token",
-				IngestURL:   "https://ingest.us1.signalfx.com/",
+				IngestURL:   "https://ingest.us1.observability.splunkcloud.com/",
 			},
 		},
 		{
 			name: "Test empty realm and Ingest URL",
 			cfg: &Config{
 				AccessToken: "access_token",
-				APIURL:      "https://api.us1.signalfx.com/",
+				APIURL:      "https://api.us1.observability.splunkcloud.com/",
 			},
 		},
 		{
@@ -524,16 +462,32 @@ func TestConfigValidateErrors(t *testing.T) {
 			cfg: &Config{
 				Realm:       "us0",
 				AccessToken: "access_token",
-				QueueSettings: exporterhelper.QueueConfig{
-					Enabled:   true,
+				QueueSettings: configoptional.Some(exporterhelper.QueueBatchConfig{
 					QueueSize: -1,
+				}),
+			},
+		},
+		{
+			name: "Invalid root_path",
+			cfg: &Config{
+				Realm:            "us0",
+				AccessToken:      "access_token",
+				RootPath:         "/foobar",
+				SyncHostMetadata: true,
+			},
+		},
+		{
+			name: "Empty default property",
+			cfg: &Config{
+				DefaultProperties: map[string]string{
+					"foo": "",
 				},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Error(t, component.ValidateConfig(tt.cfg))
+			assert.Error(t, xconfmap.Validate(tt.cfg))
 		})
 	}
 }

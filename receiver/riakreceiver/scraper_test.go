@@ -4,7 +4,6 @@
 package riakreceiver // import "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/riakreceiver"
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -27,6 +26,17 @@ import (
 )
 
 func TestScraperStart(t *testing.T) {
+	clientConfigNonexistentCA := confighttp.NewDefaultClientConfig()
+	clientConfigNonexistentCA.Endpoint = defaultEndpoint
+	clientConfigNonexistentCA.TLS = configtls.ClientConfig{
+		Config: configtls.Config{
+			CAFile: "/non/existent",
+		},
+	}
+
+	clientConfig := confighttp.NewDefaultClientConfig()
+	clientConfig.Endpoint = defaultEndpoint
+
 	testcases := []struct {
 		desc        string
 		scraper     *riakScraper
@@ -36,14 +46,7 @@ func TestScraperStart(t *testing.T) {
 			desc: "Bad Config",
 			scraper: &riakScraper{
 				cfg: &Config{
-					ClientConfig: confighttp.ClientConfig{
-						Endpoint: defaultEndpoint,
-						TLSSetting: configtls.ClientConfig{
-							Config: configtls.Config{
-								CAFile: "/non/existent",
-							},
-						},
-					},
+					ClientConfig: clientConfigNonexistentCA,
 				},
 				settings: componenttest.NewNopTelemetrySettings(),
 			},
@@ -54,10 +57,7 @@ func TestScraperStart(t *testing.T) {
 			desc: "Valid Config",
 			scraper: &riakScraper{
 				cfg: &Config{
-					ClientConfig: confighttp.ClientConfig{
-						TLSSetting: configtls.ClientConfig{},
-						Endpoint:   defaultEndpoint,
-					},
+					ClientConfig: clientConfig,
 				},
 				settings: componenttest.NewNopTelemetrySettings(),
 			},
@@ -67,7 +67,7 @@ func TestScraperStart(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.desc, func(t *testing.T) {
-			err := tc.scraper.start(context.Background(), componenttest.NewNopHost())
+			err := tc.scraper.start(t.Context(), componenttest.NewNopHost())
 			if tc.expectError {
 				require.Error(t, err)
 			} else {
@@ -77,7 +77,7 @@ func TestScraperStart(t *testing.T) {
 	}
 }
 
-func TestScaperScrape(t *testing.T) {
+func TestScraperScrape(t *testing.T) {
 	testCases := []struct {
 		desc              string
 		setupMockClient   func(t *testing.T) client
@@ -134,26 +134,8 @@ func TestScaperScrape(t *testing.T) {
 			},
 			setupCfg: func() *Config {
 				cfg := createDefaultConfig().(*Config)
-				cfg.MetricsBuilderConfig.Metrics = metadata.MetricsConfig{
-					RiakMemoryLimit: metadata.MetricConfig{
-						Enabled: false,
-					},
-					RiakNodeOperationCount: metadata.MetricConfig{
-						Enabled: false,
-					},
-					RiakNodeOperationTimeMean: metadata.MetricConfig{
-						Enabled: true,
-					},
-					RiakNodeReadRepairCount: metadata.MetricConfig{
-						Enabled: true,
-					},
-					RiakVnodeIndexOperationCount: metadata.MetricConfig{
-						Enabled: true,
-					},
-					RiakVnodeOperationCount: metadata.MetricConfig{
-						Enabled: true,
-					},
-				}
+				cfg.MetricsBuilderConfig.Metrics.RiakMemoryLimit.Enabled = false
+				cfg.MetricsBuilderConfig.Metrics.RiakNodeOperationCount.Enabled = false
 				return cfg
 			},
 			expectedErr: nil,
@@ -186,9 +168,9 @@ func TestScaperScrape(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			scraper := newScraper(zap.NewNop(), tc.setupCfg(), receivertest.NewNopSettings())
+			scraper := newScraper(zap.NewNop(), tc.setupCfg(), receivertest.NewNopSettings(metadata.Type))
 			scraper.client = tc.setupMockClient(t)
-			actualMetrics, err := scraper.scrape(context.Background())
+			actualMetrics, err := scraper.scrape(t.Context())
 			if tc.expectedErr == nil {
 				require.NoError(t, err)
 			} else {

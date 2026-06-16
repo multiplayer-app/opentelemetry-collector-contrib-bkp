@@ -10,8 +10,10 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	rcvr "go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
+	xrcvr "go.opentelemetry.io/collector/receiver/xreceiver"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/consumerretry"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/operator/helper"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/pipeline"
@@ -26,11 +28,15 @@ type LogReceiverType interface {
 }
 
 // NewFactory creates a factory for a Stanza-based receiver
-func NewFactory(logReceiverType LogReceiverType, sl component.StabilityLevel) rcvr.Factory {
-	return rcvr.NewFactory(
+func NewFactory(logReceiverType LogReceiverType, sl component.StabilityLevel, opts ...xrcvr.FactoryOption) rcvr.Factory {
+	allOpts := []xrcvr.FactoryOption{
+		xrcvr.WithLogs(createLogsReceiver(logReceiverType), sl),
+	}
+	allOpts = append(allOpts, opts...)
+	return xrcvr.NewFactory(
 		logReceiverType.Type(),
 		logReceiverType.CreateDefaultConfig,
-		rcvr.WithLogs(createLogsReceiver(logReceiverType), sl),
+		allOpts...,
 	)
 }
 
@@ -46,6 +52,21 @@ func createLogsReceiver(logReceiverType LogReceiverType) rcvr.CreateLogsFunc {
 
 		operators := append([]operator.Config{inputCfg}, baseCfg.Operators...)
 
+		obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
+			ReceiverID:             params.ID,
+			ReceiverCreateSettings: params,
+		})
+		if err != nil {
+			return nil, err
+		}
+		rcv := &receiver{
+			set:       params.TelemetrySettings,
+			id:        params.ID,
+			consumer:  consumerretry.NewLogs(baseCfg.RetryOnFailure, params.Logger, nextConsumer),
+			obsrecv:   obsrecv,
+			storageID: baseCfg.StorageID,
+		}
+
 		var emitterOpts []helper.EmitterOption
 		if baseCfg.maxBatchSize > 0 {
 			emitterOpts = append(emitterOpts, helper.WithMaxBatchSize(baseCfg.maxBatchSize))
@@ -53,7 +74,14 @@ func createLogsReceiver(logReceiverType LogReceiverType) rcvr.CreateLogsFunc {
 		if baseCfg.flushInterval > 0 {
 			emitterOpts = append(emitterOpts, helper.WithFlushInterval(baseCfg.flushInterval))
 		}
-		emitter := helper.NewLogEmitter(params.TelemetrySettings, emitterOpts...)
+
+		var emitter helper.LogEmitter
+		if metadata.StanzaSynchronousLogEmitterFeatureGate.IsEnabled() {
+			emitter = helper.NewSynchronousLogEmitter(params.TelemetrySettings, rcv.consumeEntries)
+		} else {
+			emitter = helper.NewBatchingLogEmitter(params.TelemetrySettings, rcv.consumeEntries, emitterOpts...)
+		}
+
 		pipe, err := pipeline.Config{
 			Operators:     operators,
 			DefaultOutput: emitter,
@@ -62,27 +90,9 @@ func createLogsReceiver(logReceiverType LogReceiverType) rcvr.CreateLogsFunc {
 			return nil, err
 		}
 
-		var converterOpts []converterOption
-		if baseCfg.numWorkers > 0 {
-			converterOpts = append(converterOpts, withWorkerCount(baseCfg.numWorkers))
-		}
-		converter := NewConverter(params.TelemetrySettings, converterOpts...)
-		obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
-			ReceiverID:             params.ID,
-			ReceiverCreateSettings: params,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &receiver{
-			set:       params.TelemetrySettings,
-			id:        params.ID,
-			pipe:      pipe,
-			emitter:   emitter,
-			consumer:  consumerretry.NewLogs(baseCfg.RetryOnFailure, params.Logger, nextConsumer),
-			converter: converter,
-			obsrecv:   obsrecv,
-			storageID: baseCfg.StorageID,
-		}, nil
+		rcv.emitter = emitter
+		rcv.pipe = pipe
+
+		return rcv, nil
 	}
 }

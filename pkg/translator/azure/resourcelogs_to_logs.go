@@ -5,17 +5,17 @@ package azure // import "github.com/open-telemetry/opentelemetry-collector-contr
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
+	"time"
 
-	jsoniter "github.com/json-iterator/go"
+	"github.com/goccy/go-json"
 	"github.com/relvacode/iso8601"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-	conventions "go.opentelemetry.io/collector/semconv/v1.13.0"
+	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 const (
@@ -37,9 +37,7 @@ const (
 	azureTenantID          = "azure.tenant.id"
 )
 
-var (
-	errMissingTimestamp = errors.New("missing timestamp")
-)
+var errMissingTimestamp = errors.New("missing timestamp")
 
 // azureRecords represents an array of Azure log records
 // as exported via an Azure Event Hub
@@ -65,7 +63,7 @@ type azureLogRecord struct {
 	CallerIPAddress   *string      `json:"callerIpAddress"`
 	CorrelationID     *string      `json:"correlationId"`
 	Identity          *any         `json:"identity"`
-	Level             *json.Number `json:"Level"`
+	Level             any          `json:"Level"`
 	Location          *string      `json:"location"`
 	Properties        *any         `json:"properties"`
 }
@@ -73,22 +71,24 @@ type azureLogRecord struct {
 var _ plog.Unmarshaler = (*ResourceLogsUnmarshaler)(nil)
 
 type ResourceLogsUnmarshaler struct {
-	Version string
-	Logger  *zap.Logger
+	Version     string
+	Logger      *zap.Logger
+	TimeFormats []string
 }
 
 func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 	l := plog.NewLogs()
 
 	var azureLogs azureRecords
-	decoder := jsoniter.NewDecoder(bytes.NewReader(buf))
+	decoder := json.NewDecoder(bytes.NewReader(buf))
 	if err := decoder.Decode(&azureLogs); err != nil {
 		return l, err
 	}
 
 	var resourceIDs []string
 	azureResourceLogs := make(map[string][]azureLogRecord)
-	for _, azureLog := range azureLogs.Records {
+	for i := range azureLogs.Records {
+		azureLog := azureLogs.Records[i]
 		azureResourceLogs[azureLog.ResourceID] = append(azureResourceLogs[azureLog.ResourceID], azureLog)
 		keyExists := slices.Contains(resourceIDs, azureLog.ResourceID)
 		if !keyExists {
@@ -105,9 +105,9 @@ func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 		scopeLogs.Scope().SetVersion(r.Version)
 		logRecords := scopeLogs.LogRecords()
 
-		for i := 0; i < len(logs); i++ {
+		for i := range logs {
 			log := logs[i]
-			nanos, err := getTimestamp(log)
+			nanos, err := getTimestamp(log, r.TimeFormats...)
 			if err != nil {
 				r.Logger.Warn("Unable to convert timestamp from log", zap.String("timestamp", log.Time))
 				continue
@@ -117,9 +117,14 @@ func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 			lr.SetTimestamp(nanos)
 
 			if log.Level != nil {
-				severity := asSeverity(*log.Level)
+				severity := asSeverity(log.Level)
 				lr.SetSeverityNumber(severity)
-				lr.SetSeverityText(log.Level.String())
+				switch s := log.Level.(type) {
+				case string:
+					lr.SetSeverityText(s)
+				case float64:
+					lr.SetSeverityText(strconv.FormatFloat(s, 'f', -1, 64))
+				}
 			}
 
 			if err := lr.Attributes().FromRaw(extractRawAttributes(log)); err != nil {
@@ -131,11 +136,11 @@ func (r ResourceLogsUnmarshaler) UnmarshalLogs(buf []byte) (plog.Logs, error) {
 	return l, nil
 }
 
-func getTimestamp(record azureLogRecord) (pcommon.Timestamp, error) {
+func getTimestamp(record azureLogRecord, formats ...string) (pcommon.Timestamp, error) {
 	if record.Time != "" {
-		return asTimestamp(record.Time)
+		return asTimestamp(record.Time, formats...)
 	} else if record.Timestamp != "" {
-		return asTimestamp(record.Timestamp)
+		return asTimestamp(record.Timestamp, formats...)
 	}
 
 	return 0, errMissingTimestamp
@@ -144,40 +149,53 @@ func getTimestamp(record azureLogRecord) (pcommon.Timestamp, error) {
 // asTimestamp will parse an ISO8601 string into an OpenTelemetry
 // nanosecond timestamp. If the string cannot be parsed, it will
 // return zero and the error.
-func asTimestamp(s string) (pcommon.Timestamp, error) {
-	t, err := iso8601.ParseString(s)
-	if err != nil {
-		return 0, err
+func asTimestamp(s string, formats ...string) (pcommon.Timestamp, error) {
+	var err error
+	var t time.Time
+	// Try parsing with provided formats first
+	for _, format := range formats {
+		if t, err = time.Parse(format, s); err == nil {
+			return pcommon.Timestamp(t.UnixNano()), nil
+		}
 	}
 
-	return pcommon.Timestamp(t.UnixNano()), nil
+	// Fallback to ISO 8601 parsing if no format matches
+	if t, err = iso8601.ParseString(s); err == nil {
+		return pcommon.Timestamp(t.UnixNano()), nil
+	}
+	return 0, err
 }
 
 // asSeverity converts the Azure log level to equivalent
 // OpenTelemetry severity numbers. If the log level is not
 // valid, then the 'Unspecified' value is returned.
-func asSeverity(number json.Number) plog.SeverityNumber {
-	switch number.String() {
-	case "Informational":
-		return plog.SeverityNumberInfo
-	case "Warning":
-		return plog.SeverityNumberWarn
-	case "Error":
-		return plog.SeverityNumberError
-	case "Critical":
-		return plog.SeverityNumberFatal
-	default:
-		var levelNumber, _ = number.Int64()
-		if levelNumber > 0 {
-			return plog.SeverityNumber(levelNumber)
+func asSeverity(number any) plog.SeverityNumber {
+	switch l := number.(type) {
+	case string:
+		switch l {
+		case "Informational":
+			return plog.SeverityNumberInfo
+		case "Warning":
+			return plog.SeverityNumberWarn
+		case "Error":
+			return plog.SeverityNumberError
+		case "Critical":
+			return plog.SeverityNumberFatal
+		default:
+			return plog.SeverityNumberUnspecified
 		}
-
+	case float64:
+		if l > 0 {
+			return plog.SeverityNumber(l)
+		}
+		return plog.SeverityNumberUnspecified
+	default:
 		return plog.SeverityNumberUnspecified
 	}
 }
 
 func extractRawAttributes(log azureLogRecord) map[string]any {
-	var attrs = map[string]any{}
+	attrs := map[string]any{}
 
 	attrs[azureCategory] = log.Category
 	setIf(attrs, azureCorrelationID, log.CorrelationID)
@@ -200,10 +218,10 @@ func extractRawAttributes(log azureLogRecord) map[string]any {
 	setIf(attrs, azureResultType, log.ResultType)
 	setIf(attrs, azureTenantID, log.TenantID)
 
-	setIf(attrs, conventions.AttributeCloudRegion, log.Location)
-	attrs[conventions.AttributeCloudProvider] = conventions.AttributeCloudProviderAzure
+	setIf(attrs, string(conventions.CloudRegionKey), log.Location)
+	attrs[string(conventions.CloudProviderKey)] = conventions.CloudProviderAzure.Value.AsString()
 
-	setIf(attrs, conventions.AttributeNetSockPeerAddr, log.CallerIPAddress)
+	setIf(attrs, string(conventions.NetworkPeerAddressKey), log.CallerIPAddress)
 	return attrs
 }
 

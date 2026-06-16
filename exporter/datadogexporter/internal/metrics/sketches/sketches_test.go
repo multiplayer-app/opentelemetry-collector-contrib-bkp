@@ -11,14 +11,14 @@ import (
 	"testing"
 
 	"github.com/DataDog/agent-payload/v5/gogen"
-	"github.com/DataDog/opentelemetry-mapping-go/pkg/quantile"
+	"github.com/DataDog/datadog-agent/pkg/util/quantile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func makesketch(n int) *quantile.Sketch {
 	s, c := &quantile.Sketch{}, quantile.Default()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s.Insert(c, float64(i))
 	}
 	return s
@@ -74,14 +74,10 @@ func TestSketchSeriesListMarshal(t *testing.T) {
 	}
 
 	b, err := sl.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	pl := new(gogen.SketchPayload)
-	if err := pl.Unmarshal(b); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, pl.Unmarshal(b))
 
 	require.Len(t, pl.Sketches, len(sl))
 
@@ -96,7 +92,6 @@ func TestSketchSeriesListMarshal(t *testing.T) {
 
 		require.Len(t, pb.Dogsketches, len(in.Points))
 		for j, pointPb := range pb.Dogsketches {
-
 			check(t, in.Points[j], pointPb)
 		}
 	}

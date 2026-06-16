@@ -340,7 +340,7 @@ func Test_FromMetrics(t *testing.T) {
 				dp.SetSum(123.4)
 				dp.SetCount(111)
 				qvs := dp.QuantileValues()
-				for i := 0; i < 4; i++ {
+				for i := range 4 {
 					qv := qvs.AppendEmpty()
 					qv.SetQuantile(0.25 * float64(i+1))
 					qv.SetValue(float64(i))
@@ -390,7 +390,7 @@ func Test_FromMetrics(t *testing.T) {
 			// of those is not deterministic.
 			sortDimensions(tt.wantSfxDataPoints)
 			sortDimensions(gotSfxDataPoints)
-			assert.EqualValues(t, tt.wantSfxDataPoints, gotSfxDataPoints)
+			assert.Equal(t, tt.wantSfxDataPoints, gotSfxDataPoints)
 		})
 	}
 
@@ -479,7 +479,7 @@ func Test_FromMetrics(t *testing.T) {
 			// of those is not deterministic.
 			sortDimensions(tt.wantSfxDataPoints)
 			sortDimensions(gotSfxDataPoints)
-			assert.EqualValues(t, tt.wantSfxDataPoints, gotSfxDataPoints)
+			assert.Equal(t, tt.wantSfxDataPoints, gotSfxDataPoints)
 		})
 	}
 
@@ -516,7 +516,7 @@ func Test_FromMetrics(t *testing.T) {
 			// of those is not deterministic.
 			sortDimensions(tt.wantSfxDataPoints)
 			sortDimensions(gotSfxDataPoints)
-			assert.EqualValues(t, tt.wantSfxDataPoints, gotSfxDataPoints)
+			assert.Equal(t, tt.wantSfxDataPoints, gotSfxDataPoints)
 		})
 	}
 }

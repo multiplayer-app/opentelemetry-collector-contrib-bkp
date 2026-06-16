@@ -19,7 +19,7 @@ import (
 
 func TestDataPointRecorders(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	settings := receivertest.NewNopSettings()
+	settings := receivertest.NewNopSettings(metadata.Type)
 	settings.Logger = logger
 	rs := &redisScraper{
 		redisSvc: newRedisSvc(newFakeClient()),
@@ -30,6 +30,10 @@ func TestDataPointRecorders(t *testing.T) {
 	for metric, recorder := range rs.dataPointRecorders() {
 		switch recorder.(type) {
 		case func(pcommon.Timestamp, int64), func(pcommon.Timestamp, float64):
+			recorderName := runtime.FuncForPC(reflect.ValueOf(recorder).Pointer()).Name()
+			require.NotContains(t, metricByRecorder, recorderName, "share the same recorder")
+			metricByRecorder[recorderName] = metric
+		case func(pcommon.Timestamp, int64, metadata.AttributeClusterState):
 			recorderName := runtime.FuncForPC(reflect.ValueOf(recorder).Pointer()).Name()
 			require.NotContains(t, metricByRecorder, recorderName, "share the same recorder")
 			metricByRecorder[recorderName] = metric

@@ -7,22 +7,12 @@ package windowseventlogreceiver // import "github.com/open-telemetry/opentelemet
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/receiver"
-
-	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowseventlogreceiver/internal/metadata"
 )
-
-// newFactoryAdapter creates a dummy factory for windowseventlog receiver
-func newFactoryAdapter() receiver.Factory {
-	return receiver.NewFactory(
-		metadata.Type,
-		createDefaultConfig,
-		receiver.WithLogs(createLogsReceiver, metadata.LogsStability))
-}
 
 func createLogsReceiver(
 	_ context.Context,
@@ -30,5 +20,5 @@ func createLogsReceiver(
 	_ component.Config,
 	_ consumer.Logs,
 ) (receiver.Logs, error) {
-	return nil, fmt.Errorf("windows eventlog receiver is only supported on Windows")
+	return nil, errors.New("windows eventlog receiver is only supported on Windows")
 }

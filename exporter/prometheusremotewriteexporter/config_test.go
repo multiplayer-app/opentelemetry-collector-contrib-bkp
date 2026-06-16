@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
+	remoteapi "github.com/prometheus/client_golang/exp/api/remote"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -17,9 +18,11 @@ import (
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/resourcetotelemetry"
 )
 
@@ -29,25 +32,28 @@ func TestLoadConfig(t *testing.T) {
 	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
 	require.NoError(t, err)
 
-	clientConfig := confighttp.NewDefaultClientConfig()
-	clientConfig.Endpoint = "localhost:8888"
-	clientConfig.TLSSetting = configtls.ClientConfig{
+	clientConfigWithoutHeaders := confighttp.NewDefaultClientConfig()
+	clientConfigWithoutHeaders.Endpoint = "localhost:8888"
+	clientConfigWithoutHeaders.TLS = configtls.ClientConfig{
 		Config: configtls.Config{
 			CAFile: "/var/lib/mycert.pem", // This is subject to change, but currently I have no idea what else to put here lol
 		},
 		Insecure: false,
 	}
-	clientConfig.ReadBufferSize = 0
-	clientConfig.WriteBufferSize = 512 * 1024
-	clientConfig.Timeout = 5 * time.Second
-	clientConfig.Headers = map[string]configopaque.String{
-		"Prometheus-Remote-Write-Version": "0.1.0",
-		"X-Scope-OrgID":                   "234",
+	clientConfigWithoutHeaders.ReadBufferSize = 0
+	clientConfigWithoutHeaders.WriteBufferSize = 512 * 1024
+	clientConfigWithoutHeaders.Timeout = 5 * time.Second
+
+	clientConfigWithHeaders := clientConfigWithoutHeaders
+	clientConfigWithHeaders.Headers = configopaque.MapList{
+		{Name: "Prometheus-Remote-Write-Version", Value: "0.1.0"},
+		{Name: "X-Scope-OrgID", Value: "234"},
 	}
 	tests := []struct {
-		id           component.ID
-		expected     component.Config
-		errorMessage string
+		id               component.ID
+		expected         component.Config
+		errorMessage     string
+		enableSendingRW2 bool
 	}{
 		{
 			id:       component.NewIDWithName(metadata.Type, ""),
@@ -56,8 +62,9 @@ func TestLoadConfig(t *testing.T) {
 		{
 			id: component.NewIDWithName(metadata.Type, "2"),
 			expected: &Config{
-				MaxBatchSizeBytes: 3000000,
-				TimeoutSettings:   exporterhelper.NewDefaultTimeoutConfig(),
+				MaxBatchSizeBytes:          3000000,
+				MaxBatchRequestParallelism: toPtr(10),
+				TimeoutSettings:            exporterhelper.NewDefaultTimeoutConfig(),
 				BackOffConfig: configretry.BackOffConfig{
 					Enabled:             true,
 					InitialInterval:     10 * time.Second,
@@ -74,14 +81,51 @@ func TestLoadConfig(t *testing.T) {
 				AddMetricSuffixes:           false,
 				Namespace:                   "test-space",
 				ExternalLabels:              map[string]string{"key1": "value1", "key2": "value2"},
-				ClientConfig:                clientConfig,
+				ClientConfig:                clientConfigWithHeaders,
 				ResourceToTelemetrySettings: resourcetotelemetry.Settings{Enabled: true},
-				TargetInfo: &TargetInfo{
+				TargetInfo: TargetInfo{
 					Enabled: true,
 				},
-				CreatedMetric: &CreatedMetric{Enabled: true},
+				RemoteWriteProtoMsg: remoteapi.WriteV1MessageType,
 			},
 		},
+		{
+			id: component.NewIDWithName(metadata.Type, "translation_strategy"),
+			expected: &Config{
+				MaxBatchSizeBytes:          3000000,
+				MaxBatchRequestParallelism: nil,
+				TimeoutSettings:            exporterhelper.NewDefaultTimeoutConfig(),
+				BackOffConfig: configretry.BackOffConfig{
+					Enabled:             true,
+					InitialInterval:     50 * time.Millisecond,
+					RandomizationFactor: 0.5,
+					Multiplier:          1.5,
+					MaxInterval:         30 * time.Second,
+					MaxElapsedTime:      5 * time.Minute,
+				},
+				RemoteWriteQueue: RemoteWriteQueue{
+					Enabled:      true,
+					QueueSize:    10000,
+					NumConsumers: 5,
+				},
+				ExternalLabels:      map[string]string{},
+				AddMetricSuffixes:   true,
+				TranslationStrategy: "NoTranslation",
+				ClientConfig: func() confighttp.ClientConfig {
+					cc := confighttp.NewDefaultClientConfig()
+					cc.Endpoint = "localhost:8888"
+					cc.WriteBufferSize = 512 * 1024
+					cc.Timeout = 5 * time.Second
+					return cc
+				}(),
+				RemoteWriteProtoMsg: remoteapi.WriteV2MessageType,
+				TargetInfo: TargetInfo{
+					Enabled: true,
+				},
+			},
+			enableSendingRW2: true,
+		},
+
 		{
 			id:           component.NewIDWithName(metadata.Type, "negative_queue_size"),
 			errorMessage: "remote write queue size can't be negative",
@@ -90,10 +134,40 @@ func TestLoadConfig(t *testing.T) {
 			id:           component.NewIDWithName(metadata.Type, "negative_num_consumers"),
 			errorMessage: "remote write consumer number can't be negative",
 		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "less_than_1_max_batch_request_parallelism"),
+			errorMessage: "max_batch_request_parallelism can't be set to below 1",
+		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "non_snappy_compression_type"),
+			errorMessage: "compression type must be snappy",
+		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "unknown_protobuf_message"),
+			errorMessage: "unknown type for remote write protobuf message io.prometheus.write.v4.Request, supported: prometheus.WriteRequest, io.prometheus.write.v2.Request",
+		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "invalid_translation_strategy"),
+			errorMessage: "invalid translation_strategy: invalid_strategy",
+		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "v1_no_utf8"),
+			errorMessage: "translation strategy NoUTF8EscapingWithSuffixes requires Prometheus Remote Write 2.0",
+		},
+		{
+			id:           component.NewIDWithName(metadata.Type, "v1_no_translation"),
+			errorMessage: "translation strategy NoTranslation requires Prometheus Remote Write 2.0",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.id.String(), func(t *testing.T) {
+			if tt.enableSendingRW2 {
+				oldValue := metadata.ExporterPrometheusremotewritexporterEnableSendingRW2FeatureGate.IsEnabled()
+				testutil.SetFeatureGateForTest(t, metadata.ExporterPrometheusremotewritexporterEnableSendingRW2FeatureGate, true)
+				defer testutil.SetFeatureGateForTest(t, metadata.ExporterPrometheusremotewritexporterEnableSendingRW2FeatureGate, oldValue)
+			}
+
 			factory := NewFactory()
 			cfg := factory.CreateDefaultConfig()
 
@@ -102,10 +176,10 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, sub.Unmarshal(cfg))
 
 			if tt.expected == nil {
-				assert.EqualError(t, component.ValidateConfig(cfg), tt.errorMessage)
+				assert.ErrorContains(t, xconfmap.Validate(cfg), tt.errorMessage)
 				return
 			}
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
@@ -135,4 +209,8 @@ func TestDisabledTargetInfo(t *testing.T) {
 	require.NoError(t, sub.Unmarshal(cfg))
 
 	assert.False(t, cfg.(*Config).TargetInfo.Enabled)
+}
+
+func toPtr[T any](val T) *T {
+	return &val
 }

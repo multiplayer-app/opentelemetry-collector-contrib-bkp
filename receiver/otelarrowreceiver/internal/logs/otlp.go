@@ -12,7 +12,8 @@ import (
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/admission"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/otelarrow/admission2"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otelarrowreceiver/internal/statuserr"
 )
 
 const dataFormatProtobuf = "protobuf"
@@ -22,13 +23,13 @@ type Receiver struct {
 	plogotlp.UnimplementedGRPCServer
 	nextConsumer consumer.Logs
 	obsrecv      *receiverhelper.ObsReport
-	boundedQueue *admission.BoundedQueue
+	boundedQueue admission2.Queue
 	sizer        *plog.ProtoMarshaler
 	logger       *zap.Logger
 }
 
 // New creates a new Receiver reference.
-func New(logger *zap.Logger, nextConsumer consumer.Logs, obsrecv *receiverhelper.ObsReport, bq *admission.BoundedQueue) *Receiver {
+func New(logger *zap.Logger, nextConsumer consumer.Logs, obsrecv *receiverhelper.ObsReport, bq admission2.Queue) *Receiver {
 	return &Receiver{
 		nextConsumer: nextConsumer,
 		obsrecv:      obsrecv,
@@ -41,28 +42,36 @@ func New(logger *zap.Logger, nextConsumer consumer.Logs, obsrecv *receiverhelper
 // Export implements the service Export logs func.
 func (r *Receiver) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	ld := req.Logs()
-	numSpans := ld.LogRecordCount()
-	if numSpans == 0 {
+	numRecords := ld.LogRecordCount()
+	sizeBytes := uint64(r.sizer.LogsSize(ld))
+
+	// Early return for truly empty requests (no data at all).
+	// We check size rather than record count to ensure requests with
+	// metadata but no log records still go through admission control.
+	if sizeBytes == 0 {
 		return plogotlp.NewExportResponse(), nil
 	}
 
 	ctx = r.obsrecv.StartLogsOp(ctx)
 
-	sizeBytes := int64(r.sizer.LogsSize(req.Logs()))
-	err := r.boundedQueue.Acquire(ctx, sizeBytes)
-	if err != nil {
-		return plogotlp.NewExportResponse(), err
+	var err error
+	if releaser, acqErr := r.boundedQueue.Acquire(ctx, sizeBytes); acqErr == nil {
+		err = r.nextConsumer.ConsumeLogs(ctx, ld)
+		releaser() // immediate release
+	} else {
+		err = acqErr
 	}
-	defer func() {
-		if releaseErr := r.boundedQueue.Release(sizeBytes); releaseErr != nil {
-			r.logger.Error("Error releasing bytes from semaphore", zap.Error(releaseErr))
-		}
-	}()
 
-	err = r.nextConsumer.ConsumeLogs(ctx, ld)
-	r.obsrecv.EndLogsOp(ctx, dataFormatProtobuf, numSpans, err)
+	r.obsrecv.EndLogsOp(ctx, dataFormatProtobuf, numRecords, err)
 
-	return plogotlp.NewExportResponse(), err
+	// Use appropriate status codes for permanent/non-permanent errors.
+	// If we return the error straightaway, then the grpc implementation will
+	// set status code to Unknown, which is not retryable.
+	// See: https://github.com/grpc/grpc-go/blob/v1.59.0/server.go#L1345
+	if err != nil {
+		return plogotlp.NewExportResponse(), statuserr.GetStatusFromError(err)
+	}
+	return plogotlp.NewExportResponse(), nil
 }
 
 func (r *Receiver) Consumer() consumer.Logs {

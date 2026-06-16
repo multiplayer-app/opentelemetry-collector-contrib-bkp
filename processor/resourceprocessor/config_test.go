@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/attraction"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor/internal/metadata"
@@ -36,6 +37,16 @@ func TestLoadConfig(t *testing.T) {
 			valid: true,
 		},
 		{
+			id: component.NewIDWithName(metadata.Type, "with_defaults"),
+			expected: &Config{
+				AttributesActions: []attraction.ActionKeyValue{
+					{Key: "service.namespace", FromAttribute: "namespace", DefaultValue: "default", Action: attraction.INSERT},
+					{Key: "cloud.region", FromContext: "metadata.region", DefaultValue: "us-east-1", Action: attraction.UPSERT},
+				},
+			},
+			valid: true,
+		},
+		{
 			id:       component.NewIDWithName(metadata.Type, "invalid"),
 			expected: createDefaultConfig(),
 		},
@@ -54,9 +65,9 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, sub.Unmarshal(cfg))
 
 			if tt.valid {
-				assert.NoError(t, component.ValidateConfig(cfg))
+				assert.NoError(t, xconfmap.Validate(cfg))
 			} else {
-				assert.Error(t, component.ValidateConfig(cfg))
+				assert.Error(t, xconfmap.Validate(cfg))
 			}
 			assert.Equal(t, tt.expected, cfg)
 		})

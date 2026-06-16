@@ -111,7 +111,6 @@ func testMetricNameMatch(t *testing.T, dataType pmetric.MetricType) {
 	matched, err = matcher.MatchMetric(m)
 	assert.NoError(t, err)
 	assert.True(t, matched)
-
 }
 
 func TestMatchIntGaugeDataPointByMetricAndSecondPointLabelValue(t *testing.T) {
@@ -225,7 +224,7 @@ func TestParallel(t *testing.T) {
 	testMetric := func(t *testing.T, count int) {
 		defer wg.Done()
 		<-start
-		for i := 0; i < count; i++ {
+		for range count {
 			m := pmetric.NewMetric()
 			m.SetName("my.metric")
 			m.SetEmptySum().DataPoints().AppendEmpty()
@@ -235,7 +234,7 @@ func TestParallel(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(1)
 		go testMetric(t, 20)
 	}

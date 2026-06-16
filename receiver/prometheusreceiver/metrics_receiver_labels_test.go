@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	semconv "go.opentelemetry.io/collector/semconv/v1.27.0"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver/internal/metadata"
 )
 
 const targetExternalLabels = `
@@ -42,10 +44,11 @@ func verifyExternalLabels(t *testing.T, td *testData, rms []pmetric.ResourceMetr
 	wantAttributes := td.attributes
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
-	doCompare(t, "scrape-externalLabels", wantAttributes, rms[0], []testExpectation{
-		assertMetricPresent("go_threads",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	doCompare(t, "scrape-externalLabels", wantAttributes, rms[0], []metricExpectation{
+		{
+			"go_threads",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -54,7 +57,9 @@ func verifyExternalLabels(t *testing.T, td *testData, rms []pmetric.ResourceMetr
 						compareAttributes(map[string]string{"key": "value"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	})
 }
 
@@ -73,10 +78,11 @@ func verifyLabelLimitTarget1(t *testing.T, td *testData, rms []pmetric.ResourceM
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
 
-	doCompare(t, "scrape-labelLimit", want, rms[0], []testExpectation{
-		assertMetricPresent("test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	doCompare(t, "scrape-labelLimit", want, rms[0], []metricExpectation{
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -86,7 +92,8 @@ func verifyLabelLimitTarget1(t *testing.T, td *testData, rms []pmetric.ResourceM
 					},
 				},
 			},
-		),
+			nil,
+		},
 	})
 }
 
@@ -118,7 +125,8 @@ func TestLabelLimitConfig(t *testing.T) {
 			pages: []mockPrometheusResponse{
 				{code: 200, data: targetLabelLimit2},
 			},
-			validateFunc: verifyFailedScrape,
+			validateFunc:    verifyFailedScrape,
+			validateScrapes: true,
 		},
 	}
 
@@ -165,23 +173,27 @@ func verifyLabelConfigTarget1(t *testing.T, td *testData, rms []pmetric.Resource
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := getTS(metrics1)
 
-	e1 := []testExpectation{
-		assertMetricPresent("test_counter0",
-			compareMetricType(pmetric.MetricTypeSum),
-			compareMetricUnit(""),
+	e1 := []metricExpectation{
+		{
+			"test_counter0",
+			pmetric.MetricTypeSum,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
-						compareStartTimestamp(ts1),
+						compareStartTimestamp(tsZero),
 						compareTimestamp(ts1),
 						compareDoubleValue(1),
 						compareAttributes(map[string]string{"label1": "value1", "label2": "value2"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -190,33 +202,41 @@ func verifyLabelConfigTarget1(t *testing.T, td *testData, rms []pmetric.Resource
 						compareAttributes(map[string]string{"label1": "value1", "label2": "value2"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_histogram0",
-			compareMetricType(pmetric.MetricTypeHistogram),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_histogram0",
+			pmetric.MetricTypeHistogram,
+			"",
 			[]dataPointExpectation{
 				{
 					histogramPointComparator: []histogramPointComparator{
-						compareHistogramStartTimestamp(ts1),
+						compareHistogramStartTimestamp(tsZero),
 						compareHistogramTimestamp(ts1),
 						compareHistogram(2500, 5000, []float64{0.1, 0.5, 1}, []uint64{1000, 500, 500, 500}),
 						compareHistogramAttributes(map[string]string{"label1": "value1", "label2": "value2"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_summary0",
-			compareMetricType(pmetric.MetricTypeSummary),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_summary0",
+			pmetric.MetricTypeSummary,
+			"",
 			[]dataPointExpectation{
 				{
 					summaryPointComparator: []summaryPointComparator{
-						compareSummaryStartTimestamp(ts1),
+						compareSummaryStartTimestamp(tsZero),
 						compareSummaryTimestamp(ts1),
 						compareSummary(1000, 5000, [][]float64{{0.1, 1}, {0.5, 5}, {0.99, 8}}),
 						compareSummaryAttributes(map[string]string{"label1": "value1", "label2": "value2"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	}
 	doCompare(t, "scrape-label-config-test", want, rms[0], e1)
 }
@@ -245,7 +265,8 @@ func TestLabelNameLimitConfig(t *testing.T) {
 			pages: []mockPrometheusResponse{
 				{code: 200, data: targetLabelNameLimit},
 			},
-			validateFunc: verifyFailedScrape,
+			validateFunc:    verifyFailedScrape,
+			validateScrapes: true,
 		},
 	}
 
@@ -281,7 +302,8 @@ func TestLabelValueLimitConfig(t *testing.T) {
 			pages: []mockPrometheusResponse{
 				{code: 200, data: targetLabelValueLimit},
 			},
-			validateFunc: verifyFailedScrape,
+			validateFunc:    verifyFailedScrape,
+			validateScrapes: true,
 		},
 	}
 
@@ -328,10 +350,11 @@ func verifyEmptyLabelValuesTarget1(t *testing.T, td *testData, rms []pmetric.Res
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := getTS(metrics1)
 
-	e1 := []testExpectation{
-		assertMetricPresent("test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	e1 := []metricExpectation{
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -340,10 +363,13 @@ func verifyEmptyLabelValuesTarget1(t *testing.T, td *testData, rms []pmetric.Res
 						compareAttributes(map[string]string{"id": "1"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_counter0",
-			compareMetricType(pmetric.MetricTypeSum),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_counter0",
+			pmetric.MetricTypeSum,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -352,33 +378,41 @@ func verifyEmptyLabelValuesTarget1(t *testing.T, td *testData, rms []pmetric.Res
 						compareAttributes(map[string]string{"id": "1"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_histogram0",
-			compareMetricType(pmetric.MetricTypeHistogram),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_histogram0",
+			pmetric.MetricTypeHistogram,
+			"",
 			[]dataPointExpectation{
 				{
 					histogramPointComparator: []histogramPointComparator{
-						compareHistogramStartTimestamp(ts1),
+						compareHistogramStartTimestamp(tsZero),
 						compareHistogramTimestamp(ts1),
 						compareHistogram(2500, 5000, []float64{0.1, 0.5, 1}, []uint64{1000, 500, 500, 500}),
 						compareHistogramAttributes(map[string]string{"id": "1"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_summary0",
-			compareMetricType(pmetric.MetricTypeSummary),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_summary0",
+			pmetric.MetricTypeSummary,
+			"",
 			[]dataPointExpectation{
 				{
 					summaryPointComparator: []summaryPointComparator{
-						compareSummaryStartTimestamp(ts1),
+						compareSummaryStartTimestamp(tsZero),
 						compareSummaryTimestamp(ts1),
 						compareSummary(1000, 5000, [][]float64{{0.1, 1}, {0.5, 5}, {0.99, 8}}),
 						compareSummaryAttributes(map[string]string{"id": "1"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	}
 	doCompare(t, "scrape-empty-label-values-1", want, rms[0], e1)
 }
@@ -403,10 +437,11 @@ func verifyEmptyLabelValuesTarget2(t *testing.T, td *testData, rms []pmetric.Res
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := getTS(metrics1)
 
-	e1 := []testExpectation{
-		assertMetricPresent("test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	e1 := []metricExpectation{
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -422,10 +457,13 @@ func verifyEmptyLabelValuesTarget2(t *testing.T, td *testData, rms []pmetric.Res
 						compareAttributes(map[string]string{"id": "2", "testLabel": "foobar"}),
 					},
 				},
-			}),
-		assertMetricPresent("test_counter0",
-			compareMetricType(pmetric.MetricTypeSum),
-			compareMetricUnit(""),
+			},
+			nil,
+		},
+		{
+			"test_counter0",
+			pmetric.MetricTypeSum,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -441,7 +479,9 @@ func verifyEmptyLabelValuesTarget2(t *testing.T, td *testData, rms []pmetric.Res
 						compareAttributes(map[string]string{"id": "2", "testLabel": "foobar"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	}
 	doCompare(t, "scrape-empty-label-values-2", want, rms[0], e1)
 }
@@ -479,10 +519,11 @@ func verifyHonorLabelsFalse(t *testing.T, td *testData, rms []pmetric.ResourceMe
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
 
-	doCompare(t, "honor_labels_false", want, rms[0], []testExpectation{
-		assertMetricPresent("test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	doCompare(t, "honor_labels_false", want, rms[0], []metricExpectation{
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -492,7 +533,9 @@ func verifyHonorLabelsFalse(t *testing.T, td *testData, rms []pmetric.ResourceMe
 						compareAttributes(map[string]string{"exported_job": "honor_labels_test", "exported_instance": "hostname:8080", "testLabel": "value1"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	})
 }
 
@@ -514,11 +557,11 @@ func verifyEmptyLabelsTarget1(t *testing.T, td *testData, rms []pmetric.Resource
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := getTS(metrics1)
 
-	e1 := []testExpectation{
-		assertMetricPresent(
+	e1 := []metricExpectation{
+		{
 			"test_gauge0",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -528,11 +571,12 @@ func verifyEmptyLabelsTarget1(t *testing.T, td *testData, rms []pmetric.Resource
 					},
 				},
 			},
-		),
-		assertMetricPresent(
+			nil,
+		},
+		{
 			"test_counter0",
-			compareMetricType(pmetric.MetricTypeSum),
-			compareMetricUnit(""),
+			pmetric.MetricTypeSum,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -542,7 +586,8 @@ func verifyEmptyLabelsTarget1(t *testing.T, td *testData, rms []pmetric.Resource
 					},
 				},
 			},
-		),
+			nil,
+		},
 	}
 	doCompare(t, "scrape-empty-labels-1", want, rms[0], e1)
 }
@@ -583,9 +628,7 @@ func verifyHonorLabelsTrue(t *testing.T, td *testData, rms []pmetric.ResourceMet
 	expectedResourceAttributes.PutStr("service.name", "honor_labels_test")
 	expectedResourceAttributes.PutStr("service.instance.id", "hostname:8080")
 	expectedResourceAttributes.PutStr("server.port", "8080")
-	expectedResourceAttributes.PutStr("net.host.port", "8080")
 	expectedResourceAttributes.PutStr("server.address", "hostname")
-	expectedResourceAttributes.PutStr("net.host.name", "hostname")
 
 	expectedScrapeConfigAttributes := td.attributes
 
@@ -594,7 +637,7 @@ func verifyHonorLabelsTrue(t *testing.T, td *testData, rms []pmetric.ResourceMet
 	var scrapeConfigResourceMetrics pmetric.ResourceMetrics
 	gotScrapeConfigMetrics, gotResourceMetrics := false, false
 	for _, rm := range rms {
-		serviceInstance, ok := rm.Resource().Attributes().Get(semconv.AttributeServiceInstanceID)
+		serviceInstance, ok := rm.Resource().Attributes().Get("service.instance.id")
 		require.True(t, ok)
 		if serviceInstance.AsString() == "hostname:8080" {
 			resourceMetric = rm
@@ -612,23 +655,28 @@ func verifyHonorLabelsTrue(t *testing.T, td *testData, rms []pmetric.ResourceMet
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
 
 	// check the scrape metrics of the resource created from the scrape config
-	doCompare(t, "honor_labels_true", expectedScrapeConfigAttributes, scrapeConfigResourceMetrics, []testExpectation{})
+	doCompare(t, "honor_labels_true", expectedScrapeConfigAttributes, scrapeConfigResourceMetrics, nil)
 
 	// assert that the gauge metric has been retrieved correctly. This resource only contains the gauge and no scrape metrics,
 	// so we directly check the gauge metric without the scrape metrics
 	assertExpectedAttributes(t, expectedResourceAttributes, resourceMetric)
-	assertMetricPresent("test_gauge0",
-		compareMetricType(pmetric.MetricTypeGauge),
-		compareMetricUnit(""),
-		[]dataPointExpectation{
-			{
-				numberPointComparator: []numberPointComparator{
-					compareTimestamp(ts1),
-					compareDoubleValue(1),
-					compareAttributes(map[string]string{"testLabel": "value1"}),
+	assertExpectedMetrics(t, []metricExpectation{
+		{
+			"test_gauge0",
+			pmetric.MetricTypeGauge,
+			"",
+			[]dataPointExpectation{
+				{
+					numberPointComparator: []numberPointComparator{
+						compareTimestamp(ts1),
+						compareDoubleValue(1),
+						compareAttributes(map[string]string{"testLabel": "value1"}),
+					},
 				},
 			},
-		})(t, resourceMetric)
+			nil,
+		},
+	}, resourceMetric, false, true)
 }
 
 func TestHonorLabelsTrueConfig(t *testing.T) {
@@ -664,7 +712,8 @@ func TestRelabelJobInstance(t *testing.T) {
 			pages: []mockPrometheusResponse{
 				{code: 200, data: targetRelabelJobInstance},
 			},
-			validateFunc: verifyRelabelJobInstance,
+			validateFunc:    verifyRelabelJobInstance,
+			validateScrapes: true,
 		},
 	}
 
@@ -698,9 +747,7 @@ func verifyRelabelJobInstance(t *testing.T, td *testData, rms []pmetric.Resource
 	wantAttributes.PutStr("service.name", "not-target1")
 	wantAttributes.PutStr("service.instance.id", "relabeled-instance")
 	wantAttributes.PutStr("server.port", "")
-	wantAttributes.PutStr("net.host.port", "")
 	wantAttributes.PutStr("server.address", "relabeled-instance")
-	wantAttributes.PutStr("net.host.name", "relabeled-instance")
 
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
@@ -710,19 +757,23 @@ func verifyRelabelJobInstance(t *testing.T, td *testData, rms []pmetric.Resource
 	// are not included in this resourceMetric, which only contains the relabeled
 	// metrics
 	assertExpectedAttributes(t, wantAttributes, rms[0])
-	assertMetricPresent("jvm_memory_bytes_used",
-		compareMetricType(pmetric.MetricTypeGauge),
-		compareMetricUnit(""),
-		[]dataPointExpectation{
-			{
-				numberPointComparator: []numberPointComparator{
-					compareTimestamp(ts1),
-					compareDoubleValue(100),
-					compareAttributes(map[string]string{"area": "heap"}),
+	assertExpectedMetrics(t, []metricExpectation{
+		{
+			"jvm_memory_bytes_used",
+			pmetric.MetricTypeGauge,
+			"",
+			[]dataPointExpectation{
+				{
+					numberPointComparator: []numberPointComparator{
+						compareTimestamp(ts1),
+						compareDoubleValue(100),
+						compareAttributes(map[string]string{"area": "heap"}),
+					},
 				},
 			},
-		})(t, rms[0])
-
+			nil,
+		},
+	}, rms[0], false, true)
 }
 
 const targetResourceAttsInTargetInfo = `
@@ -758,10 +809,11 @@ func verifyTargetInfoResourceAttributes(t *testing.T, td *testData, rms []pmetri
 
 	metrics1 := rms[0].ScopeMetrics().At(0).Metrics()
 	ts1 := metrics1.At(0).Gauge().DataPoints().At(0).Timestamp()
-	doCompare(t, "relabel-job-instance", wantAttributes, rms[0], []testExpectation{
-		assertMetricPresent("jvm_memory_bytes_used",
-			compareMetricType(pmetric.MetricTypeGauge),
-			compareMetricUnit(""),
+	doCompare(t, "relabel-job-instance", wantAttributes, rms[0], []metricExpectation{
+		{
+			"jvm_memory_bytes_used",
+			pmetric.MetricTypeGauge,
+			"",
 			[]dataPointExpectation{
 				{
 					numberPointComparator: []numberPointComparator{
@@ -770,18 +822,37 @@ func verifyTargetInfoResourceAttributes(t *testing.T, td *testData, rms []pmetri
 						compareAttributes(map[string]string{"area": "heap"}),
 					},
 				},
-			}),
+			},
+			nil,
+		},
 	})
 }
 
 const targetInstrumentationScopes = `
 # HELP jvm_memory_bytes_used Used bytes of a given JVM memory area.
 # TYPE jvm_memory_bytes_used gauge
-jvm_memory_bytes_used{area="heap", otel_scope_name="fake.scope.name", otel_scope_version="v0.1.0"} 100
+jvm_memory_bytes_used{area="heap", otel_scope_name="fake.scope.name", otel_scope_version="v0.1.0", otel_scope_schema_url="https://opentelemetry.io/schemas/1.21.0"} 100
 jvm_memory_bytes_used{area="heap", otel_scope_name="scope.with.attributes", otel_scope_version="v1.5.0"} 100
 jvm_memory_bytes_used{area="heap"} 100
 # TYPE otel_scope_info gauge
 otel_scope_info{animal="bear", otel_scope_name="scope.with.attributes", otel_scope_version="v1.5.0"} 1
+`
+
+const targetScopeAttributesFromMetricLabels = `
+# HELP jvm_memory_bytes_used Used bytes of a given JVM memory area.
+# TYPE jvm_memory_bytes_used gauge
+jvm_memory_bytes_used{area="heap", otel_scope_name="scope.with.attributes", otel_scope_version="v1.5.0", otel_scope_schema_url="https://opentelemetry.io/schemas/1.21.0", otel_scope_animal="bear"} 100
+jvm_memory_bytes_used{area="nonheap", otel_scope_name="scope.with.attributes", otel_scope_version="v1.5.0", otel_scope_schema_url="https://opentelemetry.io/schemas/1.21.0", otel_scope_animal="fox"} 101
+`
+
+const targetScopeInfoAndMetricLabels = `
+# HELP jvm_memory_bytes_used Used bytes of a given JVM memory area.
+# TYPE jvm_memory_bytes_used gauge
+jvm_memory_bytes_used{area="heap", otel_scope_name="scope.with.metric.labels", otel_scope_version="v1.5.0", otel_scope_schema_url="https://opentelemetry.io/schemas/1.21.0", otel_scope_animal="bear"} 100
+jvm_memory_bytes_used{area="nonheap", otel_scope_name="scope.with.metric.labels", otel_scope_version="v1.5.0", otel_scope_schema_url="https://opentelemetry.io/schemas/1.21.0", otel_scope_animal="fox"} 101
+jvm_memory_bytes_used{area="oldstyle", otel_scope_name="scope.with.info", otel_scope_version="v2.0.0"} 102
+# TYPE otel_scope_info gauge
+otel_scope_info{animal="rabbit", otel_scope_name="scope.with.info", otel_scope_version="v2.0.0"} 1
 `
 
 func TestScopeInfoScopeAttributes(t *testing.T) {
@@ -807,15 +878,238 @@ func verifyMultipleScopes(t *testing.T, td *testData, rms []pmetric.ResourceMetr
 	sms.Sort(func(a, b pmetric.ScopeMetrics) bool {
 		return a.Scope().Name() < b.Scope().Name()
 	})
+
 	require.Equal(t, "fake.scope.name", sms.At(0).Scope().Name())
 	require.Equal(t, "v0.1.0", sms.At(0).Scope().Version())
+	require.Equal(t, "https://opentelemetry.io/schemas/1.21.0", sms.At(0).SchemaUrl())
 	require.Equal(t, 0, sms.At(0).Scope().Attributes().Len())
 	require.Equal(t, "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver", sms.At(1).Scope().Name())
+	require.Empty(t, sms.At(1).SchemaUrl())
 	require.Equal(t, 0, sms.At(1).Scope().Attributes().Len())
 	require.Equal(t, "scope.with.attributes", sms.At(2).Scope().Name())
 	require.Equal(t, "v1.5.0", sms.At(2).Scope().Version())
+	require.Empty(t, sms.At(2).SchemaUrl())
 	require.Equal(t, 1, sms.At(2).Scope().Attributes().Len())
 	scopeAttrVal, found := sms.At(2).Scope().Attributes().Get("animal")
 	require.True(t, found)
 	require.Equal(t, "bear", scopeAttrVal.Str())
+
+	// Check that otel_scope_name, otel_scope_version, and otel_scope_schema_url are dropped from metric data point attributes
+	require.Equal(t, 1, sms.At(0).Metrics().Len())
+	metric := sms.At(0).Metrics().At(0)
+	dp := metric.Gauge().DataPoints().At(0)
+	require.Equal(t, 1, dp.Attributes().Len(), "Should only have 'area' attribute")
+	_, found = dp.Attributes().Get("area")
+	require.True(t, found, "Should only have 'area' attribute")
+}
+
+func TestScopeAttributeLabels(t *testing.T) {
+	targets := []*testData{
+		{
+			name: "target1",
+			pages: []mockPrometheusResponse{
+				{code: 200, data: targetScopeAttributesFromMetricLabels},
+			},
+			validateFunc: verifyScopeAttributeLabels,
+		},
+	}
+
+	testComponent(t, targets, nil)
+}
+
+func TestIgnoreScopeInfoMetricFeatureGate(t *testing.T) {
+	testCases := []struct {
+		name         string
+		gateEnabled  bool
+		validateFunc func(*testing.T, *testData, []pmetric.ResourceMetrics)
+	}{
+		{
+			name:         "enabled",
+			gateEnabled:  true,
+			validateFunc: verifyIgnoreScopeInfoMetricEnabled,
+		},
+		{
+			name:         "disabled",
+			gateEnabled:  false,
+			validateFunc: verifyIgnoreScopeInfoMetricDisabled,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer testutil.SetFeatureGateForTest(t, metadata.ReceiverPrometheusreceiverIgnoreScopeInfoMetricFeatureGate, tc.gateEnabled)()
+
+			targets := []*testData{
+				{
+					name: "target1",
+					pages: []mockPrometheusResponse{
+						{code: 200, data: targetScopeInfoAndMetricLabels},
+					},
+					validateFunc: tc.validateFunc,
+				},
+			}
+
+			testComponent(t, targets, nil)
+		})
+	}
+}
+
+func verifyScopeAttributeLabels(t *testing.T, td *testData, rms []pmetric.ResourceMetrics) {
+	verifyNumValidScrapeResults(t, td, rms)
+	require.NotEmpty(t, rms, "At least one resource metric should be present")
+
+	sms := rms[0].ScopeMetrics()
+	filtered := make([]pmetric.ScopeMetrics, 0, sms.Len())
+	for i := 0; i < sms.Len(); i++ {
+		sm := sms.At(i)
+		if sm.Scope().Name() == "scope.with.attributes" {
+			filtered = append(filtered, sm)
+		}
+	}
+	require.Len(t, filtered, 2, "Two scope metrics should be present for scope.with.attributes")
+	animals := map[string]pmetric.ScopeMetrics{}
+	for _, sm := range filtered {
+		require.Equal(t, "scope.with.attributes", sm.Scope().Name())
+		require.Equal(t, "v1.5.0", sm.Scope().Version())
+		require.Equal(t, "https://opentelemetry.io/schemas/1.21.0", sm.SchemaUrl())
+		require.Equal(t, 1, sm.Scope().Attributes().Len())
+
+		animalValue, found := sm.Scope().Attributes().Get("animal")
+		require.True(t, found)
+		animals[animalValue.Str()] = sm
+
+		require.Equal(t, 1, sm.Metrics().Len())
+		dp := sm.Metrics().At(0).Gauge().DataPoints().At(0)
+		require.Equal(t, 1, dp.Attributes().Len())
+		_, found = dp.Attributes().Get("area")
+		require.True(t, found)
+		_, found = dp.Attributes().Get("otel_scope_animal")
+		require.False(t, found)
+	}
+
+	require.Contains(t, animals, "bear")
+	require.Contains(t, animals, "fox")
+}
+
+func verifyIgnoreScopeInfoMetricEnabled(t *testing.T, td *testData, rms []pmetric.ResourceMetrics) {
+	verifyNumValidScrapeResults(t, td, rms)
+	require.NotEmpty(t, rms, "At least one resource metric should be present")
+
+	sms := rms[0].ScopeMetrics()
+	metricLabelScopes := make([]pmetric.ScopeMetrics, 0, sms.Len())
+	var scopeInfoScope pmetric.ScopeMetrics
+	for i := 0; i < sms.Len(); i++ {
+		sm := sms.At(i)
+		switch sm.Scope().Name() {
+		case "scope.with.metric.labels":
+			metricLabelScopes = append(metricLabelScopes, sm)
+		case "scope.with.info":
+			scopeInfoScope = sm
+		}
+	}
+
+	require.Len(t, metricLabelScopes, 2, "Two scope metrics should be present for scope.with.metric.labels")
+	animals := map[string]pmetric.ScopeMetrics{}
+	for _, sm := range metricLabelScopes {
+		require.Equal(t, "scope.with.metric.labels", sm.Scope().Name())
+		require.Equal(t, "v1.5.0", sm.Scope().Version())
+		require.Equal(t, "https://opentelemetry.io/schemas/1.21.0", sm.SchemaUrl())
+		require.Equal(t, 1, sm.Scope().Attributes().Len())
+
+		animalValue, found := sm.Scope().Attributes().Get("animal")
+		require.True(t, found)
+		animals[animalValue.Str()] = sm
+
+		require.Equal(t, 1, sm.Metrics().Len())
+		dp := sm.Metrics().At(0).Gauge().DataPoints().At(0)
+		require.Equal(t, 1, dp.Attributes().Len())
+		_, found = dp.Attributes().Get("area")
+		require.True(t, found)
+		_, found = dp.Attributes().Get("otel_scope_animal")
+		require.False(t, found)
+	}
+
+	require.Contains(t, animals, "bear")
+	require.Contains(t, animals, "fox")
+
+	require.Equal(t, "scope.with.info", scopeInfoScope.Scope().Name())
+	require.Equal(t, "v2.0.0", scopeInfoScope.Scope().Version())
+	require.Equal(t, 0, scopeInfoScope.Scope().Attributes().Len())
+	require.Equal(t, 2, scopeInfoScope.Metrics().Len())
+
+	scopeMetricsByName := make(map[string]pmetric.Metric, scopeInfoScope.Metrics().Len())
+	for i := 0; i < scopeInfoScope.Metrics().Len(); i++ {
+		metric := scopeInfoScope.Metrics().At(i)
+		scopeMetricsByName[metric.Name()] = metric
+	}
+
+	oldStyleMetric, found := scopeMetricsByName["jvm_memory_bytes_used"]
+	require.True(t, found)
+	dp := oldStyleMetric.Gauge().DataPoints().At(0)
+	require.Equal(t, 1, dp.Attributes().Len())
+	_, found = dp.Attributes().Get("area")
+	require.True(t, found)
+
+	// otel_scope_info becomes a regular metric when the feature gate is enabled
+	scopeInfoMetric, found := scopeMetricsByName["otel_scope_info"]
+	require.True(t, found)
+	dp = scopeInfoMetric.Gauge().DataPoints().At(0)
+	require.Equal(t, 1, dp.Attributes().Len())
+	animal, found := dp.Attributes().Get("animal")
+	require.True(t, found)
+	require.Equal(t, "rabbit", animal.Str())
+}
+
+func verifyIgnoreScopeInfoMetricDisabled(t *testing.T, td *testData, rms []pmetric.ResourceMetrics) {
+	verifyNumValidScrapeResults(t, td, rms)
+	require.NotEmpty(t, rms, "At least one resource metric should be present")
+
+	sms := rms[0].ScopeMetrics()
+	metricLabelScopes := make([]pmetric.ScopeMetrics, 0, sms.Len())
+	var scopeInfoScope pmetric.ScopeMetrics
+	for i := 0; i < sms.Len(); i++ {
+		sm := sms.At(i)
+		switch sm.Scope().Name() {
+		case "scope.with.metric.labels":
+			metricLabelScopes = append(metricLabelScopes, sm)
+		case "scope.with.info":
+			scopeInfoScope = sm
+		}
+	}
+
+	require.Len(t, metricLabelScopes, 2, "Two scope metrics should be present for scope.with.metric.labels")
+	animals := map[string]pmetric.ScopeMetrics{}
+	for _, sm := range metricLabelScopes {
+		require.Equal(t, "scope.with.metric.labels", sm.Scope().Name())
+		require.Equal(t, "v1.5.0", sm.Scope().Version())
+		require.Equal(t, "https://opentelemetry.io/schemas/1.21.0", sm.SchemaUrl())
+		require.Equal(t, 1, sm.Scope().Attributes().Len())
+
+		animalValue, found := sm.Scope().Attributes().Get("animal")
+		require.True(t, found)
+		animals[animalValue.Str()] = sm
+
+		require.Equal(t, 1, sm.Metrics().Len())
+		dp := sm.Metrics().At(0).Gauge().DataPoints().At(0)
+		require.Equal(t, 1, dp.Attributes().Len())
+		_, found = dp.Attributes().Get("area")
+		require.True(t, found)
+		_, found = dp.Attributes().Get("otel_scope_animal")
+		require.False(t, found)
+	}
+
+	require.Contains(t, animals, "bear")
+	require.Contains(t, animals, "fox")
+
+	require.Equal(t, "scope.with.info", scopeInfoScope.Scope().Name())
+	require.Equal(t, "v2.0.0", scopeInfoScope.Scope().Version())
+	require.Equal(t, 1, scopeInfoScope.Scope().Attributes().Len())
+	scopeAnimal, found := scopeInfoScope.Scope().Attributes().Get("animal")
+	require.True(t, found)
+	require.Equal(t, "rabbit", scopeAnimal.Str())
+	require.Equal(t, 1, scopeInfoScope.Metrics().Len())
+	dp := scopeInfoScope.Metrics().At(0).Gauge().DataPoints().At(0)
+	require.Equal(t, 1, dp.Attributes().Len())
+	_, found = dp.Attributes().Get("area")
+	require.True(t, found)
 }

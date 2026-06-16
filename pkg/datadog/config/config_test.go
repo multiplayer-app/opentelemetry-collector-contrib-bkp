@@ -16,10 +16,12 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/confignet"
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
@@ -30,7 +32,7 @@ func TestValidate(t *testing.T) {
 	maxConnPerHost := 250
 	ty, err := component.NewType("ty")
 	assert.NoError(t, err)
-	auth := configauth.Authentication{AuthenticatorID: component.NewID(ty)}
+	someAuth := configoptional.Some(configauth.Config{AuthenticatorID: component.NewID(ty)})
 
 	tests := []struct {
 		name string
@@ -39,145 +41,239 @@ func TestValidate(t *testing.T) {
 	}{
 		{
 			name: "no api::key",
-			cfg:  &Config{},
-			err:  ErrUnsetAPIKey.Error(),
+			cfg: &Config{
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
+			},
+			err: ErrUnsetAPIKey.Error(),
 		},
 		{
 			name: "invalid hostname",
 			cfg: &Config{
-				API:        APIConfig{Key: "notnull"},
-				TagsConfig: TagsConfig{Hostname: "invalid_host"},
+				API:          APIConfig{Key: "aaaaaaa"},
+				TagsConfig:   TagsConfig{Hostname: "invalid_host"},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "hostname field is invalid: invalid_host is not RFC1123 compliant",
 		},
 		{
 			name: "no metadata",
 			cfg: &Config{
-				API:          APIConfig{Key: "notnull"},
+				API:          APIConfig{Key: "aaaaaaa"},
 				OnlyMetadata: true,
-				HostMetadata: HostMetadataConfig{Enabled: false},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: ErrNoMetadata.Error(),
 		},
 		{
 			name: "span name remapping valid",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"old.opentelemetryspan.name": "updated.name"}}},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"old.opentelemetryspan.name": "updated.name"}}},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 		{
 			name: "span name remapping empty val",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"oldname": ""}}},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"oldname": ""}}},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "'' is not valid value for span name remapping",
 		},
 		{
 			name: "span name remapping empty key",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"": "newname"}}},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TracesConfig: TracesConfig{SpanNameRemappings: map[string]string{"": "newname"}}},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "'' is not valid key for span name remapping",
 		},
 		{
 			name: "ignore resources valid",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TracesConfig: TracesConfig{IgnoreResources: []string{"[123]"}}},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TracesConfig: TracesConfig{IgnoreResources: []string{"[123]"}}},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 		{
 			name: "ignore resources missing bracket",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TracesConfig: TracesConfig{IgnoreResources: []string{"[123"}}},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TracesConfig: TracesConfig{IgnoreResources: []string{"[123"}}},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "'[123' is not valid resource filter regular expression",
 		},
 		{
 			name: "invalid histogram settings",
 			cfg: &Config{
-				API: APIConfig{Key: "notnull"},
+				API: APIConfig{Key: "aaaaaaa"},
 				Metrics: MetricsConfig{
+					ExporterConfig: MetricsExporterConfig{
+						InstrumentationScopeMetadataAsTags: true,
+					},
 					HistConfig: HistogramConfig{
 						Mode:             HistogramModeNoBuckets,
 						SendAggregations: false,
 					},
 				},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "'nobuckets' mode and `send_aggregation_metrics` set to false will send no histogram metrics",
 		},
 		{
 			name: "TLS settings are valid",
 			cfg: &Config{
-				API: APIConfig{Key: "notnull"},
+				API: APIConfig{Key: "aaaaaaa"},
 				ClientConfig: confighttp.ClientConfig{
-					TLSSetting: configtls.ClientConfig{
+					TLS: configtls.ClientConfig{
 						InsecureSkipVerify: true,
 					},
 				},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 		{
 			name: "With trace_buffer",
 			cfg: &Config{
-				API:    APIConfig{Key: "notnull"},
-				Traces: TracesExporterConfig{TraceBuffer: 10},
+				API:          APIConfig{Key: "aaaaaaa"},
+				Traces:       TracesExporterConfig{TraceBuffer: 10},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 		{
 			name: "With peer_tags",
 			cfg: &Config{
-				API: APIConfig{Key: "notnull"},
+				API: APIConfig{Key: "aaaaaaa"},
 				Traces: TracesExporterConfig{
 					TracesConfig: TracesConfig{
 						PeerTags: []string{"tag1", "tag2"},
 					},
 				},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 		{
 			name: "With confighttp client configs",
 			cfg: &Config{
-				API: APIConfig{Key: "notnull"},
+				API: APIConfig{Key: "aaaaaaa"},
 				ClientConfig: confighttp.ClientConfig{
 					ReadBufferSize:      100,
 					WriteBufferSize:     200,
 					Timeout:             10 * time.Second,
-					IdleConnTimeout:     &idleConnTimeout,
-					MaxIdleConns:        &maxIdleConn,
-					MaxIdleConnsPerHost: &maxIdleConnPerHost,
-					MaxConnsPerHost:     &maxConnPerHost,
+					IdleConnTimeout:     idleConnTimeout,
+					MaxIdleConns:        maxIdleConn,
+					MaxIdleConnsPerHost: maxIdleConnPerHost,
+					MaxConnsPerHost:     maxConnPerHost,
 					DisableKeepAlives:   true,
-					TLSSetting:          configtls.ClientConfig{InsecureSkipVerify: true},
+					TLS:                 configtls.ClientConfig{InsecureSkipVerify: true},
 				},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 		},
 
 		{
 			name: "unsupported confighttp client configs",
 			cfg: &Config{
-				API: APIConfig{Key: "notnull"},
+				API: APIConfig{Key: "aaaaaaa"},
 				ClientConfig: confighttp.ClientConfig{
-					Endpoint:             "endpoint",
-					Compression:          "gzip",
-					Auth:                 &auth,
-					Headers:              map[string]configopaque.String{"key": "val"},
+					Endpoint:    "endpoint",
+					Compression: "gzip",
+					Auth:        someAuth,
+					Headers: configopaque.MapList{
+						{Name: "key", Value: "val"},
+					},
 					HTTP2ReadIdleTimeout: 250,
 					HTTP2PingTimeout:     200,
 				},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 10 * time.Minute},
 			},
 			err: "these confighttp client configs are currently not respected by Datadog exporter: auth, endpoint, compression, headers, http2_read_idle_timeout, http2_ping_timeout",
+		},
+		{
+			name: "Invalid reporter_period",
+			cfg: &Config{
+				API:          APIConfig{Key: "abcdef0"},
+				HostMetadata: HostMetadataConfig{Enabled: true, ReporterPeriod: 4 * time.Minute},
+			},
+			err: "reporter_period must be 5 minutes or higher",
 		},
 	}
 	for _, testInstance := range tests {
 		t.Run(testInstance.name, func(t *testing.T) {
 			err := testInstance.cfg.Validate()
 			if testInstance.err != "" {
-				assert.EqualError(t, err, testInstance.err)
+				assert.ErrorContains(t, err, testInstance.err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateConnectorComponentConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *ConnectorComponentConfig
+		err  string
+	}{
+		{
+			name: "valid connector",
+			cfg: &ConnectorComponentConfig{
+				Traces: TracesConnectorConfig{
+					TracesConfig: TracesConfig{
+						IgnoreResources: []string{},
+						PeerTags:        []string{"tag1", "tag2"},
+					},
+					BucketInterval: 10 * time.Second,
+					TraceBuffer:    1000,
+				},
+			},
+		},
+		{
+			name: "unsupported ignore_missing_datadog_fields in connector",
+			cfg: &ConnectorComponentConfig{
+				Traces: TracesConnectorConfig{
+					IgnoreMissingDatadogFields: true,
+				},
+			},
+			err: "ignore_missing_datadog_fields is not yet supported in the connector",
+		},
+		{
+			name: "valid ignore_missing_datadog_fields in connector",
+			cfg: &ConnectorComponentConfig{
+				Traces: TracesConnectorConfig{
+					IgnoreMissingDatadogFields: false,
+				},
+			},
+		},
+		{
+			name: "invalid trace_buffer in connector",
+			cfg: &ConnectorComponentConfig{
+				Traces: TracesConnectorConfig{
+					TraceBuffer: -1,
+				},
+			},
+			err: "trace buffer must be non-negative",
+		},
+		{
+			name: "invalid bucket_interval in connector",
+			cfg: &ConnectorComponentConfig{
+				Traces: TracesConnectorConfig{
+					BucketInterval: -1,
+				},
+			},
+			err: "bucket interval must be non-negative",
+		},
+	}
+	for _, testInstance := range tests {
+		t.Run(testInstance.name, func(t *testing.T) {
+			err := testInstance.cfg.Validate()
+			if testInstance.err != "" {
+				assert.ErrorContains(t, err, testInstance.err)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -194,12 +290,12 @@ func TestUnmarshal(t *testing.T) {
 	cfgWithHTTPConfigs.ReadBufferSize = 100
 	cfgWithHTTPConfigs.WriteBufferSize = 200
 	cfgWithHTTPConfigs.Timeout = 10 * time.Second
-	cfgWithHTTPConfigs.MaxIdleConns = &maxIdleConn
-	cfgWithHTTPConfigs.MaxIdleConnsPerHost = &maxIdleConnPerHost
-	cfgWithHTTPConfigs.MaxConnsPerHost = &maxConnPerHost
-	cfgWithHTTPConfigs.IdleConnTimeout = &idleConnTimeout
+	cfgWithHTTPConfigs.MaxIdleConns = maxIdleConn
+	cfgWithHTTPConfigs.MaxIdleConnsPerHost = maxIdleConnPerHost
+	cfgWithHTTPConfigs.MaxConnsPerHost = maxConnPerHost
+	cfgWithHTTPConfigs.IdleConnTimeout = idleConnTimeout
 	cfgWithHTTPConfigs.DisableKeepAlives = true
-	cfgWithHTTPConfigs.TLSSetting.InsecureSkipVerify = true
+	cfgWithHTTPConfigs.TLS.InsecureSkipVerify = true
 	cfgWithHTTPConfigs.warnings = nil
 
 	tests := []struct {
@@ -382,13 +478,16 @@ func TestCreateDefaultConfig(t *testing.T) {
 	assert.Equal(t, &Config{
 		ClientConfig:  defaultClientConfig(),
 		BackOffConfig: configretry.NewDefaultBackOffConfig(),
-		QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+		QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 
 		API: APIConfig{
 			Site: "datadoghq.com",
 		},
 
 		Metrics: MetricsConfig{
+			ExporterConfig: MetricsExporterConfig{
+				InstrumentationScopeMetadataAsTags: true,
+			},
 			TCPAddrConfig: confignet.TCPAddrConfig{
 				Endpoint: "https://api.datadoghq.com",
 			},
@@ -411,7 +510,10 @@ func TestCreateDefaultConfig(t *testing.T) {
 				Endpoint: "https://trace.agent.datadoghq.com",
 			},
 			TracesConfig: TracesConfig{
-				IgnoreResources: []string{},
+				IgnoreResources:        []string{},
+				PeerServiceAggregation: true,
+				PeerTagsAggregation:    true,
+				ComputeStatsBySpanKind: true,
 			},
 		},
 		Logs: LogsConfig{
@@ -426,11 +528,43 @@ func TestCreateDefaultConfig(t *testing.T) {
 		HostMetadata: HostMetadataConfig{
 			Enabled:        true,
 			HostnameSource: HostnameSourceConfigOrSystem,
+			ReporterPeriod: 30 * time.Minute,
 		},
-		OnlyMetadata: false,
+		HostnameDetectionTimeout: 25 * time.Second,
+		OnlyMetadata:             false,
+		OrchestratorExplorer: OrchestratorExplorerConfig{
+			TCPAddrConfig: confignet.TCPAddrConfig{
+				Endpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
+			},
+			Enabled: false,
+		},
 	}, cfg, "failed to create default config")
 
 	assert.NoError(t, componenttest.CheckConfigStruct(cfg))
+}
+
+func TestCreateDefaultConfigMarshalRoundTrip(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+
+	cm := confmap.New()
+	require.NoError(t, cm.Marshal(cfg))
+	assert.False(t, cm.IsSet("metrics::histograms::send_count_sum_metrics"))
+	assert.True(t, cm.IsSet("metrics::histograms::send_aggregation_metrics"))
+	assert.False(t, cm.IsSet("traces::peer_service_aggregation"))
+	assert.True(t, cm.IsSet("traces::peer_tags_aggregation"))
+
+	roundTrip := CreateDefaultConfig().(*Config)
+	require.NoError(t, roundTrip.Unmarshal(cm))
+	assert.True(t, roundTrip.Traces.PeerServiceAggregation)
+	assert.Equal(t, cfg.Traces.PeerTagsAggregation, roundTrip.Traces.PeerTagsAggregation)
+	assert.Equal(t, cfg.Metrics.HistConfig.SendAggregations, roundTrip.Metrics.HistConfig.SendAggregations)
+
+	roundTripMap := confmap.New()
+	require.NoError(t, roundTripMap.Marshal(roundTrip))
+	assert.False(t, roundTripMap.IsSet("metrics::histograms::send_count_sum_metrics"))
+	assert.True(t, roundTripMap.IsSet("metrics::histograms::send_aggregation_metrics"))
+	assert.False(t, roundTripMap.IsSet("traces::peer_service_aggregation"))
+	assert.True(t, roundTripMap.IsSet("traces::peer_tags_aggregation"))
 }
 
 var ddtype = component.MustNewType("datadog")
@@ -450,7 +584,7 @@ func TestLoadConfig(t *testing.T) {
 			expected: &Config{
 				ClientConfig:  defaultClientConfig(),
 				BackOffConfig: configretry.NewDefaultBackOffConfig(),
-				QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+				QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 				API: APIConfig{
 					Key:              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					Site:             "datadoghq.com",
@@ -458,6 +592,9 @@ func TestLoadConfig(t *testing.T) {
 				},
 
 				Metrics: MetricsConfig{
+					ExporterConfig: MetricsExporterConfig{
+						InstrumentationScopeMetadataAsTags: true,
+					},
 					TCPAddrConfig: confignet.TCPAddrConfig{
 						Endpoint: "https://api.datadoghq.com",
 					},
@@ -480,7 +617,10 @@ func TestLoadConfig(t *testing.T) {
 						Endpoint: "https://trace.agent.datadoghq.com",
 					},
 					TracesConfig: TracesConfig{
-						IgnoreResources: []string{},
+						IgnoreResources:        []string{},
+						PeerServiceAggregation: true,
+						PeerTagsAggregation:    true,
+						ComputeStatsBySpanKind: true,
 					},
 				},
 				Logs: LogsConfig{
@@ -494,8 +634,16 @@ func TestLoadConfig(t *testing.T) {
 				HostMetadata: HostMetadataConfig{
 					Enabled:        true,
 					HostnameSource: HostnameSourceConfigOrSystem,
+					ReporterPeriod: 30 * time.Minute,
 				},
-				OnlyMetadata: false,
+				HostnameDetectionTimeout: 25 * time.Second,
+				OnlyMetadata:             false,
+				OrchestratorExplorer: OrchestratorExplorerConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
+					},
+					Enabled: false,
+				},
 			},
 		},
 		{
@@ -503,7 +651,7 @@ func TestLoadConfig(t *testing.T) {
 			expected: &Config{
 				ClientConfig:  defaultClientConfig(),
 				BackOffConfig: configretry.NewDefaultBackOffConfig(),
-				QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+				QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 				TagsConfig: TagsConfig{
 					Hostname: "customhostname",
 				},
@@ -513,6 +661,9 @@ func TestLoadConfig(t *testing.T) {
 					FailOnInvalidKey: true,
 				},
 				Metrics: MetricsConfig{
+					ExporterConfig: MetricsExporterConfig{
+						InstrumentationScopeMetadataAsTags: true,
+					},
 					TCPAddrConfig: confignet.TCPAddrConfig{
 						Endpoint: "https://api.datadoghq.eu",
 					},
@@ -540,6 +691,9 @@ func TestLoadConfig(t *testing.T) {
 						},
 						SpanNameAsResourceName: true,
 						IgnoreResources:        []string{},
+						PeerServiceAggregation: true,
+						PeerTagsAggregation:    true,
+						ComputeStatsBySpanKind: true,
 					},
 					TraceBuffer: 10,
 				},
@@ -555,6 +709,14 @@ func TestLoadConfig(t *testing.T) {
 				HostMetadata: HostMetadataConfig{
 					Enabled:        true,
 					HostnameSource: HostnameSourceConfigOrSystem,
+					ReporterPeriod: 30 * time.Minute,
+				},
+				HostnameDetectionTimeout: 25 * time.Second,
+				OrchestratorExplorer: OrchestratorExplorerConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://orchestrator.datadoghq.eu/api/v2/orchmanif",
+					},
+					Enabled: false,
 				},
 			},
 		},
@@ -563,7 +725,7 @@ func TestLoadConfig(t *testing.T) {
 			expected: &Config{
 				ClientConfig:  defaultClientConfig(),
 				BackOffConfig: configretry.NewDefaultBackOffConfig(),
-				QueueSettings: exporterhelper.NewDefaultQueueConfig(),
+				QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
 				TagsConfig: TagsConfig{
 					Hostname: "customhostname",
 				},
@@ -573,6 +735,9 @@ func TestLoadConfig(t *testing.T) {
 					FailOnInvalidKey: false,
 				},
 				Metrics: MetricsConfig{
+					ExporterConfig: MetricsExporterConfig{
+						InstrumentationScopeMetadataAsTags: true,
+					},
 					TCPAddrConfig: confignet.TCPAddrConfig{
 						Endpoint: "https://api.datadoghq.test",
 					},
@@ -598,7 +763,10 @@ func TestLoadConfig(t *testing.T) {
 							"old_name3": "new_name3",
 							"old_name4": "new_name4",
 						},
-						IgnoreResources: []string{},
+						IgnoreResources:        []string{},
+						PeerServiceAggregation: true,
+						PeerTagsAggregation:    true,
+						ComputeStatsBySpanKind: true,
 					},
 				},
 				Logs: LogsConfig{
@@ -613,6 +781,81 @@ func TestLoadConfig(t *testing.T) {
 					Enabled:        true,
 					HostnameSource: HostnameSourceConfigOrSystem,
 					Tags:           []string{"example:tag"},
+					ReporterPeriod: 30 * time.Minute,
+				},
+				HostnameDetectionTimeout: 25 * time.Second,
+				OrchestratorExplorer: OrchestratorExplorerConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://orchestrator.datadoghq.test/api/v2/orchmanif",
+					},
+					Enabled: false,
+				},
+			},
+		},
+		{
+			id: component.NewIDWithName(ddtype, "customReporterPeriod"),
+			expected: &Config{
+				ClientConfig:  defaultClientConfig(),
+				BackOffConfig: configretry.NewDefaultBackOffConfig(),
+				QueueSettings: configoptional.Some(exporterhelper.NewDefaultQueueConfig()),
+				API: APIConfig{
+					Key:              "abc",
+					Site:             "datadoghq.com",
+					FailOnInvalidKey: false,
+				},
+
+				Metrics: MetricsConfig{
+					ExporterConfig: MetricsExporterConfig{
+						InstrumentationScopeMetadataAsTags: true,
+					},
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://api.datadoghq.com",
+					},
+					DeltaTTL: 3600,
+					HistConfig: HistogramConfig{
+						Mode:             "distributions",
+						SendAggregations: false,
+					},
+					SumConfig: SumConfig{
+						CumulativeMonotonicMode:        CumulativeMonotonicSumModeToDelta,
+						InitialCumulativeMonotonicMode: InitialValueModeAuto,
+					},
+					SummaryConfig: SummaryConfig{
+						Mode: SummaryModeGauges,
+					},
+				},
+
+				Traces: TracesExporterConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://trace.agent.datadoghq.com",
+					},
+					TracesConfig: TracesConfig{
+						IgnoreResources:        []string{},
+						ComputeStatsBySpanKind: true,
+						PeerServiceAggregation: true,
+						PeerTagsAggregation:    true,
+					},
+				},
+				Logs: LogsConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://http-intake.logs.datadoghq.com",
+					},
+					UseCompression:   true,
+					CompressionLevel: 6,
+					BatchWait:        5,
+				},
+				HostMetadata: HostMetadataConfig{
+					Enabled:        true,
+					HostnameSource: HostnameSourceConfigOrSystem,
+					ReporterPeriod: 10 * time.Minute,
+				},
+				HostnameDetectionTimeout: 25 * time.Second,
+				OnlyMetadata:             false,
+				OrchestratorExplorer: OrchestratorExplorerConfig{
+					TCPAddrConfig: confignet.TCPAddrConfig{
+						Endpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
+					},
+					Enabled: false,
 				},
 			},
 		},
@@ -626,7 +869,7 @@ func TestLoadConfig(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, sub.Unmarshal(cfg))
 
-			assert.NoError(t, component.ValidateConfig(cfg))
+			assert.NoError(t, xconfmap.Validate(cfg))
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
@@ -634,75 +877,93 @@ func TestLoadConfig(t *testing.T) {
 
 func TestOverrideEndpoints(t *testing.T) {
 	tests := []struct {
-		componentID             string
-		expectedSite            string
-		expectedMetricsEndpoint string
-		expectedTracesEndpoint  string
-		expectedLogsEndpoint    string
+		componentID                          string
+		expectedSite                         string
+		expectedMetricsEndpoint              string
+		expectedTracesEndpoint               string
+		expectedLogsEndpoint                 string
+		expectedOrchestratorExplorerEndpoint string
 	}{
 		{
-			componentID:             "nositeandnoendpoints",
-			expectedSite:            "datadoghq.com",
-			expectedMetricsEndpoint: "https://api.datadoghq.com",
-			expectedTracesEndpoint:  "https://trace.agent.datadoghq.com",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.com",
+			componentID:                          "nositeandnoendpoints",
+			expectedSite:                         "datadoghq.com",
+			expectedMetricsEndpoint:              "https://api.datadoghq.com",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.com",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.com",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
 		},
 		{
-			componentID:             "nositeandmetricsendpoint",
-			expectedSite:            "datadoghq.com",
-			expectedMetricsEndpoint: "metricsendpoint:1234",
-			expectedTracesEndpoint:  "https://trace.agent.datadoghq.com",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.com",
+			componentID:                          "nositeandmetricsendpoint",
+			expectedSite:                         "datadoghq.com",
+			expectedMetricsEndpoint:              "metricsendpoint:1234",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.com",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.com",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
 		},
 		{
-			componentID:             "nositeandtracesendpoint",
-			expectedSite:            "datadoghq.com",
-			expectedMetricsEndpoint: "https://api.datadoghq.com",
-			expectedTracesEndpoint:  "tracesendpoint:1234",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.com",
+			componentID:                          "nositeandtracesendpoint",
+			expectedSite:                         "datadoghq.com",
+			expectedMetricsEndpoint:              "https://api.datadoghq.com",
+			expectedTracesEndpoint:               "tracesendpoint:1234",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.com",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
 		},
 		{
-			componentID:             "nositeandlogsendpoint",
-			expectedSite:            "datadoghq.com",
-			expectedMetricsEndpoint: "https://api.datadoghq.com",
-			expectedTracesEndpoint:  "https://trace.agent.datadoghq.com",
-			expectedLogsEndpoint:    "logsendpoint:1234",
+			componentID:                          "nositeandlogsendpoint",
+			expectedSite:                         "datadoghq.com",
+			expectedMetricsEndpoint:              "https://api.datadoghq.com",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.com",
+			expectedLogsEndpoint:                 "logsendpoint:1234",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.com/api/v2/orchmanif",
 		},
 		{
-			componentID:             "nositeandallendpoints",
-			expectedSite:            "datadoghq.com",
-			expectedMetricsEndpoint: "metricsendpoint:1234",
-			expectedTracesEndpoint:  "tracesendpoint:1234",
-			expectedLogsEndpoint:    "logsendpoint:1234",
+			componentID:                          "nositeandallendpoints",
+			expectedSite:                         "datadoghq.com",
+			expectedMetricsEndpoint:              "metricsendpoint:1234",
+			expectedTracesEndpoint:               "tracesendpoint:1234",
+			expectedLogsEndpoint:                 "logsendpoint:1234",
+			expectedOrchestratorExplorerEndpoint: "orchestratorexplorerendpoint:1234",
 		},
 
 		{
-			componentID:             "siteandnoendpoints",
-			expectedSite:            "datadoghq.eu",
-			expectedMetricsEndpoint: "https://api.datadoghq.eu",
-			expectedTracesEndpoint:  "https://trace.agent.datadoghq.eu",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.eu",
+			componentID:                          "siteandnoendpoints",
+			expectedSite:                         "datadoghq.eu",
+			expectedMetricsEndpoint:              "https://api.datadoghq.eu",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.eu",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.eu",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.eu/api/v2/orchmanif",
 		},
 		{
-			componentID:             "siteandmetricsendpoint",
-			expectedSite:            "datadoghq.eu",
-			expectedMetricsEndpoint: "metricsendpoint:1234",
-			expectedTracesEndpoint:  "https://trace.agent.datadoghq.eu",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.eu",
+			componentID:                          "siteandmetricsendpoint",
+			expectedSite:                         "datadoghq.eu",
+			expectedMetricsEndpoint:              "metricsendpoint:1234",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.eu",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.eu",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.eu/api/v2/orchmanif",
 		},
 		{
-			componentID:             "siteandtracesendpoint",
-			expectedSite:            "datadoghq.eu",
-			expectedMetricsEndpoint: "https://api.datadoghq.eu",
-			expectedTracesEndpoint:  "tracesendpoint:1234",
-			expectedLogsEndpoint:    "https://http-intake.logs.datadoghq.eu",
+			componentID:                          "siteandtracesendpoint",
+			expectedSite:                         "datadoghq.eu",
+			expectedMetricsEndpoint:              "https://api.datadoghq.eu",
+			expectedTracesEndpoint:               "tracesendpoint:1234",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.eu",
+			expectedOrchestratorExplorerEndpoint: "https://orchestrator.datadoghq.eu/api/v2/orchmanif",
 		},
 		{
-			componentID:             "siteandallendpoints",
-			expectedSite:            "datadoghq.eu",
-			expectedMetricsEndpoint: "metricsendpoint:1234",
-			expectedTracesEndpoint:  "tracesendpoint:1234",
-			expectedLogsEndpoint:    "logsendpoint:1234",
+			componentID:                          "siteandallendpoints",
+			expectedSite:                         "datadoghq.eu",
+			expectedMetricsEndpoint:              "metricsendpoint:1234",
+			expectedTracesEndpoint:               "tracesendpoint:1234",
+			expectedLogsEndpoint:                 "logsendpoint:1234",
+			expectedOrchestratorExplorerEndpoint: "orchestratorexplorerendpoint:1234",
+		},
+		{
+			componentID:                          "siteandorchestratorexplorerendpoint",
+			expectedSite:                         "datadoghq.eu",
+			expectedMetricsEndpoint:              "https://api.datadoghq.eu",
+			expectedTracesEndpoint:               "https://trace.agent.datadoghq.eu",
+			expectedLogsEndpoint:                 "https://http-intake.logs.datadoghq.eu",
+			expectedOrchestratorExplorerEndpoint: "orchestratorexplorerendpoint:1234",
 		},
 	}
 

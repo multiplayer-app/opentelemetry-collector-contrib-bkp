@@ -4,15 +4,15 @@
 package postgresqlreceiver
 
 import (
-	"context"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/receiver/receivertest"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/postgresqlreceiver/internal/metadata"
 )
@@ -20,7 +20,7 @@ import (
 func TestType(t *testing.T) {
 	factory := NewFactory()
 	ft := factory.Type()
-	require.EqualValues(t, metadata.Type, ft)
+	require.Equal(t, metadata.Type, ft)
 }
 
 func TestValidConfig(t *testing.T) {
@@ -28,14 +28,14 @@ func TestValidConfig(t *testing.T) {
 	cfg := factory.CreateDefaultConfig().(*Config)
 	cfg.Username = "otel"
 	cfg.Password = "otel"
-	require.NoError(t, component.ValidateConfig(cfg))
+	require.NoError(t, xconfmap.Validate(cfg))
 }
 
 func TestCreateMetrics(t *testing.T) {
 	factory := NewFactory()
 	metricsReceiver, err := factory.CreateMetrics(
-		context.Background(),
-		receivertest.NewNopSettings(),
+		t.Context(),
+		receivertest.NewNopSettings(metadata.Type),
 		&Config{
 			ControllerConfig: scraperhelper.ControllerConfig{
 				CollectionInterval: 10 * time.Second,
@@ -48,4 +48,15 @@ func TestCreateMetrics(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, metricsReceiver)
+}
+
+func TestCreateDefaultConfig(t *testing.T) {
+	defaultCfg := createDefaultConfig().(*Config)
+	assert.Equal(t, int64(1000), defaultCfg.TopQueryCollection.MaxRowsPerQuery)
+	assert.Equal(t, int64(200), defaultCfg.TopNQuery)
+	assert.Equal(t, int64(1000), defaultCfg.MaxExplainEachInterval)
+	assert.Equal(t, 1000, defaultCfg.QueryPlanCacheSize)
+	assert.Equal(t, time.Hour, defaultCfg.QueryPlanCacheTTL)
+
+	assert.Equal(t, int64(1000), defaultCfg.QuerySampleCollection.MaxRowsPerQuery)
 }

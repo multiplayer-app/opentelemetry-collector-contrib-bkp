@@ -25,9 +25,11 @@ type MetricIdentity struct {
 	MetricValueType        pmetric.NumberDataPointValueType
 }
 
-const A = int32('A')
-const SEP = byte(0x1E)
-const SEPSTR = string(SEP)
+const (
+	A      = int32('A')
+	SEP    = byte(0x1E)
+	SEPSTR = string(SEP)
+)
 
 func (mi *MetricIdentity) Write(b *bytes.Buffer) {
 	b.WriteRune(A + int32(mi.MetricType))
@@ -69,5 +71,5 @@ func (mi *MetricIdentity) IsFloatVal() bool {
 }
 
 func (mi *MetricIdentity) IsSupportedMetricType() bool {
-	return mi.MetricType == pmetric.MetricTypeSum || mi.MetricType == pmetric.MetricTypeHistogram
+	return mi.MetricType == pmetric.MetricTypeSum || mi.MetricType == pmetric.MetricTypeHistogram || mi.MetricType == pmetric.MetricTypeExponentialHistogram
 }

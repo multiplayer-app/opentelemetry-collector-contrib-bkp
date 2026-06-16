@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -20,19 +21,26 @@ type prometheusExporter struct {
 	config       Config
 	name         string
 	endpoint     string
-	shutdownFunc func() error
+	shutdownFunc func(ctx context.Context) error
 	handler      http.Handler
 	collector    *collector
 	registry     *prometheus.Registry
 	settings     component.TelemetrySettings
+	stopCh       chan struct{} // signals the background metric cleanup goroutine to stop
 }
 
 var errBlankPrometheusAddress = errors.New("expecting a non-blank address to run the Prometheus metrics handler")
 
 func newPrometheusExporter(config *Config, set exporter.Settings) (*prometheusExporter, error) {
-	addr := strings.TrimSpace(config.Endpoint)
-	if strings.TrimSpace(config.Endpoint) == "" {
+	addr := strings.TrimSpace(config.NetAddr.Endpoint)
+	if strings.TrimSpace(config.NetAddr.Endpoint) == "" {
 		return nil, errBlankPrometheusAddress
+	}
+
+	// Return error early because newCollector
+	// will call logger.Error if it fails to build the namespace.
+	if set.Logger == nil {
+		return nil, errors.New("nil logger")
 	}
 
 	collector := newCollector(config, set.Logger)
@@ -44,7 +52,7 @@ func newPrometheusExporter(config *Config, set exporter.Settings) (*prometheusEx
 		endpoint:     addr,
 		collector:    collector,
 		registry:     registry,
-		shutdownFunc: func() error { return nil },
+		shutdownFunc: func(_ context.Context) error { return nil },
 		handler: promhttp.HandlerFor(
 			registry,
 			promhttp.HandlerOpts{
@@ -63,17 +71,40 @@ func (pe *prometheusExporter) Start(ctx context.Context, host component.Host) er
 		return err
 	}
 
-	pe.shutdownFunc = ln.Close
-
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", pe.handler)
-	srv, err := pe.config.ToServer(ctx, host, pe.settings, mux)
+	srv, err := pe.config.ToServer(ctx, host.GetExtensions(), pe.settings, mux)
 	if err != nil {
-		return err
+		lnerr := ln.Close()
+		return errors.Join(err, lnerr)
+	}
+	pe.shutdownFunc = func(ctx context.Context) error {
+		return srv.Shutdown(ctx)
 	}
 	go func() {
 		_ = srv.Serve(ln)
 	}()
+
+	// Start a background goroutine that periodically evicts expired metric families.
+	// Without this, cleanup only happens during Collect() (i.e. when Prometheus scrapes).
+	// If no scraper is active, stale entries in metricFamilies accumulate indefinitely,
+	// causing unbounded memory growth. See https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/41123
+	if pe.collector.metricExpiration > 0 {
+		pe.stopCh = make(chan struct{})
+		go func(stopCh chan struct{}) {
+			ticker := time.NewTicker(pe.collector.metricExpiration)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					pe.collector.accumulator.cleanupExpired()
+					pe.collector.cleanupMetricFamilies()
+				case <-stopCh:
+					return
+				}
+			}
+		}(pe.stopCh)
+	}
 
 	return nil
 }
@@ -88,6 +119,10 @@ func (pe *prometheusExporter) ConsumeMetrics(_ context.Context, md pmetric.Metri
 	return nil
 }
 
-func (pe *prometheusExporter) Shutdown(context.Context) error {
-	return pe.shutdownFunc()
+func (pe *prometheusExporter) Shutdown(ctx context.Context) error {
+	if pe.stopCh != nil {
+		close(pe.stopCh)
+		pe.stopCh = nil
+	}
+	return pe.shutdownFunc(ctx)
 }

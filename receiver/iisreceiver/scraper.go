@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scrapererror"
+	"go.opentelemetry.io/collector/scraper/scrapererror"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 
@@ -71,6 +71,10 @@ func newIisReceiver(settings receiver.Settings, cfg *Config, consumer consumer.M
 // start builds the paths to the watchers
 func (rcvr *iisReceiver) start(_ context.Context, _ component.Host) error {
 	errs := &scrapererror.ScrapeErrors{}
+
+	totalPerfCounterRecorders := buildTotalPerfCounterRecordersFromConfig(rcvr.config.Metrics)
+	sitePerfCounterRecorders := buildSitePerfCounterRecordersFromConfig(rcvr.config.Metrics)
+	appPoolPerfCounterRecorders := buildAppPoolPerfCounterRecordersFromConfig(rcvr.config.Metrics)
 
 	rcvr.totalWatcherRecorders = rcvr.buildWatcherRecorders(totalPerfCounterRecorders, errs)
 	rcvr.siteWatcherRecorders = rcvr.buildWatcherRecorders(sitePerfCounterRecorders, errs)
@@ -151,7 +155,6 @@ func (rcvr *iisReceiver) scrapeInstanceMetrics(wrs []watcherRecorder, instanceTo
 				})
 		}
 	}
-
 }
 
 var negativeDenominatorError = "A counter with a negative denominator value was detected.\r\n"
@@ -228,6 +231,11 @@ var maxQueueItemAgeInstanceRegex = regexp.MustCompile(`\\HTTP Service Request Qu
 // This is done in order to capture the error when scraping each individual instance, because we want to ignore
 // negative denominator errors.
 func (rcvr *iisReceiver) buildMaxQueueItemAgeWatchers(scrapeErrors *scrapererror.ScrapeErrors) []instanceWatcher {
+	if !rcvr.config.Metrics.IisRequestQueueAgeMax.Enabled {
+		// if the metric is not enabled, we don't need to build any watchers
+		return nil
+	}
+
 	wrs := []instanceWatcher{}
 
 	paths, err := rcvr.expandWildcardPath(`\HTTP Service Request Queues(*)\MaxQueueItemAge`)

@@ -75,13 +75,15 @@ jobs:
           path: |
             ~/go/bin
             ~/go/pkg/mod
+            ~/.cache/go/build
           key: go-cache-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
       - name: Install dependencies
         if: steps.go-cache.outputs.cache-hit != 'true'
         run: make -j2 gomoddownload
       - name: Build Docker Image
+        env:
+          GOFLAGS: -p=1
         run: |
-          make genotelcontribcol
           make docker-otelcontribcol
           IFS=',' read -ra TAGS <<< "$DOCKER_TAGS"
           for TAG in "${TAGS[@]}"; do

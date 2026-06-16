@@ -60,7 +60,7 @@ jobs:
       - name: Setup Go (tools)
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version-file: 'internal/tools/go.mod'
+          go-version-file: "internal/tools/go.mod"
 
       - name: Cache Go
         id: go-cache
@@ -83,7 +83,7 @@ jobs:
       - name: Setup Go oldstable (avoids Go 1.25 linker bug with generics)
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: 'oldstable'
+          go-version: "oldstable"
           cache: false
 
       - name: Build Docker Image
@@ -121,28 +121,28 @@ jobs:
             docker push "$TAG"
           done
 
-      - name: Login to Octopus Deploy
-        uses: OctopusDeploy/login@v1
-        with:
-          server: ${{ secrets.OCTOPUS_HOST }}
-          service_account_id: ${{ secrets.OCTOPUS_SERVICE_ACCOUNT_ID }}
+      # - name: Login to Octopus Deploy
+      #   uses: OctopusDeploy/login@v1
+      #   with:
+      #     server: ${{ secrets.OCTOPUS_HOST }}
+      #     service_account_id: ${{ secrets.OCTOPUS_SERVICE_ACCOUNT_ID }}
 
-      - name: Install OctopusCLI
-        uses: OctopusDeploy/install-octopus-cli-action@v3
-        with:
-          version: 1.2.0
+      # - name: Install OctopusCLI
+      #   uses: OctopusDeploy/install-octopus-cli-action@v3
+      #   with:
+      #     version: 1.2.0
 
-      - name: Create a release in Octopus Deploy
-        uses: OctopusDeploy/create-release-action@v3
-        with:
-          project: ${{ env.SERVICE_NAME }}
-          server: ${{ secrets.OCTOPUS_HOST }}
-          space: ${{ secrets.OCTOPUS_SPACE }}
-          release_number: ${{ env.SERVICE_VERSION }}
-          release_notes: "[GitHub commit: ${{
-            steps.commit.outputs.sha_short}}](https://github.com/${{
-            github.event.repository.full_name }}/commit/${{
-            steps.commit.outputs.sha_short}}) / [GitHub branch: ${{
-            env.BRANCH_NAME }}](https://github.com/${{
-            github.event.repository.full_name }}/compare/${{ env.BRANCH_NAME
-            }})"
+      # - name: Create a release in Octopus Deploy
+      #   uses: OctopusDeploy/create-release-action@v3
+      #   with:
+      #     project: ${{ env.SERVICE_NAME }}
+      #     server: ${{ secrets.OCTOPUS_HOST }}
+      #     space: ${{ secrets.OCTOPUS_SPACE }}
+      #     release_number: ${{ env.SERVICE_VERSION }}
+      #     release_notes: "[GitHub commit: ${{
+      #       steps.commit.outputs.sha_short}}](https://github.com/${{
+      #       github.event.repository.full_name }}/commit/${{
+      #       steps.commit.outputs.sha_short}}) / [GitHub branch: ${{
+      #       env.BRANCH_NAME }}](https://github.com/${{
+      #       github.event.repository.full_name }}/compare/${{ env.BRANCH_NAME
+      #       }})"

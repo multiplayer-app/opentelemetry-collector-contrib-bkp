@@ -75,15 +75,10 @@ jobs:
           path: |
             ~/go/bin
             ~/go/pkg/mod
-            ./.tools
           key: go-cache-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
       - name: Install dependencies
         if: steps.go-cache.outputs.cache-hit != 'true'
         run: make -j2 gomoddownload
-      - name: Install Tools
-        if: steps.go-cache.outputs.cache-hit != 'true'
-        run: make install-tools
-
       - name: Build Docker Image
         run: |
           make genotelcontribcol

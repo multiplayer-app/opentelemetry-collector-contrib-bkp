@@ -22,11 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.21.9"
-          cache: false
-
       - name: Free disk space
         shell: bash
         # Force 'bash' to use Git Bash on Windows runners.
